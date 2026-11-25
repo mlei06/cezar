@@ -9,7 +9,7 @@ The factory is built by the factory. After a one-time bootstrap (M0), which the 
 - Goal and definition of done
 - Who does what
 - Branches and the running harness
-- M0 to M6, each with: goal, deliverables, the prompt, acceptance, what the overseer watches
+- M0 to M6 (and M1.5), each with: goal, deliverables, the prompt, acceptance, what the overseer watches
 - The overseer's runbook
 - Spec revisions and the backlog
 - Risks, timeline, changelog
@@ -20,6 +20,7 @@ The factory is built by the factory. After a one-time bootstrap (M0), which the 
 |---|---|---|
 | M0 | done 2026-11-25 | release `0.21.0+release-735fc84` live; warm-up PR #1 merged and released; judge prototype calibrated on 2 runs; observations M0-1 to M0-10 |
 | M1 | in progress | merged #2–#5, #8, #9; #6 and #7 in review; live release b29db47 has #1–#5; see the overseer state file |
+| M1.5 | not started | the manager as project lead (spec D11, D12); implementer, after M1's release |
 
 ## Goal and definition of done
 
@@ -99,6 +100,24 @@ The program is done when all of these hold:
 - review churn.
 
 **Release:** the overseer runs `harness-release` after checking the acceptance.
+
+## M1.5. The manager leads the project (spec D11, D12)
+
+**Goal:** every project's manager works like a project lead under the D11 rules, keeping a committed charter, instead of only running the tasks it's handed.
+
+**Deliverables:**
+1. **`manage-project` rewritten** around D12: the role first, then the charter, effort scaling, self-contained briefs, ideation, cadence, and the D11 rules. It stays generic (project facts live in AGENTS.md) and no longer than about 12k characters; say what was cut.
+2. **`manage-harness`** in the fork's `manager-skills/`: only what's specific to the harness project (D11.8's detached release, D11.9's public-fork rule), loaded by the harness manager alongside `manage-project`.
+3. **The charter at session start:** a manager's new session reads `.ai/project.md` first. Reuse the short-session restart path (spec 2026-11-21): the session-start prompt names the charter and includes its Backlog and Progress sections, capped like the capability block, with the rest read on demand.
+4. **Charters for the registered projects:** the harness project's charter (its vision is this spec's TLDR, its backlog the remaining milestones and this roadmap's backlog), committed on `factory`; the deployment project's charter goes in that project's own repository, drafted by its manager, never in this fork.
+
+The weekly report's project section is part of D10 and ships with M5.
+
+**Acceptance:**
+- a project without a charter gets a drafted one as a docs PR from its manager, and the manager doesn't merge a change to vision, goals or non-goals;
+- a new manager session's first action is reading the charter, and a finished outcome updates its Progress and Backlog;
+- given a vague outcome ("make deploys more reliable"), the manager sizes it, writes the plan into the backlog, and starts self-contained tasks, without asking the owner anything that isn't theirs to decide;
+- `manage-project` states every D11 rule.
 
 ## M2. Bounded and measured (spec D4, D5 metrics)
 
@@ -218,6 +237,7 @@ The program is done when all of these hold:
 
 ```
 M0 ─► M1 ─► M2 ─► M3 ─► M4 ─► M5 ─► M6
+       └─► M1.5 (D11, D12), before M2 starts, by the implementer
              │      │      └─ the harness must roll back before it edits itself
              │      └─ calibration gate before M5
              └─ the deployment project resumes after M2
@@ -344,6 +364,7 @@ New features and improvements found so far, not yet scheduled into a milestone. 
 
 ## Changelog
 
+- v3.1: M1.5, the manager leads the project (spec D11, D12), between M1 and M2, built by the implementer.
 - v3 (2026-11-25, owner decision): the harness manager finishes M1 (PR #6 and the batched release of #6–#9), then stands by. M2–M6 are built directly by an implementer agent from the handoff prompt, outside Cezar's task loop, to move faster; improvements then come from using the factory on real project work. The milestone contents, acceptance and definition of done are unchanged. The manager's M1 rules became spec D11.
 - v2.3 (2026-11-25, owner decision): the manager runs the harness project on its own. It releases merged runtime PRs itself (detached through `systemd-run`), decides after two review rounds, settles spec ambiguities and records them, and reviews only runtime PRs. The overseer audits instead of gating. M4 still automates the release.
 - v1 (2026-11-25): first plan.

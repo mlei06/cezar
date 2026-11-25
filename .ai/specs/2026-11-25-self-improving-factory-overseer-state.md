@@ -38,7 +38,7 @@ Since 2026-11-25 17:25 the manager runs the harness project on its own (owner de
 
 ## Open overseer items
 
-- **Handoff (roadmap v3):** the manager finishes M1 and stops. M2–M6 go to an implementer agent started from `2026-11-25-self-improving-factory-handoff.md`.
+- **Handoff (roadmap v3.1):** the manager finishes M1 and stops. M1.5 (spec D11, D12) and M2–M6 go to an implementer agent started from `2026-11-25-self-improving-factory-handoff.md`.
 
 
 - The M1 milestone review: metrics, observations into spec, backlog or nothing.

@@ -1,6 +1,6 @@
 # The self-improving factory
 
-Status: draft v5.12, 2026-11-25. Fork: `mlei06/cezar`, trunk `factory`. Spec owner: the overseer (see the roadmap). Implementation plan: `2026-11-25-self-improving-factory-roadmap.md`. Findings during the build: `2026-11-25-self-improving-factory-observations.md`.
+Status: draft v5.13, 2026-11-25. Fork: `mlei06/cezar`, trunk `factory`. Spec owner: the overseer (see the roadmap). Implementation plan: `2026-11-25-self-improving-factory-roadmap.md`. Findings during the build: `2026-11-25-self-improving-factory-observations.md`.
 
 ## TLDR
 
@@ -14,12 +14,13 @@ Cezar already runs a factory: managers turn outcomes into tasks, tasks run workf
 6. **Verification and replay.** Every run records its starting commit and harness version, so any task can be replayed from its original input with one thing changed (harness release, workflow, model, skill or brief), as a variant beside the original, and compared by score. Benchmarks are saved collections of replays. Before/after comparison of scores checks a change after it merges.
 7. **A self-maintaining harness.** The Cezar fork is a project with its own manager. Cezar runs from pinned releases, so a harness change ships through a benchmarked release with automatic rollback.
 8. **Managers that run ungated.** Every manager follows the same operating rules (D11): reviews only for runtime changes, its own decision after two review rounds, ambiguities decided and recorded for the owner to audit, and shared-machine limits on test runs.
+9. **A manager that leads the project.** Each project keeps a committed charter (vision, goals, a ranked backlog, progress). Its manager drafts and maintains it, scales effort to the job, writes self-contained briefs, proposes and starts work within the vision on its own, and reports progress against the goals (D12).
 
 ## Contents
 
 - Evidence, Principles, Glossary
 - Reuse map: what Cezar already has, part by part
-- Decisions D1–D11
+- Decisions D1–D12
 - Data model and storage
 - Settings, CLI and API reference
 - Failure handling and edge cases
@@ -96,6 +97,7 @@ Every part of this spec builds on something Cezar already has. Where a part need
 | Replay (D8) | parallel variants (spec 010): runs sharing a `groupId`, each with a `variant` label, grouped in the task list, compared side by side in `/groups/:groupId`; `task retry` with another runner or model; the run's saved `workflowDef` and `systemPrompt` snapshots | extend | run identity (`startCommit`, `harnessVersion`); variants with per-variant overrides and a replay source; score columns in the Compare view |
 | Benchmarks (D8) | variants and the Compare view (above) | extend | suites: saved replays with success criteria, run as a matrix |
 | Harness releases (D9) | self-update: installs in `~/.cezar/versions/<id>` with a `current` link and `~/.cezar/bin` launchers; `cezar install` packs and installs the running build; `cezar use <id>` switches (rollback); `cezar link`; supervisor restart (`CEZ_SUPERVISED=1`); version pruning with in-use leases | reuse | the `harness-release` workflow around them: wait for idle, the health check with automatic `use <previous>`, the staging cockpit, the release log |
+| Project lead (D12) | manager short sessions that restart from cezar-owned memory (spec 2026-11-21); `manage-project`; manager jobs | extend | the `.ai/project.md` charter, read at every session start and written back after each outcome; the skill rewrite |
 | Reports (D10) | manager jobs; HTML artifacts in a task's Assets (sandboxed, CDN allowlist) | reuse | the report content |
 | Proactive triggers (D10) | schedule automations; the built-in `fix-ci` workflow; GitHub check events | reuse | a `credential-health` workflow per project; on Azure Repos, CI failures need an Azure event source (backlog) |
 | Events (all) | the workspace SSE bus, and the WebSocket topic bus | reuse | new event kinds only |
@@ -527,6 +529,32 @@ Every manager works by these rules, which ship in the `manage-project` skill (an
 8. **Releases of the harness.** Until the `harness-release` workflow (D9) exists, the harness manager runs `scripts/harness-release.mjs` itself after merging runtime PRs, batching merges that land close together. A release restarts the cockpit the manager runs in, so it is started detached (`systemd-run --user --collect --unit=harness-release-<sha7> … node scripts/harness-release.mjs <sha>`), the manager ends its turn so it counts as idle, and starts nothing while the unit runs. After waking it reads the unit's journal and the last line of `release-log.ndjson`; a rollback means the merge is broken, and the manager fixes it forward or reverts it.
 9. **A public fork stays generic.** When the project's repository is public, nothing internal goes into it: no internal host names, addresses, company paths, user names, provider ids, other projects' names or run data. Internal details belong in the repositories of the projects they concern.
 
+### D12. The manager as project lead
+
+A manager is the project's lead and the owner's stand-in: accountable for where the project is going and how it gets there, not only for running the tasks it is handed. It works like a person in a coding-agent session who knows when to use subagents, without being told. It is built as a rewrite of the `manage-project` skill, plus one committed file per project. Sources: Anthropic's lead-agent research system (delegation briefs, effort scaling, plans in external memory), Roo Code's Orchestrator (coordinate, don't implement; every subtask ends in a summary that becomes the record), CrewAI's manager (self-contained delegation), MetaGPT's product and project managers (goals, user stories, a ranked requirement pool, "anything unclear"), and ChatDev (an explicit role matters most).
+
+1. **The charter: `.ai/project.md`, committed.** Sections, all optional:
+   - **Vision:** one paragraph, what the project is for and for whom.
+   - **Goals:** at most three, each with how success is measured.
+   - **Non-goals.**
+   - **Backlog:** a ranked list, each item `P0`/`P1`/`P2` with one line and, when started, its task or PR.
+   - **Progress:** per goal, where it stands, updated after each finished outcome.
+   - **Open questions:** what only the owner can answer.
+   
+   A missing charter is fine (zero config): the manager drafts one from the repository (README, AGENTS.md, docs, open issues and PRs, recent history) and its first conversation with the owner, and opens it as a docs PR. **Vision, goals and non-goals are the owner's:** the manager proposes changes to them, in a PR the owner merges, and never merges those itself. The backlog, progress and open questions are the manager's to edit freely, through ordinary docs PRs (D11.2: no review task). Project facts stay in AGENTS.md; the charter holds direction, not how-to.
+2. **Plan and progress live in the charter, not the chat.** Cezar's managers already run short sessions that restart from cezar-owned memory (spec 2026-11-21). The charter is the durable plan those sessions start from: every new session reads it first, and the manager writes progress back before its session ends, so nothing important lives only in a conversation. Manager memory keeps what the owner asked it to remember; the charter keeps the project's direction and state.
+3. **Effort scales with the job.** Before delegating, the manager sizes the work:
+   - **small** (a fix, a docs change, a known script): one task, a low-reasoning model where D2's `operate` fits;
+   - **a feature:** a plan, then 2 to 4 tasks, parallel where they touch different files;
+   - **a milestone:** a written plan in the charter's backlog first, then tasks in dependency order.
+   It never starts more parallel tasks than the workspace's `maxParallel`, and never two tasks on the same files.
+4. **Self-contained briefs.** A task knows nothing the brief doesn't say. Every brief has: the objective; the context it needs (decisions made, files, prior task results, linked by path or PR, not restated); what is out of scope; acceptance checks; the skill and validation commands; and what its final message must contain (what changed, what was verified, what's left), since that summary is the record the manager reads. This is D11.7, made concrete.
+5. **Ideation.** The manager adds backlog items from what it sees: failed or low-scoring runs (D5), repeated causes (D6), TODOs and FIXMEs, open issues, CI failures, gaps between the charter's goals and the code, and the owner's passing remarks. Within the vision and goals it ranks and starts that work itself. A new direction, a change to goals, or anything on D7's owner list it proposes instead, as an open question with its recommendation.
+6. **Cadence.** After each finished outcome: update the charter's progress and backlog. When idle with nothing in flight: take the top backlog item. Weekly: D10's report gains a project section: progress per goal, what shipped, risks, the top three next items, and open questions.
+7. **Role first.** The skill opens with the role, stated plainly: the project's lead, owner of the outcome, who delegates every change to tasks, checks their work, and keeps the project moving between the owner's requests.
+
+The manager still never writes code itself (every change is a task, D11), and hand-made tasks stay first-class: the owner can add to the backlog, start tasks by hand or redirect the manager at any time.
+
 ## Data model and storage
 
 | What | Where | Notes |
@@ -713,7 +741,7 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
 | `workspace/secrets*` | `description` |
 | `server/` | the routes and events above |
 | web | score columns, Scores panel, Factory view, Factory settings |
-| `manager-skills/` | `manage-project` (list commands, workflow choice, budgets, improvement, the D11 operating rules); `manage-harness` (new: D11's release and public-fork rules) |
+| `manager-skills/` | `manage-project` (list commands, workflow choice, budgets, improvement, the D11 operating rules, rewritten as the D12 project lead); `manage-harness` (new: D11's release and public-fork rules) |
 | `skills/improve-factory` (new) | the improvement playbook |
 | `self-update/` | used as is: `linkCheckout` from a build worktree, `activate` (`cezar use`), the launchers, supervisor restart |
 | release | `scripts/harness-release.mjs` (wait for idle, health check, automatic `use <previous>`, staging cockpit, log) and the `harness-release` workflow; the unit runs `~/.cezar/bin/cezar` with `CEZ_SUPERVISED=1` |
@@ -758,6 +786,7 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
   - no switch happens while work is active;
   - scores record `harnessVersion`.
 - **Manager rules (D11):** the shipped `manage-project` skill states every D11 rule; a run's process has a lower CPU priority than the cockpit.
+- **Project lead (D12):** a project without a charter gets a drafted one as a docs PR; a new manager session's first read is the charter; a finished outcome updates its progress; the manager never merges a change to vision, goals or non-goals.
 - **Compatibility:** old run files parse; contract-parity and route-parity tests pass; every new env var is in `.env.example`.
 
 **Acceptance:**
@@ -775,6 +804,7 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
 
 ## Changelog
 
+- **v5.13:** D12, the manager as project lead: a committed charter (`.ai/project.md`) holding vision, goals, non-goals, a ranked backlog, progress and open questions; plans in the charter, not the chat; effort scaling; self-contained briefs; ideation within the vision; a progress cadence; role first. Drawn from public orchestrator and manager designs.
 - **v5.12:** principle: the manager stands in for the owner through the same task paths; hand-made tasks stay first-class and get every addition.
 - **v5.11:** D11, manager operating rules, so the rules the harness manager was given during M1 live in the product: ungated by default, reviews only for runtime changes, two review rounds then the manager decides, ambiguities decided and recorded, docs-only trunk commits never force a rebase, shared-machine test limits and a lower CPU priority for runs, brief contents, detached harness releases, a public fork stays generic.
 - **v1:** first draft ("software factory feedback").

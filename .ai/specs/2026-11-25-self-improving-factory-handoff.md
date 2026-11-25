@@ -1,10 +1,10 @@
-# Handoff: build the self-improving factory, M2 to M6
+# Handoff: build the self-improving factory, M1.5 to M6
 
 Paste everything below the line into a fresh coding-agent session started in `~/dev/cezar`. It is written for an agent with no prior context.
 
 ---
 
-You are taking over the build of the "self-improving factory" in this Cezar fork (`~/dev/cezar`, GitHub `mlei06/cezar`, trunk branch `factory`). Cezar is a local cockpit that runs coding agents as tasks under per-project managers. The spec adds budgets, metrics, scoring, self-improvement, replay and a self-releasing harness. Your job is to implement milestones M2 to M6 of the roadmap directly, as code on `factory`, and verify each on the live cockpit. The owner is not available to unblock you: decide, record and keep going.
+You are taking over the build of the "self-improving factory" in this Cezar fork (`~/dev/cezar`, GitHub `mlei06/cezar`, trunk branch `factory`). Cezar is a local cockpit that runs coding agents as tasks under per-project managers. The spec adds budgets, metrics, scoring, self-improvement, replay and a self-releasing harness. Your job is to implement milestones M1.5 and M2 to M6 of the roadmap directly, as code on `factory`, and verify each on the live cockpit. The owner is not available to unblock you: decide, record and keep going.
 
 ## Read first, in this order
 
@@ -16,8 +16,8 @@ You are taking over the build of the "self-improving factory" in this Cezar fork
 
 ## Where things stand
 
-- M0 is done. M1 (spec D2, D3: built-in task workflows, the capability block, secret descriptions, list commands) is being finished by the `cezar` project's manager inside Cezar: PR #6 merges, then one release of #6–#9, then a live acceptance check. Check the state file and `~/.cezar/factory/release-log.ndjson`. **Don't start M2 code until M1's release is live**, since M2 builds on #6. Read and plan while you wait. If M1 stalls for more than about two hours, finish it yourself: take over PR #6's branch, address its open review findings, merge and release.
-- After M1 the manager stands by. It doesn't build M2+. You may message it (`POST /api/v1/workspace/managers/<id>/messages` on `http://127.0.0.1:4321`, id in `cezar-manager-id` under the `dataDir` of `~/.config/factory-overseer.json`) if you want a Cezar task run, but you don't need to.
+- M0 is done. M1 (spec D2, D3: built-in task workflows, the capability block, secret descriptions, list commands) is being finished by the `cezar` project's manager inside Cezar: PR #6 merges, then one release of #6–#9, then a live acceptance check. Check the state file and `~/.cezar/factory/release-log.ndjson`. **Don't start M1.5 or M2 code until M1's release is live**, since both build on #6. Start with M1.5 (spec D11, D12: the manager as project lead), then M2. Read and plan while you wait. If M1 stalls for more than about two hours, finish it yourself: take over PR #6's branch, address its open review findings, merge and release.
+- After M1 the manager stands by. It doesn't build M1.5 or later. You may message it (`POST /api/v1/workspace/managers/<id>/messages` on `http://127.0.0.1:4321`, id in `cezar-manager-id` under the `dataDir` of `~/.config/factory-overseer.json`) if you want a Cezar task run, but you don't need to.
 
 ## How to work
 
