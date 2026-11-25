@@ -213,7 +213,7 @@ export const REVIEW_COUNCIL = builtIn(
 const REVIEW_TOOLS = { allowedTools: ['Read', 'Grep', 'Glob', 'Bash'], bashAllowlist: [...READ_ONLY_BASH_PREFIXES] };
 
 const PR_REVIEWER = (focus: string) =>
-  'Review the pull request {{task}} — read the change from the diff file cezar prepared (named below; on GitHub `gh pr view` and `gh pr diff` also work), and the repository for context.\n\n' +
+  'Review the pull request {{task}} — read it with `gh pr view` and `gh pr diff`, and the repository for context.\n\n' +
   `Your focus: ${focus}. Report only real problems, each with the file and line, and say plainly when you found none. ` +
   'This is a read-only review: never push, comment, review, approve or open anything on GitHub.';
 
