@@ -40,6 +40,7 @@ After M3, this log is also the calibration set for the automated judge.
 | M0-7 | The warm-up task stopped to investigate a known, environment-dependent test failure (`open-in-app`, WSL) | transcript +6:18 | repository (harness) | the manager adds known pre-existing failures to `factory-work` (M1 item 0) |
 | M0-8 | Tasks read unrelated global skills up front (graphify, about 19k characters with two others) | warm-up first call | harness | backlog B13 |
 | M0-9 | The first warm-up review approved after reading the diff without running tests ("Tests were not run") | review 89c3fffa | task-setup | acceptable for review-pr (read-only); validation belongs in the implement workflow's checks (v5.2) |
+| M0-10 | The warm-up task stayed `running` for about 6 minutes after its PR merged, holding up the release's wait for idle | release log 09:37 to 09:43; task 85efd7a7 | harness | backlog B14: a task whose PR merged should settle promptly; the release's wait should ignore tasks only monitoring a merged PR |
 
 ## Judge calibration
 

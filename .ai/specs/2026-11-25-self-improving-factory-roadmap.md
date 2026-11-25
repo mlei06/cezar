@@ -14,6 +14,13 @@ The factory is built by the factory. After a one-time bootstrap (M0), which the 
 - Spec revisions and the backlog
 - Risks, timeline, changelog
 
+## Progress
+
+| Milestone | Status | Notes |
+|---|---|---|
+| M0 | done 2026-11-25 | release `0.21.0+release-735fc84` live; warm-up PR #1 merged and released; judge prototype calibrated on 2 runs; observations M0-1 to M0-10 |
+| M1 | in progress | |
+
 ## Goal and definition of done
 
 The program is done when all of these hold:
@@ -296,6 +303,7 @@ New features and improvements found so far, not yet scheduled into a milestone. 
 | B11 | **Upstream #1617:** wait for the maintainers' reply, then open the Azure PR from `feat/azure-repos-forge` | the upstream thread | when they reply |
 | B12 | **Seed the queues by re-scoring earlier runs** with `cez score` when M3 ships (both projects, including the open-webui upgrade task), so improvement starts from real evidence | the queues would otherwise start empty; point 3 of the definition of done needs failures to accumulate | M3 |
 | B13 | **Global skills read by every task** (graphify and others) add noise to first reads; consider a per-project skill allowlist, or keeping tool-specific skills out of the global folders | M0-8 | after M3, using efficiency scores |
+| B14 | **Tasks linger after their PR merges** (about 6 minutes `running`), delaying releases | M0-10 | M4 (`harness-release` wait-for-idle) |
 
 ## Risks
 
