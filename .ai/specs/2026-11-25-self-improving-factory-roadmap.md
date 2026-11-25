@@ -38,6 +38,7 @@ The program is done when all of these hold:
 | **Overseer** (Claude Code, outside Cezar) | builds M0, then writes no code. Prompts the harness manager, monitors it and its tasks, reviews milestones, releases the harness until M1's end (the manager took it over then), audits the manager's decisions afterwards instead of gating them, acts as the judge and improvement engine until the factory has its own, owns the spec, roadmap and observation log | the cockpit API, the manager's chat (as the owner), git and `gh` for reading, the release script, its judge prototype |
 | **Harness manager** (the `cezar` project's manager; Codex gpt-6.2-sol, autonomous) | turns each milestone into tasks, briefs them, reviews runtime PRs and merges all PRs, decides review stalemates and spec ambiguities (recorded for the overseer), releases the harness with the release script (until M4 automates it), and reports | `cez-manager`, with the `manage-project` skill |
 | **Tasks** | implement, test and open PRs on the fork | Cezar workflows on Codex or OpenCode models |
+| **Implementer** (from M2, owner decision v3) | builds M2–M6 directly, outside Cezar, from the handoff prompt (`2026-11-25-self-improving-factory-handoff.md`): branches, PRs to `factory`, its own review pass, merges and releases | a coding agent session in `~/dev/cezar`, with git, `gh`, the release script and the cockpit API |
 
 ## Branches and the running harness
 
@@ -342,6 +343,7 @@ New features and improvements found so far, not yet scheduled into a milestone. 
 
 ## Changelog
 
+- v3 (2026-11-25, owner decision): the harness manager finishes M1 (PR #6 and the batched release of #6–#9), then stands by. M2–M6 are built directly by an implementer agent from the handoff prompt, outside Cezar's task loop, to move faster; improvements then come from using the factory on real project work. The milestone contents, acceptance and definition of done are unchanged. The manager's M1 rules became spec D11.
 - v2.3 (2026-11-25, owner decision): the manager runs the harness project on its own. It releases merged runtime PRs itself (detached through `systemd-run`), decides after two review rounds, settles spec ambiguities and records them, and reviews only runtime PRs. The overseer audits instead of gating. M4 still automates the release.
 - v1 (2026-11-25): first plan.
 - v1.1: spec revisions and the backlog, owned by the overseer.

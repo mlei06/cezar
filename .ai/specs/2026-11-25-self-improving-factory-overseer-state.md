@@ -38,6 +38,9 @@ Since 2026-11-25 17:25 the manager runs the harness project on its own (owner de
 
 ## Open overseer items
 
+- **Handoff (roadmap v3):** the manager finishes M1 and stops. M2–M6 go to an implementer agent started from `2026-11-25-self-improving-factory-handoff.md`.
+
+
 - The M1 milestone review: metrics, observations into spec, backlog or nothing.
 - Calibration so far: 4 runs, 16 scorer comparisons. Pass/fail agreement is 14/16. The two disagreements: the overseer under-called efficiency once, and the judge can't see spec drift (backlog B19).
 - **Public repository hygiene:** the fork holds nothing internal. No provider ids, hosts, paths, usernames, project names, job names or run data. Project-specific notes belong in that project's own repository; machine settings stay in `~/.config/factory-overseer.json`.
