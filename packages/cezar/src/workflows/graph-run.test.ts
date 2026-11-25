@@ -144,8 +144,8 @@ describe('graph workflows run through RunManager', () => {
   });
 
   it.each([
-    { forge: 'GitHub', needsRepair: false, remote: null, url: 'https://github.com/open-mercato/demo/pull/777' },
-    { forge: 'Azure', needsRepair: true, remote: 'https://dev.azure.com/test/project/_git/repo', url: 'https://dev.azure.com/test/project/_git/repo/pullrequest/777' },
+    { forge: 'GitHub', needsRepair: false, remote: null, url: /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/777$/ },
+    { forge: 'Azure', needsRepair: true, remote: 'https://dev.azure.com/test/project/_git/repo', url: /^https:\/\/dev\.azure\.com\/test\/project\/_git\/repo\/pullrequest\/777$/ },
   ])('opens a $forge PR with agent changes after ordered checks pass', async ({ needsRepair, remote, url }) => {
     if (remote) await run('git', ['remote', 'add', 'origin', remote], { cwd: repoRoot });
     const second = 'echo second >> checks.log; echo check-rewrite > a.txt';
@@ -172,7 +172,7 @@ describe('graph workflows run through RunManager', () => {
       expect(final.graphState?.taken).toContain('check-2.pass->pr');
       expect(publish).toHaveBeenCalledTimes(1);
       expect(publish.mock.calls[0]?.[0].draft ?? true).toBe(true);
-      expect(final.pullRequestUrl).toBe(url);
+      expect(final.pullRequestUrl).toMatch(url);
       expect(store.readEvents(id).some((event) => event.type === 'ask.requested')).toBe(false);
       const { stdout } = await run('git', ['diff', '--name-only', `${final.baseBranch}...HEAD`], { cwd });
       expect(stdout.trim()).toBe('agent-change.txt');

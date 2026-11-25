@@ -7,6 +7,10 @@ The overseer's record of what the factory did while being built, following the r
 
 After M3, this log is also the calibration set for the automated judge.
 
+## D11 observations
+
+- A review raised an ambiguous secret policy for generated checks. The owner confirmed that they inherit the existing workflow check-step secrets.
+
 ## Baseline: the deployment project, 2026-11-25 (before the roadmap)
 
 | # | Observation | Evidence | Class | Decision |
