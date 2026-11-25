@@ -1,6 +1,6 @@
 # The self-improving factory
 
-Status: draft v5.14, 2026-11-25. Fork: `mlei06/cezar`, trunk `factory`. Spec owner: the overseer (see the roadmap). Implementation plan: `2026-11-25-self-improving-factory-roadmap.md`. Findings during the build: `2026-11-25-self-improving-factory-observations.md`.
+Status: draft v5.15, 2026-11-25. Fork: `mlei06/cezar`, trunk `factory`. Spec owner: the overseer (see the roadmap). Implementation plan: `2026-11-25-self-improving-factory-roadmap.md`. Findings during the build: `2026-11-25-self-improving-factory-observations.md`.
 
 ## TLDR
 
@@ -552,7 +552,8 @@ A manager is the project's lead and the owner's stand-in: accountable for where 
 4. **Self-contained briefs.** A task knows nothing the brief doesn't say. Every brief has: the objective; the context it needs (decisions made, files, prior task results, linked by path or PR, not restated); what is out of scope; acceptance checks; the skill and validation commands; and what its final message must contain (what changed, what was verified, what's left), since that summary is the record the manager reads. This is D11.7, made concrete.
 5. **Ideation.** The manager adds backlog items from what it sees: failed or low-scoring runs (D5), repeated causes (D6), TODOs and FIXMEs, open issues, CI failures, gaps between the charter's goals and the code, and the owner's passing remarks. Within the vision and goals it ranks and starts that work itself. A new direction, a change to goals, or anything on D7's owner list it proposes instead, as an open question with its recommendation.
 6. **Cadence.** After each finished outcome: update the charter's progress and backlog. When idle with nothing in flight: take the top backlog item. Weekly: D10's report gains a project section: progress per goal, what shipped, risks, the top three next items, and open questions.
-7. **Role first.** The skill opens with the role, stated plainly: the project's lead, owner of the outcome, who delegates every change to tasks, checks their work, and keeps the project moving between the owner's requests.
+7. **One message, carried to production.** A report of a bug or a request ("X is broken", "add Y") is an outcome the manager carries end to end without further messages from the owner: add it to the backlog; reproduce it (a small task) unless it is obvious; fix it with `implement`, including a regression test that fails without the fix; review and merge under D11; deploy through the project's deploy workflow when the project deploys; then **verify the reported behaviour itself where it was reported** (production, staging, the CLI), not only that the deploy is healthy; roll back if the deploy breaks something; and report what was wrong, what changed and how it was verified. The manager asks the owner only for what it cannot get itself (an account, a sample file, a product choice), once, with its recommendation. An outcome is done when the verification passes, not when a PR opens.
+8. **Role first.** The skill opens with the role, stated plainly: the project's lead, owner of the outcome, who delegates every change to tasks, checks their work, and keeps the project moving between the owner's requests.
 
 The manager still never writes code itself (every change is a task, D11), and hand-made tasks stay first-class: the owner can add to the backlog, start tasks by hand or redirect the manager at any time.
 
@@ -787,6 +788,7 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
   - no switch happens while work is active;
   - scores record `harnessVersion`.
 - **Manager rules (D11):** the shipped `manage-project` skill states every D11 rule; a run's process has a lower CPU priority than the cockpit.
+- **One message to production (D12.7):** a reported bug in a project with a deploy workflow ends merged, deployed and verified where it was reported, with a regression test, and no further owner messages; a failed verification reopens the outcome instead of reporting it done.
 - **Project lead (D12):** a project without a charter gets a drafted one as a docs PR; a new manager session's first read is the charter; a finished outcome's PR updates its Progress and Backlog; the manager never merges a change to vision, goals or non-goals.
 - **Compatibility:** old run files parse; contract-parity and route-parity tests pass; every new env var is in `.env.example`.
 
@@ -805,6 +807,7 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
 
 ## Changelog
 
+- **v5.15:** D12.7, one message carried to production: reproduce, fix with a regression test, review, merge, deploy, verify the reported behaviour where it was reported, roll back on breakage; done means verified. Rules renumbered so the role stays last.
 - **v5.14:** D12: every project keeps `.ai/project.md` (existing roadmaps are linked, not adopted); charter updates ride in the outcome's own PR, since the manager never commits.
 - **v5.13:** D12, the manager as project lead: a committed charter (`.ai/project.md`) holding vision, goals, non-goals, a ranked backlog, progress and open questions; plans in the charter, not the chat; effort scaling; self-contained briefs; ideation within the vision; a progress cadence; role first. Drawn from public orchestrator and manager designs.
 - **v5.12:** principle: the manager stands in for the owner through the same task paths; hand-made tasks stay first-class and get every addition.

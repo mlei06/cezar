@@ -2,17 +2,15 @@
 
 The overseer's resume point for the self-improving factory build. Updated and pushed at every milestone step and every overseer decision, so the work survives a crashed machine or a new session. Read this first, then the roadmap's Progress table and the observation log.
 
-Last updated: 2026-11-25 21:50 UTC.
+Last updated: 2026-11-25 23:20 UTC.
 
 ## Where the build stands
 
-- **Milestone:** M1 (agents know what they have), in progress. M0 done.
-- **Live harness:** `0.21.0+release-b29db47`, which has PRs #1–#5. PRs #8 and #9 are merged into `factory` but not yet released.
-- **Merged in M1:** #2 (known host test failures), #3 (secret descriptions), #4 (workflow budgets and agent-step secrets), #5 (typecheck repair), #8 (manager discovery and task flags), #9 (`manage-project` update).
-- **Open in M1:**
-  - #6, built-in workflows `implement`, `plan`, `operate`: in review after publication fixes. `implement` has no human gate and uses the shared check-artifact path.
-  - #7, the capability block: being revised for spec v5.7 (omit a description containing its own secret's value) and a NUL-character fix.
-- **Next:** when #6 and #7 merge, the manager holds new starts and says so. The overseer releases `factory` (`node scripts/harness-release.mjs`), tells the manager the release is done, checks M1's acceptance live, writes the M1 review, and sends the M2 prompt.
+- **Milestone:** M1 (agents know what they have) is merged and live; its live acceptance check is pending. M0 done.
+- **Live harness:** `0.21.0+release-41a8ac9` (released by the manager itself, detached, 23:06 UTC), which has every M1 PR: #2–#9.
+- **M1 PRs:** #2 (known host test failures), #3 (secret descriptions), #4 (workflow budgets and agent-step secrets), #5 (typecheck repair), #6 (built-in `implement`, `plan`, `operate`), #7 (the capability block), #8 (manager discovery and task flags), #9 (`manage-project` update), #10 (test-resource rules in `factory-work`).
+- **M1 follow-ups** (from reviews, not blocking): generated validation checks get an explicit secrets allowlist; forge-adapter-level draft-PR assertions; check-artifact exclusions survive a cockpit restart (tracked before M1).
+- **Next:** the manager verifies M1's acceptance live, reports, and stands by. Then the implementer (handoff prompt) checks M1's acceptance itself if it isn't recorded here, writes the M1 review, and starts M1.5, then M2.
 
 ## Standing instructions given to the harness manager
 

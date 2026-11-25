@@ -29,7 +29,8 @@ The program is done when all of these hold:
 2. The deployment project's "update production" runs end to end with no round trip to the owner for access, within budget, and shows scores on every task.
 3. The factory has merged at least one project improvement PR and one harness improvement PR on its own, and their clusters' failure rates fell.
 4. The harness ships its own releases through `harness-release`, with at least one automatic rollback demonstrated.
-5. The overseer's calibration shows the judge agreeing on pass/fail for at least 80% of sampled runs, and on the main cause's target for at least 70%.
+5. **One bug report, carried to production:** the owner reports a real bug to a project's manager in one message, and it ends merged, deployed and verified where it was reported, with a regression test, with no further owner messages (spec D12.7). Run on the deployment project, and on the harness project with the release as its deploy.
+6. The overseer's calibration shows the judge agreeing on pass/fail for at least 80% of sampled runs, and on the main cause's target for at least 70%.
 
 ## Who does what
 
@@ -364,6 +365,7 @@ New features and improvements found so far, not yet scheduled into a milestone. 
 
 ## Changelog
 
+- v3.2: definition of done gains the one-message bug-to-production run (spec D12.7).
 - v3.1: M1.5, the manager leads the project (spec D11, D12), between M1 and M2, built by the implementer.
 - v3 (2026-11-25, owner decision): the harness manager finishes M1 (PR #6 and the batched release of #6–#9), then stands by. M2–M6 are built directly by an implementer agent from the handoff prompt, outside Cezar's task loop, to move faster; improvements then come from using the factory on real project work. The milestone contents, acceptance and definition of done are unchanged. The manager's M1 rules became spec D11.
 - v2.3 (2026-11-25, owner decision): the manager runs the harness project on its own. It releases merged runtime PRs itself (detached through `systemd-run`), decides after two review rounds, settles spec ambiguities and records them, and reviews only runtime PRs. The overseer audits instead of gating. M4 still automates the release.
