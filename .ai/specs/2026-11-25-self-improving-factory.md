@@ -132,6 +132,7 @@ Cezar's workflow step already sets the runner, model, effort, skill, allowed too
 
 - **`budget:`** on the workflow: `{ tokens, minutes }` for the whole run (D4).
 - **`secrets:` on agent steps**: an optional list that narrows which `agents`-audience secrets the step receives. Without it the step gets all of them, as today. The current load error for `secrets:` on an agent step is lifted. On a check step `secrets:` keeps its existing meaning.
+  - **On Continue, retry or a runner/account switch:** the continued session uses the allowlist of the agent step whose session it resumes, as recorded when that step actually launched. When that can't be determined (no launched step recorded, or the step is ambiguous), it uses the **narrowest** policy: the intersection of every agent step's allowlist in the workflow, where an omitted list counts as "all" and `[]` as none. Never widen on doubt. (v5.4, settled after two review rounds found corner cases.)
 
 ```yaml
 name: operate
@@ -761,6 +762,7 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
   - Cezar's existing metrics reused;
   - 1–3 routed causes per failure;
   - one-person defaults.
+- **v5.4:** agent-step secrets on Continue: the resumed step's recorded allowlist, else the intersection of all agent steps' allowlists; never widen on doubt.
 - **v5.3:** the capability block's 2k cap never drops secret names; names alone may exceed it, listed compactly (conflict raised by the harness manager in M1).
 - **v5.2:** `implement` validates with check steps from `.ai/agentic.config.json` (M0 warm-up finding).
 - **v5.1:** findings from M0: release ids via linked build worktrees, the davy TLS relay, Mistral's 262k window.
