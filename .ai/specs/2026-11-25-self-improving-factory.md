@@ -155,7 +155,7 @@ steps:
 | `operate` | the machine's low-reasoning model (`factory.models.lowReasoning`) | 800k, 20 min | running known workflows or scripts, status, summaries, moving docs |
 | `improve-factory` | codex, gpt-6.2-sol | 4M, 45 min | improvement runs (D6); owner-protected |
 
-**`implement` validates with check steps, not with the model.** Its graph is an agent step, then one check step per validation command, with a failing check looping back to the agent (at most twice). Waiting for the tests is then the engine's job. The commands come from the project's existing `.ai/agentic.config.json` (`validation.commands`, which the om-* skills already read), else from the project's `test` script. Guidance in a skill wasn't enough: the M0 warm-up task polled its test run across eight model turns although `factory-work` told it not to (observation M0-6).
+**`implement` validates with check steps, not with the model.** Its graph is an agent step, then one check step per validation command, with a failing check looping back to the agent (at most twice). Waiting for the tests is then the engine's job. The commands come from the project's existing `.ai/agentic.config.json` (`validation.commands`, which the om-* skills already read). When the file is missing, or has no `validation.commands`, they come from the project's `test` script. With neither, `implement` runs no checks and opens the PR with a note that no validation is configured (v5.9). Guidance in a skill wasn't enough: the M0 warm-up task polled its test run across eight model turns although `factory-work` told it not to (observation M0-6).
 
 The model `low-reasoning` is an alias that resolves, per machine, to the `factory.models.lowReasoning` setting (a runner and a model). The harness names no provider: a machine points it at whatever cheap or self-hosted model it has. Unset, it resolves to the project's default runner at low effort, with a note on the task. A project overrides a built-in by committing a workflow with the same name.
 
@@ -762,6 +762,7 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
   - Cezar's existing metrics reused;
   - 1–3 routed causes per failure;
   - one-person defaults.
+- **v5.9:** `implement` without `validation.commands`: the `test` script, else no checks and a note on the PR.
 - **v5.8:** no provider or project-specific names in the harness: the judge and the low-reasoning model (`operate`) are machine settings (`factory.judge`, `factory.models.lowReasoning`); evidence and examples made generic.
 - **v5.7:** render applies the same own-value check (omit), covering older descriptions; still no other scanning.
 - **v5.6:** secret descriptions: refuse one containing its own secret's value at write time; no other scanning or scrubbing.
