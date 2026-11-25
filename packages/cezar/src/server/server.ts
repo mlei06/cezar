@@ -41,6 +41,7 @@ import {
   createManagerInputSchema,
   managerActionDecisionInputSchema,
   managerActionParamSchema,
+  managerAgentsQuerySchema,
   managerCreateTaskInputSchema,
   managerIdParamSchema,
   managerMemoryParamSchema,
@@ -975,6 +976,9 @@ async function workflowCatalog(repoRoot: string) {
 
 // Give both mounts a named response so declaration emit doesn't inline the full catalog twice.
 interface WorkflowCatalogBody extends Awaited<ReturnType<typeof workflowCatalog>> {}
+interface RunWithUsageBody extends RunRecord {
+  usage?: ReturnType<typeof currentUsage>;
+}
 
 const validateGraphSchema = z.object({ graph: workflowGraphSchema });
 
@@ -1759,7 +1763,14 @@ export function createApp(deps: ServerDeps) {
   // Workspace-level, shared by the managers family and the automation report link.
   const managerStore = new ManagerStore();
   // A manager task's fallback follows the manager's list as it is now (deleted or Automatic = withdrawn).
-  setManagerTaskAccountsLookup((managerId) => managerStore.get(managerId)?.taskAgents ?? null);
+  setManagerTaskAccountsLookup((managerId, grantAccount) => {
+    const manager = managerStore.get(managerId);
+    if (!grantAccount) return manager?.taskAgents ?? null;
+    if (!manager) return [];
+    return manager.taskAgents ?? (manager.taskRunner
+      ? [{ runner: manager.taskRunner, agentProfile: grantAccount.profileId }]
+      : null);
+  });
   const contextProjects = async () => {
     const selector = capabilities().singleProject
       ? { projectId: await resolveBootProject() }
@@ -5394,7 +5405,7 @@ export function createApp(deps: ServerDeps) {
   // Additive `usage` field (#348): the latest CPU/RSS/proc-count sample of the
   // run's live process tree — absent for finished runs and when `ps` yields
   // nothing. The stored record itself is never touched.
-  const withUsage = (run: RunRecord): RunRecord & { usage?: ReturnType<typeof currentUsage> } => {
+  const withUsage = (run: RunRecord): RunWithUsageBody => {
     const usage = currentUsage(run.id);
     return usage ? { ...run, usage } : run;
   };
@@ -5438,7 +5449,7 @@ export function createApp(deps: ServerDeps) {
   // ---- chained family: runs lifecycle + artifacts (project-scoped) ----
   const runsRoutes = new Hono<ProjectApiEnv>()
     // `workflowDef` is ~1.3 MB per run; the list leaves it out (`?full=1` opts back in, GET /runs/:id is always complete).
-    .get('/runs', queryZodValidator(runsListQuerySchema), (c) => {
+    .get('/runs', queryZodValidator(runsListQuerySchema), (c): Response & TypedResponse<RunWithUsageBody[], 200, 'json'> => {
       const full = c.req.valid('query').full === '1';
       return c.json(
         c
@@ -5547,7 +5558,7 @@ export function createApp(deps: ServerDeps) {
     })
 
     .post('/runs', jsonZodValidator(createRunInputSchema), async (c) => {
-      const { root: repoRoot, dataDir, manager, store } = c.get('project');
+      const { root: repoRoot, dataDir, manager, store, id: projectId } = c.get('project');
       const parsed = { data: c.req.valid('json') };
       // A manager fallback policy bypasses the project's Automatic fallback setting: only the
       // manager engine's in-process request, which carries this process's token, may set one.
@@ -5571,6 +5582,14 @@ export function createApp(deps: ServerDeps) {
         const { workflows } = await loadWorkflows(repoRoot);
         workflow = workflows.find((w) => w.name === parsed.data.workflow);
         if (!workflow) return c.json({ error: `unknown workflow: ${parsed.data.workflow}` }, 404);
+      }
+      if (parsed.data.secrets?.length) {
+        const available = await secretStore.resolveAgentGrants(
+          { projectId, root: repoRoot }, parsed.data.secrets,
+        ).catch(() => ({}));
+        if (parsed.data.secrets.some((name) => !Object.hasOwn(available, name))) {
+          return c.json({ error: 'Requested secrets must be stored for this project or workspace and available to agents. See the secrets list.' }, 400);
+        }
       }
       const fallback = parsed.data.runner ?? (await loadConfig(repoRoot)).defaultRunner;
       const blocked = await providerActionError(providersRequiredByWorkflow(workflow, fallback), {
@@ -5608,6 +5627,8 @@ export function createApp(deps: ServerDeps) {
         reasoningEffort: parsed.data.reasoningEffort,
         runner: parsed.data.runner,
         agentProfile: parsed.data.agentProfile,
+        secrets: parsed.data.secrets,
+        budget: parsed.data.budget,
         images,
         systemPrompt: parsed.data.systemPrompt,
         ...(parsed.data.startedByManager ? { startedByManager: parsed.data.startedByManager } : {}),
@@ -9612,6 +9633,10 @@ export function createApp(deps: ServerDeps) {
     .get('/workspace/managers/:id/snapshot', paramZodValidator(managerIdParamSchema), async (c) => {
       const snapshot = await managerEngine.snapshot(c.req.valid('param').id);
       return snapshot ? c.json(snapshot) : c.json(MANAGER_NOT_FOUND, 404);
+    })
+    .get('/workspace/managers/:id/agents', paramZodValidator(managerIdParamSchema), queryZodValidator(managerAgentsQuerySchema), async (c) => {
+      const outcome = await managerEngine.taskAccounts(c.req.valid('param').id, c.req.valid('query').projectId);
+      return 'error' in outcome ? c.json({ error: outcome.error }, outcome.status) : c.json(outcome);
     })
     .get('/workspace/managers/:id/task', paramZodValidator(managerIdParamSchema), queryZodValidator(managerTaskDetailQuerySchema), async (c) => {
       const { projectId, runId } = c.req.valid('query');

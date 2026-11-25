@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { attachmentListSchema } from './runs.ts';
+import { attachmentListSchema, runBudgetSchema } from './runs.ts';
+import { agentStepSecretsSchema } from './workflows.ts';
 import { runnerSchema } from './runners.ts';
 import { questionAboutSchema, questionCardReplaces, questionClosedSchema, questionStaleSchema } from './questions.ts';
 
@@ -693,6 +694,9 @@ export const managerAccountStateSchema = z.object({
   outOfLimitsUntil: z.string().optional(),
 });
 export type ManagerAccountState = z.infer<typeof managerAccountStateSchema>;
+export const managerAgentsQuerySchema = z.object({ projectId: z.string().min(1).max(256) });
+export const managerAgentsResponseSchema = z.object({ accounts: z.array(managerAccountStateSchema) });
+export type ManagerAgentsResponse = z.infer<typeof managerAgentsResponseSchema>;
 
 export const managerSnapshotSchema = z.object({
   generatedAt: z.string(),
@@ -741,6 +745,8 @@ export const managerCreateTaskInputSchema = z.object({
   model: modelInput.optional(),
   effort: managerTaskEffortSchema.optional(),
   dispatch: z.boolean().optional(),
+  secrets: agentStepSecretsSchema.optional(),
+  budget: runBudgetSchema.optional(),
   ...forwardFields,
 }).refine((input) => Boolean(input.task) || input.fromMessage !== undefined, {
   message: 'write an objective or forward a message (fromMessage)',

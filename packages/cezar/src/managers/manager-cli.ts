@@ -7,12 +7,15 @@ import { readFile, realpath } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { cezarHomeDir } from '../paths.ts';
 import { parseArgs } from 'node:util';
-import type { ManagerCancelTaskResponse, ManagerCreateTaskResponse, ManagerFollowTaskResponse, ManagerForwarded, ManagerMemoryResponse, ManagerMessage, ManagerSnapshot, ManagerSnapshotProject, ManagerTaskMessageResponse } from '@open-mercato/cezar-contract';
-import { managerAccessOf, managerMemoryKeySchema, managerMemoryKindSchema, managerTaskEffortSchema, MANAGER_MEMORY_LIMITS, type Manager } from '@open-mercato/cezar-contract';
+import type { ManagerAgentsResponse, ManagerCancelTaskResponse, ManagerCreateTaskResponse, ManagerFollowTaskResponse, ManagerForwarded, ManagerMemoryResponse, ManagerMessage, ManagerSnapshot, ManagerSnapshotProject, ManagerTaskMessageResponse, WorkflowCatalogEntry } from '@open-mercato/cezar-contract';
+import { agentStepSecretsSchema, RUNNER_IDS, runnerSchema, runnerDiscoversModels, runnerModelCatalogResponseSchema, runBudgetSchema, secretsListSchema, skillSchema, managerAccessOf, managerMemoryKeySchema, managerMemoryKindSchema, managerTaskEffortSchema, MANAGER_MEMORY_LIMITS, type Manager } from '@open-mercato/cezar-contract';
 import { runAutomationCommand } from '../automations/automation-cli.ts';
 import { missingCockpitMessage } from '../cockpit-address.ts';
 import { parseConnectorTool } from './connectors.ts';
 import { MANAGER_COMMANDS, MANAGER_JOB_SUBCOMMANDS, MANAGER_MEMORY_SUBCOMMANDS, MANAGER_TASK_SUBCOMMANDS } from './cli-vocabulary.ts';
+import { managerSkillSources } from './manager-skills.ts';
+import { KNOWN_PRESETS_BY_RUNNER } from '../core/model-presets.ts';
+import { STATIC_EFFORTS } from './task-model.ts';
 import { recentTasks } from './snapshot.ts';
 import { sameModel } from '../runs/reported-model.ts';
 
@@ -54,7 +57,7 @@ const USAGE = `cez manager — the tools of a cezar manager's agent (CEZ_MANAGER
         --from-message <id>          the same for a given chat message
         --file <path> | --stdin      append the text of a file, or of stdin
         --allow-placeholder          send text holding a marker such as [transcript here] or PASTE anyway
-  cez manager workflows --project <id> [--json]  each workflow and what it can do (push, open a PR, post to GitHub)
+  cez manager workflows|secrets|skills|models|agents [--project <id>] [--json]
   cez manager merge --project <id> <number> [--method merge|squash|rebase] [--title t] [--reason "…"]
                                                  proposes a merge; the user approves it in the chat
   cez manager automation --project <id> <cez automation args>
@@ -124,6 +127,10 @@ Starts a task.
   --project <id>     the project (required unless only one is connected)
   --title <t>        its title
   --workflow <w>     a workflow name (default quick-task); see cez manager workflows
+  --secrets <names>  comma-separated agent secret names; pass an empty string for none
+  --budget-usd <n>   record a positive USD budget
+  --budget-tokens <n>  record a positive integer input-token budget
+  --budget-minutes <n>  record a positive active-minute budget
   --skill <s>        attach one skill, as the composer's /skill does: it is installed into the task
   --runner <r>       the agent backend, e.g. claude or codex, from the manager's allowed task accounts
   --account <id>     the agent account id from those accounts
@@ -173,6 +180,10 @@ The project's workflows, each with what it can do: push, open-pr, posts-to-githu
 For review-only work pick a read-only one (review-pr when it exists).
   --project <id>   the project
   --json           the raw list`,
+  secrets: 'cez manager secrets [--project <id>] [--json] — project and workspace secret metadata.',
+  skills: 'cez manager skills [--project <id>] [--json] — skills available to tasks.',
+  models: 'cez manager models [--project <id>] [--runner <runner>] [--json] — model and effort catalogs.',
+  agents: 'cez manager agents [--project <id>] [--json] — task accounts and usage limits.',
   merge: `cez manager merge --project <id> <number> [flags]
 
 Proposes merging a pull request; the user approves it in the chat.
@@ -316,12 +327,20 @@ async function workflowNames(url: string | undefined, env: ManagerCliEnv, io: Ma
 }
 
 /** One workflow's line: name, description and, when the cockpit says, what it can do. */
-interface WorkflowRow { name: string; description?: string; capabilities?: { push?: boolean; openPr?: boolean; postToGithub?: boolean } }
+type WorkflowRow = Pick<WorkflowCatalogEntry, 'name' | 'description' | 'budget'>
+  & Partial<Pick<WorkflowCatalogEntry, 'steps' | 'graph' | 'capabilities'>>;
 function workflowLine(workflow: WorkflowRow): string {
   const caps = workflow.capabilities;
   const can = caps ? [caps.push && 'push', caps.openPr && 'open-pr', caps.postToGithub && 'posts-to-github'].filter(Boolean) : [];
   const tag = caps ? `[${can.length > 0 ? can.join(', ') : 'read-only'}]` : '[capabilities unknown]';
-  return `${workflow.name}  ${workflow.description?.replace(/\s+/g, ' ').trim() || '-'}  ${tag}`;
+  const steps = workflow.graph?.nodes.filter((node) => node.type === 'agent') ?? workflow.steps ?? [];
+  const models = [...new Set(steps.flatMap((step) => step.model ? [step.runner ? `${step.runner}/${step.model}` : step.model] : []))];
+  const { tokens, minutes } = workflow.budget ?? {};
+  const budget = [tokens !== undefined && `${tokens} tokens`, minutes !== undefined && `${minutes} min`].filter(Boolean);
+  return [workflow.name, workflow.description?.replace(/\s+/g, ' ').trim() || '-', tag,
+    ...(models.length ? [`model: ${models.join(', ')}`] : []),
+    ...(budget.length ? [`budget: ${budget.join(', ')}`] : []),
+  ].join('  ');
 }
 
 /** "opus → claude-opus-5-5", "auto → …" when no model was asked for; one name when the two agree. */
@@ -554,9 +573,19 @@ export async function runManagerCommand(
           const { values, positionals } = parse('task create', taskArgs, {
             project: { type: 'string' }, title: { type: 'string' }, workflow: { type: 'string' },
             runner: { type: 'string' }, account: { type: 'string' }, model: { type: 'string' }, effort: { type: 'string' }, dispatch: { type: 'boolean' },
-            skill: { type: 'string' },
+            skill: { type: 'string' }, secrets: { type: 'string' },
+            'budget-usd': { type: 'string' }, 'budget-tokens': { type: 'string' }, 'budget-minutes': { type: 'string' },
             ...CONTENT_OPTIONS,
           }, true);
+          const secrets = values.secrets === undefined ? undefined
+            : agentStepSecretsSchema.safeParse(values.secrets === '' ? [] : values.secrets.split(',').map((name) => name.trim()));
+          if (secrets && !secrets.success) fail('--secrets must contain comma-separated secret names, or be empty');
+          const budgetFlags = { usd: values['budget-usd'], tokens: values['budget-tokens'], minutes: values['budget-minutes'] };
+          const entries = Object.entries(budgetFlags).filter((entry) => entry[1] !== undefined);
+          const budget = entries.length === 0 ? undefined : runBudgetSchema.safeParse(Object.fromEntries(
+            entries.map(([key, value]) => [key, Number(value)]),
+          ));
+          if (budget && !budget.success) fail('budget flags must be positive numbers, with a whole number for --budget-tokens');
           const effort = effortOf(values.effort);
           if (values.skill !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(values.skill)) fail(`--skill takes one skill name, e.g. --skill write-cezar-workflow, not '${values.skill}'`);
           const { text: objective, ...content } = await contentOf(positionals, values, io, env);
@@ -577,6 +606,8 @@ export async function runManagerCommand(
               ...(values.model ? { model: values.model } : {}),
               ...(effort ? { effort } : {}),
               ...(values.dispatch ? { dispatch: true } : {}),
+              ...(secrets?.success ? { secrets: [...new Set(secrets.data)] } : {}),
+              ...(budget?.success ? { budget: budget.data } : {}),
             },
           });
           io.log(`[[task:${created.projectId}/${created.runId}]]`);
@@ -670,6 +701,67 @@ export async function runManagerCommand(
         if (env.CEZ_MANAGER_TURN === 'watch') fail('a watch check is read-only: ask the user instead');
         await call('', { method: 'PATCH', body: { name } });
         io.log(`renamed to ${name}`);
+        return 0;
+      }
+
+      case 'secrets':
+      case 'skills':
+      case 'models':
+      case 'agents': {
+        const { values } = parse(command, rest, {
+          project: { type: 'string' }, json: { type: 'boolean' },
+          ...(command === 'models' ? { runner: { type: 'string' } } as const : {}),
+        });
+        const { projectId } = await projectOf(values.project);
+        const prefix = `/p/${encodeURIComponent(projectId)}`;
+        const get = async (path: string): Promise<unknown> => {
+          const response = await io.fetch(`${url}/api/v1${path}`);
+          if (!response.ok) fail(`${response.status} ${response.statusText}`);
+          return response.json();
+        };
+        if (command === 'secrets') {
+          const scopes = ['project', 'workspace'] as const;
+          const lists = await Promise.all([get(`${prefix}/secrets`), get('/workspace/secrets')]);
+          const secrets = lists.flatMap((list, index) => secretsListSchema.parse(list).secrets.map((secret) => ({
+            ...secret, scope: scopes[index],
+          })));
+          if (values.json) printJson({ secrets });
+          else for (const secret of secrets) io.log(`${secret.name}  ${secret.scope}  ${secret.audiences.join(', ')}  ${secret.description ?? '-'}`);
+        } else if (command === 'skills') {
+          const managerPaths = await Promise.all([...managerSkillSources().values()].map((dir) => realpath(join(dir, 'SKILL.md')).catch(() => undefined)));
+          const rows = skillSchema.array().parse(await get(`${prefix}/skills`));
+          const skills = (await Promise.all(rows.map(async ({ path, name, description, source, missingShared, kind }) => {
+            if (missingShared || kind === 'command' || managerPaths.includes(await realpath(path).catch(() => path))) return undefined;
+            return { name, description, source };
+          }))).filter((skill) => skill !== undefined);
+          if (values.json) printJson({ skills });
+          else for (const skill of skills) io.log(`${skill.name}  ${skill.description ?? '-'}`);
+        } else if (command === 'models') {
+          const runner = values.runner === undefined ? undefined : runnerSchema.safeParse(values.runner);
+          if (runner && !runner.success) fail(`--runner must be one of ${RUNNER_IDS.join(', ')}`);
+          const catalogs = await Promise.all((runner?.success ? [runner.data] : RUNNER_IDS).map(async (id) => {
+            const live = runnerDiscoversModels(id)
+              ? runnerModelCatalogResponseSchema.parse(await get(`/models?${new URLSearchParams({ runner: id })}`))
+              : undefined;
+            if (live?.models.length) return live;
+            const models = KNOWN_PRESETS_BY_RUNNER[id].map((model) => ({
+              id: model, label: model, description: '',
+              ...(STATIC_EFFORTS[id] ? { reasoningEfforts: STATIC_EFFORTS[id].map((effort) => ({ id: effort, description: '' })) } : {}),
+            }));
+            return models.length
+              ? { runner: id, models, source: 'presets', stale: false }
+              : live ?? { runner: id, models, source: 'unavailable', stale: false, reason: 'no model catalog' };
+          }));
+          if (values.json) printJson({ catalogs });
+          else for (const catalog of catalogs) {
+            if (catalog.models.length === 0) io.log(`${catalog.runner}  ${('reason' in catalog ? catalog.reason : undefined) ?? 'no models reported'}`);
+            for (const model of catalog.models) io.log(`${catalog.runner}  ${model.id}  ${model.reasoningEfforts?.map((effort) => effort.id).join(', ') || '-'}`);
+          }
+        } else {
+          const { accounts } = await call<ManagerAgentsResponse>(`/agents?${new URLSearchParams({ projectId })}`);
+          if (values.json) printJson({ accounts });
+          else for (const account of accounts) io.log(`${account.runner}  ${account.account}  ${account.label}  ${account.outOfLimitsUntil ? `out of limits until ${account.outOfLimitsUntil}` : 'available'}`);
+        }
         return 0;
       }
 

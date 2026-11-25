@@ -14,7 +14,7 @@ export interface TaskModelCatalog {
 }
 
 /** Native levels when the catalog names none: Claude's `--effort`, Codex's `turn/start.effort`. */
-const STATIC_EFFORTS: Partial<Record<RunnerId, readonly string[]>> = {
+export const STATIC_EFFORTS: Partial<Record<RunnerId, readonly string[]>> = {
   claude: ['low', 'medium', 'high', 'max'],
   codex: ['low', 'medium', 'high'],
 };

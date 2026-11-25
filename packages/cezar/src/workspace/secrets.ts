@@ -286,6 +286,15 @@ export class SecretStore {
     });
   }
 
+  async resolveAgentGrants(
+    project: { projectId: string; root: string } | undefined,
+    names: readonly string[],
+  ): Promise<Record<string, string>> {
+    if (names.length === 0) return {};
+    const { values } = await this.resolve(project, 'agents', names, { requireReadableProject: true });
+    return withoutAgentLogins(values);
+  }
+
   /**
    * What ONE consumer may see: the secrets of `project` (when given) and of the workspace that
    * admit `audience`, the project's winning on a shared name. With `bindings`, exactly the
@@ -297,12 +306,17 @@ export class SecretStore {
     project: { projectId: string; root: string } | undefined,
     audience: SecretAudience,
     bindings?: readonly StepSecretBinding[],
+    options?: { requireReadableProject?: boolean },
   ): Promise<ResolvedSecrets> {
     const notes: string[] = [];
     const sources: Array<{ label: string; read: SecretsRead }> = [{ label: 'workspace', read: await this.read({ kind: 'workspace' }) }];
     if (project) sources.push({ label: 'project', read: await this.read({ kind: 'project', ...project }) });
     for (const source of sources) {
       if (source.read.skipped) notes.push(`${source.label} secrets skipped — ${source.read.skipped}`);
+    }
+    // An unreadable project may hold the winning binding. Don't read through it to the workspace.
+    if (options?.requireReadableProject && sources.some(({ label, read }) => label === 'project' && read.skipped)) {
+      return { values: {}, notes };
     }
     const lookup = (name: string) => {
       for (const source of [...sources].reverse()) {

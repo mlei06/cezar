@@ -10,7 +10,7 @@ import { runParkedSchema } from './agent-login.ts';
 import { referenceStatusSchema } from './github.ts';
 // The chain shapes belong to the workflows family; the run record embeds one, so this file
 // consumes them rather than redeclaring. One-way on purpose — see the header of `./workflows.ts`.
-import { agentStepSecretsSchema, workflowDefSchema, workflowStepDefSchema } from './workflows.ts';
+import { agentStepSecretsSchema, workflowBudgetSchema, workflowDefSchema, workflowStepDefSchema } from './workflows.ts';
 import { taskAskRecordSchema } from './questions.ts';
 
 /** `GET /runs` query: `full=1` keeps each run's `workflowDef` (about 1.3 MB per run), which the list omits by default. */
@@ -122,6 +122,13 @@ export const stepStatusSchema = z.enum([
 export type StepStatus = z.infer<typeof stepStatusSchema>;
 
 const usageCounterSchema = z.number().finite().nonnegative();
+
+export const runBudgetSchema = z.object({
+  ...workflowBudgetSchema.shape,
+  usd: z.number().positive().optional(),
+}).strict().refine((budget) => Object.values(budget).some((value) => value !== undefined), {
+  message: 'budget must set usd, tokens or minutes',
+});
 
 /** Effective grants captured at launch, including nested/synthetic steps. Optional on old records. */
 /** Present after launch. An empty object records the omitted allowlist. */
@@ -434,6 +441,9 @@ export const runRecordSchema = z.object({
       ref: z.string(),
     })
     .optional(),
+  /** An explicit task-wide agent-vault allowlist. The workflow still governs checks. */
+  secretNames: agentStepSecretsSchema.optional(),
+  budget: runBudgetSchema.optional(),
   /** The PR head came from a fork: its check steps run without the project's or workspace's secrets. */
   untrustedHead: z.boolean().optional(),
   createdAt: z.string(),
@@ -1349,6 +1359,8 @@ export const createRunInputBaseSchema = z
     /** Agent account for this task (spec 2026-07-29-agent-profiles). Omit to follow the
      *  project's own selection; an id that no longer exists is a 400, not a silent default. */
     agentProfile: z.string().max(64).optional(),
+    secrets: agentStepSecretsSchema.optional(),
+    budget: runBudgetSchema.optional(),
     /** 1–3. Above 1 the response is `{ runs }` rather than a single record. */
     variants: z.number().int().min(1).max(3).optional(),
     /** false → run in the repo working tree instead of an isolated worktree (read-only skills).
