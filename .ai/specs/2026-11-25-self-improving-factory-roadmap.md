@@ -311,6 +311,7 @@ New features and improvements found so far, not yet scheduled into a milestone. 
 | B19 | **The `scope` scorer sees the spec sections a task names,** not only its brief, so drift the brief allowed is still caught | M1-7 | M3 |
 | B20 | **`review-pr` on Claude: two of three reviewers can't run Bash** (read-only allowlist), so they never see the change and give no verdict, which silently weakens reviews | review 0ee2df32 | M2 |
 | B21 | **A runner failing right after a machine restart** (Codex read-only startup) made the manager switch runners; Cezar could retry the original runner once after a short delay before falling back | M1, after the crash | M4 |
+| B22 | **Test runs overload the host:** tasks override the repository's 2-worker Vitest cap (`--maxWorkers=5`) and start a second full suite in the same worktree while one runs; with several tasks in parallel the laptop crashed. Cezar could give each task a CPU share (for example `nice` and a cgroup CPU limit per run) and the `implement` check steps should run the suite once, with the default | M1, after the crashes | M2 (with budgets) |
 
 ## Risks
 

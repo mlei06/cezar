@@ -53,6 +53,7 @@ After M3, this log is also the calibration set for the automated judge.
 | M1-5 | The manager held new starts for about 3 hours after a merge, waiting for a release confirmation, while the overseer was out of usage | events 07:07 to 10:09 | harness | B14: the hold belongs in `harness-release`, with a time limit (M4) |
 | M1-6 | A built-in workflow task added a human gate to `implement` that the spec doesn't have | PR #6 | task-setup | corrected through the manager; spec D2 unchanged |
 | M1-7 | Scope drift that matches the brief but not the spec is invisible to the judge, which only sees the brief | calibration on e04a507e | harness | backlog B19: give the `scope` scorer the spec sections a task names |
+| M1-8 | Load of 9 to 11 on 12 cores, a likely cause of the host crashes: the PR #7 task ran two full Vitest suites at once in one worktree, one with `--maxWorkers=5` against the repository's cap of 2, while other tasks ran suites too; PR #6 then reported five timing failures in web scheduling tests | process list, 16:51; task 0705b477; PR #6 final message | harness (resources), task-setup | stopped the duplicate run; workspace `maxParallel` back to 2; manager rules (no worker overrides, one full suite per task, rerun timing failures alone) into briefs and `factory-work`; backlog B22 |
 
 ## Judge calibration
 
