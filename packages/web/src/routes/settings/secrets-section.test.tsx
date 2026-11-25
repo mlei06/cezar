@@ -8,20 +8,26 @@ import { ProjectSecretsSection, WorkspaceSecretsSection } from './secrets-sectio
 
 afterEach(() => { cleanup(); setApiScope(null); vi.unstubAllGlobals() })
 
-type Stored = { name: string; audiences: ('checks' | 'cezar')[]; updatedAt: string }
+type Stored = { name: string; audiences: ('checks' | 'cezar')[]; updatedAt: string; description?: string }
 const DEFAULT: Stored[] = [
   { name: 'OPENAI_API_KEY', audiences: ['checks'], updatedAt: '2026-10-10T00:00:00Z' },
-  { name: 'STAGING_TOKEN', audiences: ['checks', 'cezar'], updatedAt: '2026-10-10T00:00:00Z' },
+  { name: 'STAGING_TOKEN', audiences: ['checks', 'cezar'], description: 'Staging deploy token', updatedAt: '2026-10-10T00:00:00Z' },
 ]
 
 function setup(options: { secrets?: Stored[]; putStatus?: number; keyBackend?: 'keychain' | 'file'; scope?: 'project' | 'workspace'; skipped?: string } = {}) {
   const { secrets = DEFAULT, putStatus = 204, keyBackend = 'keychain', scope = 'project', skipped } = options
+  let stored = secrets
   const calls: { method: string; url: string; body?: string }[] = []
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const method = init?.method ?? 'GET'
     calls.push({ method, url: String(input), body: typeof init?.body === 'string' ? init.body : undefined })
-    if (method === 'GET') return new Response(JSON.stringify({ secrets, keyBackend, ...(skipped ? { skipped } : {}) }), { status: 200 })
+    if (method === 'GET') return new Response(JSON.stringify({ secrets: stored, keyBackend, ...(skipped ? { skipped } : {}) }), { status: 200 })
     if (method === 'PUT' && putStatus !== 204) return new Response(JSON.stringify({ error: 'storage failed' }), { status: putStatus })
+    if (method === 'PATCH') {
+      const name = String(input).split('/').at(-1)
+      const { description } = JSON.parse(String(init?.body)) as { description: string }
+      stored = stored.map((entry) => entry.name === name ? { ...entry, description: description || undefined } : entry)
+    }
     return new Response(null, { status: 204 })
   }))
   const Section = scope === 'project' ? ProjectSecretsSection : WorkspaceSecretsSection
@@ -34,6 +40,7 @@ describe('Secrets settings', () => {
     setup()
     await screen.findByText('OPENAI_API_KEY')
     expect(screen.getByText('STAGING_TOKEN')).toBeTruthy()
+    expect(screen.getByText('Staging deploy token')).toBeTruthy()
     expect(screen.getByText('Check steps · cezar itself')).toBeTruthy()
     expect(screen.getByText(/kept in your OS keychain/)).toBeTruthy()
     // No value is rendered anywhere: the only inputs with content are the audience checkboxes.
@@ -59,14 +66,18 @@ describe('Secrets settings', () => {
     await screen.findByText('OPENAI_API_KEY')
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'NEW_KEY' } })
     fireEvent.change(screen.getByLabelText('Value'), { target: { value: 's3cret' } })
+    const description = screen.getByLabelText('Description (optional)') as HTMLInputElement
+    expect(description.maxLength).toBe(200)
+    fireEvent.change(description, { target: { value: 'Deployment key' } })
     fireEvent.click(screen.getByLabelText(/cezar itself/))
     fireEvent.click(screen.getByRole('button', { name: /save secret/i }))
     await waitFor(() => expect((screen.getByLabelText('Value') as HTMLInputElement).value).toBe(''))
     const put = calls.find((c) => c.method === 'PUT')!
     expect(put.url).toMatch(/\/secrets\/NEW_KEY$/)
     expect(put.url).not.toContain('/workspace/')
-    expect(JSON.parse(put.body!)).toEqual({ value: 's3cret', audiences: ['checks', 'agents', 'cezar'] })
+    expect(JSON.parse(put.body!)).toEqual({ value: 's3cret', audiences: ['checks', 'agents', 'cezar'], description: 'Deployment key' })
     expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('')
+    expect(description.value).toBe('')
     expect(screen.queryByText('s3cret')).toBeNull()
   })
 
@@ -81,6 +92,32 @@ describe('Secrets settings', () => {
     expect(calls.find((c) => c.method === 'PUT')!.url).toMatch(/\/api\/v1\/workspace\/secrets\/LLM_KEY$/)
     fireEvent.click(await screen.findByRole('button', { name: 'Delete STAGING_TOKEN' }))
     await waitFor(() => expect(calls.some((c) => c.method === 'DELETE' && c.url.endsWith('/workspace/secrets/STAGING_TOKEN'))).toBe(true))
+  })
+
+  it.each(['project', 'workspace'] as const)('clears a %s description and refreshes without sending a value', async (scope) => {
+    setApiScope('demo-project')
+    const listPath = scope === 'project' ? '/api/v1/p/demo-project/secrets' : '/api/v1/workspace/secrets'
+    const calls = setup({ scope })
+    expect(await screen.findByText('Staging deploy token')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Edit description for STAGING_TOKEN' }))
+    const description = screen.getByLabelText('Description for STAGING_TOKEN') as HTMLInputElement
+    expect(description.value).toBe('Staging deploy token')
+    expect(description.maxLength).toBe(200)
+    fireEvent.change(description, { target: { value: '' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save description' }))
+    await waitFor(() => {
+      expect(screen.queryByLabelText('Description for STAGING_TOKEN')).toBeNull()
+      expect(screen.queryByText('Staging deploy token')).toBeNull()
+    })
+    expect(screen.getByText('STAGING_TOKEN')).toBeTruthy()
+    expect(calls.map(({ method, url }) => [method, url])).toEqual([
+      ['GET', listPath],
+      ['PATCH', `${listPath}/STAGING_TOKEN`],
+      ['GET', listPath],
+    ])
+    const patch = calls.find((c) => c.method === 'PATCH')!
+    expect(JSON.parse(patch.body!)).toEqual({ description: '' })
+    expect(calls.some((call) => call.method === 'PUT')).toBe(false)
   })
 
   it('shows the reason for a refused name without calling PUT', async () => {

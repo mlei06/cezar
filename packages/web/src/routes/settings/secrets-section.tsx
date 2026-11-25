@@ -2,14 +2,15 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Trash2Icon } from 'lucide-react'
 import { useState } from 'react'
 
-import { SECRET_AUDIENCES, secretNameIssue, type SecretAudience, type SecretsList } from '@open-mercato/cezar-api-client'
+import { SECRET_AUDIENCES, SECRET_DESCRIPTION_MAX_LENGTH, secretNameIssue, type SecretAudience, type SecretsList, type SecretValueInput } from '@open-mercato/cezar-api-client'
 import { queryScope } from '@open-mercato/cezar-api-client'
 import {
-  removeProjectSecret, removeWorkspaceSecret, saveProjectSecret, saveWorkspaceSecret,
+  describeProjectSecret, describeWorkspaceSecret, removeProjectSecret, removeWorkspaceSecret, saveProjectSecret, saveWorkspaceSecret,
 } from '@/api/client'
 import { queryKeys, useProjectSecrets, useWorkspaceSecrets, workspaceQueryKeys } from '@/api/queries'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
 import { toast } from '@/components/ui/toaster'
 import { LoadingState, RowsSkeleton } from '@/components/loading-state'
 import { CardNote, FormRow, SettingsCard } from './form-row'
@@ -35,7 +36,8 @@ function keyBackendNote(keyBackend: SecretsList['keyBackend']): string {
 interface SecretsSectionProps {
   scope: 'project' | 'workspace'
   list: { data?: SecretsList; isPending: boolean; isError: boolean; error: Error | null }
-  save: (name: string, input: { value: string; audiences: SecretAudience[] }) => Promise<void>
+  save: (name: string, input: SecretValueInput) => Promise<void>
+  describeSecret: (name: string, description: string) => Promise<void>
   remove: (name: string) => Promise<void>
   invalidate: (queryClient: ReturnType<typeof useQueryClient>, projectId: string | null) => Promise<void>
 }
@@ -46,24 +48,39 @@ interface SecretsSectionProps {
  * scopes, parameterized by the queries and writers it uses. The table says who may read each
  * secret in one "Visible to" column (design doc, Proposal 8).
  */
-function SecretsSection({ scope, list, save, remove, invalidate }: SecretsSectionProps) {
+function SecretsSection({ scope, list, save, describeSecret, remove, invalidate }: SecretsSectionProps) {
   const queryClient = useQueryClient()
   const [name, setName] = useState('')
   const [value, setValue] = useState('')
+  const [description, setDescription] = useState('')
+  const [editing, setEditing] = useState<{ name: string; description: string } | null>(null)
   const [audiences, setAudiences] = useState<SecretAudience[]>(['checks', 'agents'])
   const [error, setError] = useState<string | null>(null)
   const nameIssue = name === '' ? null : secretNameIssue(name)
 
   const saving = useMutation({
-    mutationFn: async () => { const projectId = queryScope(); await save(name, { value, audiences }); return { projectId, saved: name } },
+    mutationFn: async () => { const projectId = queryScope(); await save(name, { value, audiences, ...(description ? { description } : {}) }); return { projectId, saved: name } },
     onSuccess: async ({ projectId, saved }) => {
-      if (queryScope() === projectId) { setName(''); setValue(''); setError(null) }
+      if (queryScope() === projectId) { setName(''); setValue(''); setDescription(''); setError(null) }
       await invalidate(queryClient, projectId)
       toast(`${saved} saved`)
     },
     // Keep the value on failure: it is already in component state either way, and clearing it
     // makes a transient 409 cost the user a re-paste of a 100-character key.
     onError: (e: Error) => setError(e.message),
+  })
+  const describing = useMutation({
+    mutationFn: async ({ name, description }: NonNullable<typeof editing>) => {
+      const projectId = queryScope()
+      await describeSecret(name, description)
+      return { projectId, name }
+    },
+    onSuccess: async ({ projectId, name }) => {
+      if (queryScope() === projectId) setEditing(null)
+      await invalidate(queryClient, projectId)
+      toast(`Description for ${name} saved`)
+    },
+    onError: (e: Error) => toast(e.message, { tone: 'danger' }),
   })
   const removing = useMutation({
     mutationFn: async (target: string) => { const projectId = queryScope(); await remove(target); return { projectId, removed: target } },
@@ -100,6 +117,7 @@ function SecretsSection({ scope, list, save, remove, invalidate }: SecretsSectio
                 <tr className="border-b border-border text-left text-label text-soft-foreground">
                   <th scope="col" className="px-4 py-2 font-medium">Name</th>
                   <th scope="col" className="px-4 py-2 font-medium">Visible to</th>
+                  <th scope="col" className="px-4 py-2 font-medium">Description</th>
                   <th scope="col" className="px-4 py-2 text-right font-medium"><span className="sr-only">Actions</span></th>
                 </tr>
               </thead>
@@ -108,6 +126,27 @@ function SecretsSection({ scope, list, save, remove, invalidate }: SecretsSectio
                   <tr key={stored.name} data-slot="secret-row" data-name={stored.name} className="border-b border-border last:border-0">
                     <th scope="row" className="px-4 py-2 text-left font-normal"><code className="font-mono text-ui">{stored.name}</code></th>
                     <td className="px-4 py-2 text-muted-foreground">{audienceSummary(stored.audiences)}</td>
+                    <td className="px-4 py-2 text-muted-foreground">
+                      {editing?.name === stored.name ? (
+                        <form className="flex flex-wrap items-center gap-2" onSubmit={(event) => {
+                          event.preventDefault()
+                          describing.mutate(editing)
+                        }}>
+                          <Textarea rows={2} aria-label={`Description for ${stored.name}`} autoComplete="off"
+                            placeholder="Optional, non-sensitive text" maxLength={SECRET_DESCRIPTION_MAX_LENGTH}
+                            value={editing.description} disabled={describing.isPending}
+                            onChange={(event) => setEditing({ name: stored.name, description: event.target.value })} />
+                          <Button type="submit" size="xs" disabled={describing.isPending}>Save description</Button>
+                          <Button type="button" variant="ghost" size="xs" disabled={describing.isPending} onClick={() => setEditing(null)}>Cancel</Button>
+                        </form>
+                      ) : (
+                        <div className="flex flex-wrap items-center gap-2">
+                          {stored.description && <span className="max-w-xs whitespace-pre-wrap [overflow-wrap:anywhere]">{stored.description}</span>}
+                          <Button variant="ghost" size="xs" aria-label={`Edit description for ${stored.name}`} disabled={describing.isPending}
+                            onClick={() => setEditing({ name: stored.name, description: stored.description ?? '' })}>Edit</Button>
+                        </div>
+                      )}
+                    </td>
                     <td className="px-4 py-2 text-right whitespace-nowrap">
                       <Button variant="danger-ghost" size="xs" aria-label={`Delete ${stored.name}`} disabled={removing.isPending} onClick={() => removing.mutate(stored.name)}>
                         <Trash2Icon /> Delete
@@ -139,6 +178,10 @@ function SecretsSection({ scope, list, save, remove, invalidate }: SecretsSectio
                   className="mt-1 h-8" />
               </label>
             </div>
+            <label className="block text-ui">Description (optional)
+              <Textarea rows={2} value={description} onChange={(event) => setDescription(event.target.value)} autoComplete="off"
+                maxLength={SECRET_DESCRIPTION_MAX_LENGTH} placeholder="Non-sensitive text, up to 200 characters" className="mt-1" />
+            </label>
             {nameIssue ? <p className="text-meta text-danger">{nameIssue}</p> : null}
             <fieldset className="flex flex-wrap items-center gap-x-4 gap-y-1">
               <legend className="mb-1 text-ui">Visible to</legend>
@@ -165,9 +208,11 @@ export function ProjectSecretsSection() {
   const list = useProjectSecrets()
   return (
     <SecretsSection
+      key={queryScope()}
       scope="project"
       list={list}
       save={saveProjectSecret}
+      describeSecret={describeProjectSecret}
       remove={removeProjectSecret}
       invalidate={(queryClient, projectId) => queryClient.invalidateQueries({ queryKey: queryKeys.secrets.allFor(projectId ?? '') })}
     />
@@ -182,6 +227,7 @@ export function WorkspaceSecretsSection() {
       scope="workspace"
       list={list}
       save={saveWorkspaceSecret}
+      describeSecret={describeWorkspaceSecret}
       remove={removeWorkspaceSecret}
       invalidate={(queryClient) => queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.secrets })}
     />

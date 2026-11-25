@@ -1104,12 +1104,20 @@ export async function saveProjectSecret(name: string, input: SecretValueInput): 
   await expectNoContent(await cez.api.v1.p[':projectId'].secrets[':name'].$put(
     { param: { projectId: queryScope(), name }, json: input }))
 }
+export async function describeProjectSecret(name: string, description: string): Promise<void> {
+  await expectNoContent(await cez.api.v1.p[':projectId'].secrets[':name'].$patch(
+    { param: { projectId: queryScope(), name }, json: { description } }))
+}
 export async function removeProjectSecret(name: string): Promise<void> {
   await expectNoContent(await cez.api.v1.p[':projectId'].secrets[':name'].$delete(
     { param: { projectId: queryScope(), name } }))
 }
 export async function saveWorkspaceSecret(name: string, input: SecretValueInput): Promise<void> {
   await expectNoContent(await cez.api.v1.workspace.secrets[':name'].$put({ param: { name }, json: input }))
+}
+export async function describeWorkspaceSecret(name: string, description: string): Promise<void> {
+  await expectNoContent(await cez.api.v1.workspace.secrets[':name'].$patch(
+    { param: { name }, json: { description } }))
 }
 export async function removeWorkspaceSecret(name: string): Promise<void> {
   await expectNoContent(await cez.api.v1.workspace.secrets[':name'].$delete({ param: { name } }))

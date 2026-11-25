@@ -24,7 +24,7 @@ describe('cezar secrets (spec 2026-10-10-project-secrets-vault-options)', () => 
   });
 
   const cli = (args: string[], value?: string) =>
-    runSecretsCommand([...args, '--repo', root], {
+    runSecretsCommand(['--repo', root, ...args], {
       log: (line) => lines.push(line),
       error: (line) => errors.push(line),
       ...(value === undefined ? {} : { readValue: async () => value }),
@@ -59,6 +59,69 @@ describe('cezar secrets (spec 2026-10-10-project-secrets-vault-options)', () => 
       expect(await cli(args, 'v')).toBe(1);
       expect(errors.at(-1)).toContain('Usage');
     }
+  });
+
+  it('accepts a description on set and edits it without reading stdin', async () => {
+    const scope = { kind: 'workspace' } as const;
+    const max = 'x'.repeat(200);
+    const tooLong = 'x'.repeat(201);
+    expect(await cli(['set', 'KEY', '--workspace', '--description', tooLong])).toBe(1);
+    expect(errors.at(-1)).toContain('at most 200 characters');
+    expect(await cli(['set', 'KEY', '--workspace', '--description', max], 'original-value')).toBe(0);
+    expect((await store.list(scope)).secrets[0]?.description).toBe(max);
+    expect(await cli(['describe', 'KEY', tooLong, '--workspace'])).toBe(1);
+    expect(await cli(['describe', 'KEY', 'Deployment token', '--workspace'])).toBe(0);
+    expect((await store.read(scope)).values.KEY).toMatchObject({
+      value: 'original-value', description: 'Deployment token', audiences: ['checks', 'agents'],
+    });
+    expect(await cli(['describe', 'KEY', '', '--workspace'])).toBe(0);
+    expect((await store.list(scope)).secrets[0]).not.toHaveProperty('description');
+    expect(await cli(['describe', 'MISSING', max, '--workspace'])).toBe(1);
+    expect(errors.at(-1)).toContain('no secret named MISSING');
+    expect(lines).toEqual(['KEY', 'KEY', 'KEY']);
+  });
+
+  it('rejects options as separated descriptions before reading or writing', async () => {
+    await registerProject(root);
+    const readValue = vi.fn(async () => 'new-value');
+    const set = vi.spyOn(store, 'set');
+    for (const option of ['--workspace', '--repo', '--audience', '--description', '--description=text']) {
+      expect(await runSecretsCommand(['set', 'KEY', '--repo', root, '--description', option], {
+        log: (line) => lines.push(line), error: (line) => errors.push(line), readValue,
+      }, process.env, store)).toBe(1);
+      expect(errors.at(-1)).toContain('Usage');
+    }
+    expect(readValue).not.toHaveBeenCalled();
+    expect(set).not.toHaveBeenCalled();
+  });
+
+  it('describes the project entry by default even when the workspace has the same name', async () => {
+    const { id } = await registerProject(root);
+    const project = { kind: 'project', projectId: id, root } as const;
+    const workspace = { kind: 'workspace' } as const;
+    expect(await cli(['set', 'KEY', '--workspace', '--description', 'Shared key'], 'workspace-value')).toBe(0);
+    expect(await cli(['set', 'KEY', '--description=--workspace'], 'project-value')).toBe(0);
+    expect((await store.list(project)).secrets[0]?.description).toBe('--workspace');
+    expect(await cli(['describe', 'KEY', 'Project key'])).toBe(0);
+    expect((await store.read(project)).values.KEY).toMatchObject({ description: 'Project key', value: 'project-value' });
+    expect(await cli(['set', 'KEY', '--description='], 'project-value')).toBe(0);
+    expect((await store.list(project)).secrets[0]).not.toHaveProperty('description');
+    expect(await cli(['set', 'KEY', '--description=text'], 'project-value')).toBe(0);
+    expect(await cli(['set', 'KEY', '--description', ''], 'project-value')).toBe(0);
+    expect((await store.list(project)).secrets[0]).not.toHaveProperty('description');
+    expect((await store.read(workspace)).values.KEY).toMatchObject({ description: 'Shared key', value: 'workspace-value' });
+  });
+
+  it('treats an option after the describe boundary as text without changing scope', async () => {
+    const { id } = await registerProject(root);
+    const project = { kind: 'project', projectId: id, root } as const;
+    const workspace = { kind: 'workspace' } as const;
+    await store.set(project, 'KEY', 'project-value', ['checks'], 'Project key');
+    await store.set(workspace, 'KEY', 'workspace-value', ['checks'], 'Shared key');
+
+    expect(await cli(['describe', 'KEY', '--', '--workspace'])).toBe(0);
+    expect((await store.read(project)).values.KEY).toMatchObject({ value: 'project-value', description: '--workspace' });
+    expect((await store.read(workspace)).values.KEY).toMatchObject({ value: 'workspace-value', description: 'Shared key' });
   });
 
   it('prints a value with get (project over workspace) and agents secrets as exports with env', async () => {
