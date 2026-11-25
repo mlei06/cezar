@@ -18,7 +18,7 @@ Last updated: 2026-11-25 21:50 UTC.
 
 - **Every task:** `--skill factory-work`, targets `factory`, follows the spec's reuse map.
 - **Reviews:** at most two review rounds per PR head before asking the owner. Under the M1 criterion, secret-narrowing edge cases are defense in depth: fix once, then merge if nothing outside that edge remains, and list further cases as follow-ups. Correctness, data loss, value leaks and other security issues still block.
-- **Before merging:** the PR head must include current `factory`. Commits that only touch `.ai/specs/` or `.ai/factory-overseer/` don't force a rebase or revalidation.
+- **Before merging:** the PR head must include current `factory`. Commits that only touch documentation or agent guidance (`.ai/specs/`, `.ai/skills/`, `.ai/factory-overseer/`, `*.md` outside `packages/`) don't force a rebase or revalidation.
 - **After a runtime merge:** hold new starts until the overseer confirms the release (until M4's `harness-release` can hold starts itself).
 - **Pushes:** a task's force-with-lease push to its own `cez/*` branch is approved by the manager itself. Never `factory` or `main`.
 - **Test resources (M1-8):** never override Vitest's worker cap, at most one full `npm test` per task at a time, rerun timing failures alone before reporting them.
