@@ -105,7 +105,7 @@ A short fixed section goes into every task's system prompt (all runners):
 
 A run may carry `budget: { tokens?: number, minutes?: number }`.
 - **Where it comes from:** `--budget-tokens` and `--budget-minutes` on `task create`, else the project's `taskBudget` in `.ai/cezar/config.json`, else defaults of 3M input tokens and 30 minutes of active time. Time spent queued or parked doesn't count.
-- **When it's crossed:** the run records `budgetExceeded` with the metric. The task keeps running; this is not a kill. A run with a manager wakes it with a follow-up event carrying the D6 metrics so far (tokens, calls, largest outputs, suspected polling).
+- **When it's crossed:** the run records `budgetExceeded` with the metric. The task keeps running; this is not a kill. A run with a manager wakes it with a follow-up event carrying the D6 metrics so far (tokens, calls, largest outputs).
 - **The manager's choices:**
   - let it continue, raising the budget with `task budget <run> …`;
   - steer it with `task say`;
@@ -116,21 +116,13 @@ A run may carry `budget: { tokens?: number, minutes?: number }`.
 
 ### D6. Task metrics, and the transcript the evaluator reads
 
-When a run reaches a terminal state, cezar computes `runs/<id>.metrics.json` from the event log. No model is involved. These are the facts a transcript doesn't state directly (durations, tokens, context per call) plus pattern detectors. It holds:
+When a run reaches a terminal state, cezar computes `runs/<id>.metrics.json` from the event log. No model is involved. These are only the hard numbers a transcript doesn't state (durations, tokens, context per call); spotting patterns such as polling or re-patching is left to the evaluator, which reads the transcript. It holds:
 
 - **Identity:** the workflow, runner, model, effort and account; who started the run (a manager, a user or an automation); any attached skill and granted secrets.
 - **The brief:** the task text, clipped to 4k characters, with secrets redacted.
 - **Timing:** wall time; active time; total model time against tool time; queued and parked time.
 - **Tokens:** total input and output, cache reads, model calls, average and peak context per call.
 - **Tool calls:** the count; the 10 longest, with duration and command head; the 10 largest outputs, with their size.
-- **Detected patterns:**
-  - a first read over 30k characters;
-  - polling (the same command prefix run three or more times, with gaps between runs);
-  - the same failing command run three or more times;
-  - files written then patched three or more times;
-  - reads of manager skills;
-  - attempts to reach anything denied;
-  - scope words in the final message ("also", "additionally", new subsystems).
 - **Outcome:** final status, the last message (clipped), PR URL and state, review verdicts on that PR, check results, and budget crossings.
 - **Interventions:** every `task say`, retry or switch, with who did it.
 
@@ -220,7 +212,7 @@ The audit never reads transcripts. When a cause needs more evidence, it opens th
 | `contract/src/managers.ts`, `runs.ts`, `secrets.ts` | `grantedSecrets`, `budget`, `budgetExceeded`, `evaluation` on RunRecord; secret `description` |
 | `workspace/secrets.ts`, `secrets-cli.ts`, Settings | `description` |
 | `workflows/run.ts` | the capability block and working rules in the system prompt; grantedSecrets narrowing; budget accounting from token-usage events; a metrics-and-evaluate hook on terminal status |
-| `evaluation/metrics.ts` (new) | metrics and pattern detectors from the event log; transcript rendering, shortened to fit a context window |
+| `evaluation/metrics.ts` (new) | metrics from the event log; transcript rendering, shortened to fit a context window |
 | `evaluation/evaluate.ts` (new) | the tool-less model call, rubric, zod schema, storage and re-run |
 | `server/server.ts` | evaluation routes and aggregates |
 | web Tasks table and detail | columns and the Evaluation panel |
@@ -248,11 +240,7 @@ The audit never reads transcripts. When a cause needs more evidence, it opens th
   - redaction covers every granted value.
 - **Working rules:** present in every runner's system prompt.
 - **Budget:** crossing tokens or active minutes once emits one follow-up and records `budgetExceeded`; the next alert comes at 2×; queued and parked time don't count.
-- **Metrics, from a replayed event log of the open-webui upgrade task:**
-  - it detects the 77k first read;
-  - it detects polling (≥3 `isolated-status` checks);
-  - it detects repeated patching of `stage-candidate.py`;
-  - it detects the manager-skill read.
+- **Metrics, from a replayed event log of the open-webui upgrade task:** 116 model calls, about 93k average context, the 77k-character first output among the largest, and model time greater than tool time.
 - **Evaluator:** the rendered transcript keeps every call and message; an over-long transcript is shortened only in its largest outputs and fits the window; a recorded model reply validates against the schema; an invalid reply is retried once, then stored as an error; skips apply; evaluator calls never create runs.
 - **Columns:** shown from stored evaluations; the aggregates endpoint groups by category and target.
 

@@ -9,6 +9,8 @@ const READ_TOOLS = new Set(['Read', 'Grep', 'Glob', 'Bash']);
 export const CODEX_READ_PREFIXES = [
   'gh pr view', 'gh pr diff', 'gh pr checks', 'gh pr list', 'gh issue view', 'gh issue list', 'gh repo view',
   'git status', 'git ls-files', 'git rev-parse', 'git merge-base',
+  // Reading an Azure Repos pull request, which `gh` cannot reach.
+  'git fetch origin', 'git diff', 'git log', 'git show', 'az repos pr show', 'az repos pr list',
 ] as const;
 
 export interface CodexRestrictedPolicy {
@@ -45,7 +47,13 @@ const GIT_FLAGS: Readonly<Record<string, ReadonlySet<string>>> = {
   'ls-files': new Set(['--cached', '-c', '--modified', '-m', '--deleted', '-d', '--others', '-o', '--exclude-standard', '--stage', '-s', '--full-name', '--error-unmatch']),
   'rev-parse': new Set(['--show-toplevel', '--git-dir', '--absolute-git-dir', '--is-inside-work-tree', '--abbrev-ref', '--verify', '--symbolic-full-name', '--short']),
   'merge-base': new Set(['--is-ancestor', '--all', '-a', '--octopus', '--independent']),
+  fetch: new Set(['--no-tags', '--quiet', '-q']),
+  diff: new Set(['--stat', '--name-only', '--name-status', '--numstat', '--no-color', '-p', '--patch', '-w', '--merge-base']),
+  log: new Set(['--oneline', '--stat', '--name-only', '--no-color', '-p', '--patch', '--first-parent', '--no-merges', '--reverse']),
+  show: new Set(['--stat', '--name-only', '--no-color', '-p', '--patch', '--oneline', '-s', '--diff-merges=first-parent', '--first-parent', '-m']),
 };
+const AZ_VALUE = new Set(['--id', '--output', '-o', '--query', '--status', '--top', '--org', '--organization', '--project', '-p', '--repository', '-r', '--source-branch', '--target-branch', '--creator']);
+const AZ_BARE = new Set(['--detect', '--only-show-errors']);
 function flags(args: readonly string[], bare: ReadonlySet<string>, value: ReadonlySet<string> = new Set()): boolean {
   let operandsOnly = false;
   for (let i = 0; i < args.length; i++) {
@@ -70,8 +78,20 @@ function permittedArgv(argv: readonly string[], policy: CodexRestrictedPolicy): 
   const program = argv[0];
   // Accept only names resolved through the sealed runtime PATH, never an executable from the repo.
   if (!program || program.includes('/') || program.includes('\\')) return false;
+  if (program === 'az') {
+    // `az repos pr show|list`: Azure Repos' `gh pr view|list`.
+    if (!policy.tools.has('Bash') || !policy.bashPrefixes.includes(argv.slice(0, 4).join(' '))) return false;
+    return argv[1] === 'repos' && argv[2] === 'pr' && (argv[3] === 'show' || argv[3] === 'list') && flags(argv.slice(4), AZ_BARE, AZ_VALUE);
+  }
   if (program === 'gh' || program === 'git') {
     if (!policy.tools.has('Bash')) return false;
+    // `git fetch` is granted only as `git fetch origin refs/pull/<n>/merge`: a PR's merge ref.
+    if (program === 'git' && argv[1] === 'fetch') {
+      const refspec = argv.filter((arg, i) => i > 1 && !arg.startsWith('-'));
+      return policy.tools.has('Bash') && policy.bashPrefixes.includes('git fetch origin')
+        && refspec.length === 2 && refspec[0] === 'origin' && /^\+?refs\/pull\/\d+\/(merge|head)$/.test(refspec[1]!)
+        && flags(argv.slice(2), GIT_FLAGS.fetch!);
+    }
     const prefix = program === 'gh' ? argv.slice(0, 3).join(' ') : argv.slice(0, 2).join(' ');
     if (!policy.bashPrefixes.includes(prefix)) return false;
     if (program === 'gh') return github(argv);

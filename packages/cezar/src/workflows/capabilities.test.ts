@@ -91,8 +91,10 @@ describe('workflowCapabilities', () => {
     expect(workflowCapabilities(agent(['Read', 'Bash']))).toEqual(ALL);
     expect(workflowCapabilities(agent(['Read', 'Edit', 'Write', 'Grep']))).toEqual(NONE);
     expect(workflowCapabilities(agent(['Read', 'Bash'], ['gh pr view', 'gh pr diff']))).toEqual(NONE);
+    // Reading an Azure Repos PR counts as reading.
+    expect(workflowCapabilities(agent(['Read', 'Bash'], ['git fetch origin', 'git diff', 'git log', 'git show', 'az repos pr show']))).toEqual(NONE);
     // `git grep -O<cmd>` runs a command; `git log/diff/show/blame --output` writes any file.
-    for (const unsafe of ['git', 'gh', 'gh pr', 'git push', 'gh pr create', 'gh pr comment', 'gh api', 'git fetch', 'npm test', 'git grep', 'git log', 'git diff', 'git show', 'git blame']) {
+    for (const unsafe of ['git', 'gh', 'gh pr', 'git push', 'gh pr create', 'gh pr comment', 'gh api', 'git fetch', 'npm test', 'git grep', 'git blame']) {
       expect([unsafe, workflowCapabilities(agent(['Bash'], ['gh pr diff', unsafe]))]).toEqual([unsafe, ALL]);
     }
     expect(workflowCapabilities(agent(['Read', 'mcp__github__create_pull_request']))).toEqual(ALL);

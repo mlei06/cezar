@@ -10,6 +10,15 @@ describe('restricted Codex command approvals', () => {
   it.each(['touch x', 'git push', 'gh pr merge 3', 'gh pr comment 3 --body x', 'gh api repos/o/r -X POST', 'git status; touch x', 'git status && git push', 'gh pr diff 3 | sh', 'cat $(touch x)', 'cat `touch x`', 'cat <(touch x)', 'cat a > b', 'cat a\ntouch x', 'env git status', 'sh -c "git status"', './git status', '/usr/bin/git status', 'git -c core.fsmonitor=evil status', 'git ls-files --with-tree=evil', 'rg --pre touch x', 'rg --hostname-bin evil x', 'sed -n "1e touch x" a', 'sed -i a b', 'gh pr view 3 --web', 'gh pr checks 3 --watch', 'cat a &', 'cat *', 'cat a\\;touch x'])('denies mutation, execution or unsupported syntax: %s', cmd => {
     expect(codexBashArgv(cmd, policy)).toBeUndefined();
   });
+  it('reads an Azure Repos PR: az repos pr show|list, a PR merge ref fetch, and git diff/log/show', () => {
+    for (const cmd of ['az repos pr show --id 5 --output json', 'az repos pr list --status active', 'git fetch origin refs/pull/5/merge', 'git show --diff-merges=first-parent --stat FETCH_HEAD', 'git log --oneline origin/main..FETCH_HEAD', 'git diff --stat main HEAD', 'git show --stat HEAD']) {
+      expect(codexBashArgv(cmd, policy)).toBeDefined();
+    }
+    for (const cmd of ['az repos pr update --id 5 --status completed', 'az repos pr create', 'git fetch origin main', 'git fetch evil refs/pull/5/merge', 'git fetch --upload-pack=x origin refs/pull/5/merge', 'git diff --output=x', 'git push origin HEAD']) {
+      expect(codexBashArgv(cmd, policy)).toBeUndefined();
+    }
+  });
+
   it('rejects a custom shell, raw command, and unknown shape', () => {
     for (const command of ['/tmp/evil -c "git status"', {}, null, '/bin/sh -c "git status" extra']) expect(codexBashArgv(command, policy)).toBeUndefined();
   });

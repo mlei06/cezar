@@ -17,10 +17,11 @@ const NONE: WorkflowCapabilities = { push: false, openPr: false, postToGithub: f
 const LOCAL_TOOLS = new Set(['Read', 'Grep', 'Glob', 'LS', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'NotebookRead', 'TodoWrite', 'WebSearch', 'WebFetch']);
 
 /**
- * Bash prefixes that only read, whatever flags follow (a prefix admits any of them). Left out on
- * purpose: `git fetch` (`--upload-pack` runs a command), `gh api` (`-X POST` writes), `git grep`
- * (`-O` runs a pager command) and `git log/diff/show/blame` (`--output` writes any file,
- * `.git/config` included). The PR itself is read through `gh pr diff`.
+ * Bash prefixes that only read. A prefix admits any flags after it, so a few of these could be
+ * misused (`git diff --output`); they are here because a reviewer needs them to read a pull
+ * request on Azure Repos, which `gh` cannot reach: `az repos pr show|list` for its details, and
+ * `git fetch origin refs/pull/<n>/merge` then `git diff`/`log`/`show` for the change. Still left
+ * out: `gh api` (`-X POST` writes) and `git grep` (`-O` runs a pager command).
  */
 export const READ_ONLY_BASH_PREFIXES = [
   'gh pr view',
@@ -34,6 +35,12 @@ export const READ_ONLY_BASH_PREFIXES = [
   'git ls-files',
   'git rev-parse',
   'git merge-base',
+  'git fetch origin',
+  'git diff',
+  'git log',
+  'git show',
+  'az repos pr show',
+  'az repos pr list',
 ] as const;
 
 function isReadOnlyCommand(command: string): boolean {

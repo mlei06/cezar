@@ -2151,9 +2151,11 @@ export class RunManager {
     } : undefined;
     // Secrets the user shared with agents (`agents` audience), as environment variables. A fork's
     // untrusted head gets none, as its checks do. Registered for redaction like a check's.
-    const agentSecrets = this.store.getRun(runId)?.untrustedHead === true
+    const agentSecrets: Record<string, string> = this.store.getRun(runId)?.untrustedHead === true
       ? {}
       : withoutAgentLogins((await this.secrets.resolve(this.projectId ? { projectId: this.projectId, root: this.repoRoot } : undefined, 'agents').catch(() => ({ values: {} as Record<string, string> }))).values);
+    // `az devops` reads its PAT from AZURE_DEVOPS_EXT_PAT; a project stores it as AZURE_DEVOPS_PAT.
+    if (agentSecrets.AZURE_DEVOPS_PAT && !agentSecrets.AZURE_DEVOPS_EXT_PAT) agentSecrets.AZURE_DEVOPS_EXT_PAT = agentSecrets.AZURE_DEVOPS_PAT;
     this.store.registerRunSecrets(runId, Object.values(agentSecrets).filter((value) => value.length >= MIN_SECRET_LEN));
     return {
       env: { ...agentSecrets, ...this.agentEnv(runId, options.generateFollowups), ...resolved.env, ...trackerEnv },

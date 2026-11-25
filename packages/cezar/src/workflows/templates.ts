@@ -213,7 +213,10 @@ export const REVIEW_COUNCIL = builtIn(
 const REVIEW_TOOLS = { allowedTools: ['Read', 'Grep', 'Glob', 'Bash'], bashAllowlist: [...READ_ONLY_BASH_PREFIXES] };
 
 const PR_REVIEWER = (focus: string) =>
-  'Review the pull request {{task}} — read it with `gh pr view` and `gh pr diff`, and the repository for context.\n\n' +
+  'Review the pull request {{task}}, and read the repository for context. ' +
+  'On GitHub, read the PR with `gh pr view` and `gh pr diff`. ' +
+  'On Azure Repos (a dev.azure.com or visualstudio.com URL), read its details with `az repos pr show --id <n> --output json`, ' +
+  'then the change with `git fetch origin refs/pull/<n>/merge` and `git show --diff-merges=first-parent FETCH_HEAD` (add `--stat` for the file list; its commits: `git log --oneline origin/<target branch>..FETCH_HEAD`).\n\n' +
   `Your focus: ${focus}. Report only real problems, each with the file and line, and say plainly when you found none. ` +
   'This is a read-only review: never push, comment, review, approve or open anything on GitHub.';
 
