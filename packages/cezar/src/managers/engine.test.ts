@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { MANAGER_BASH_FILTERS, MANAGER_TEXT_IN_FILES } from './bash-policy.ts';
 import { compileCodexRestrictedPolicy } from '../core/codex-restricted-policy.ts';
 import { CodexReadBroker } from '../core/codex-restricted-tools.ts';
-import { ManagerEngine, managerWriteRules, type AutomationRunReport, type ManagerEngineDeps } from './engine.ts';
+import { isScratchRoot, ManagerEngine, managerWriteRules, type AutomationRunReport, type ManagerEngineDeps } from './engine.ts';
 import { followupPrompt, MANAGER_QUIET, managerSystemPrompt, watchPrompt } from './prompts.ts';
 import { readColdRuns, type ManagerProjectSource } from './snapshot.ts';
 import type { RunRecord } from '../runs/store.ts';
@@ -2679,6 +2679,30 @@ describe('ManagerEngine', () => {
       expect(await engine.ensureProjectManagers()).toEqual([]);
       await engine.remove(made[0]!);
       expect(await engine.ensureProjectManagers()).toEqual([]);
+    });
+
+    it('never gives a scratch project a manager, and drops an unused automatic one when its project goes', async () => {
+      expect(isScratchRoot(join(tmpdir(), 'webui-deploy-cockpit.v2OQCy'))).toBe(true);
+      expect(isScratchRoot('/home/me/dev/repo/.ai/cezar/worktrees/abc')).toBe(true);
+      expect(isScratchRoot('/home/me/dev/repo')).toBe(false);
+      let projects = [connected];
+      const engine = makeEngine({ autoProjectManagers: true, projects: async () => projects });
+      const [made] = await engine.ensureProjectManagers();
+      expect(store.get(made!)).toBeDefined();
+      projects = [];
+      await engine.ensureProjectManagers();
+      expect(store.get(made!)).toBeUndefined();
+    });
+
+    it('links the manager-only skills into its working folder on every turn', async () => {
+      const engine = makeEngine();
+      const id = await create(engine);
+      engine.send(id, 'hi');
+      await settled(engine);
+      const workdir = join(home, 'managers', id, 'workdir');
+      for (const dir of ['.claude/skills', '.agents/skills']) {
+        expect(existsSync(join(workdir, dir, 'manage-project', 'SKILL.md'))).toBe(true);
+      }
     });
 
     it('runs a non-Claude autonomous turn with no tool list, so the backend is unrestricted', async () => {

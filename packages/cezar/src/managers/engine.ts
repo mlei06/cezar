@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, writeFileSync } from 'node:fs';
-import { delimiter, dirname, join, resolve } from 'node:path';
+import { delimiter, dirname, join, resolve, sep } from 'node:path';
+import { tmpdir } from 'node:os';
 import lockfile from 'proper-lockfile';
 import {
   isImageMediaType,
@@ -69,6 +70,7 @@ import { parseUsageLimit } from '../core/usage-limit.ts';
 import type { UiEvent } from '../core/ui-events.ts';
 import { assertCezarHomeWriteIsSandboxed, managersDir } from '../paths.ts';
 import { withoutAgentLogins, type SecretStore } from '../workspace/secrets.ts';
+import { provisionManagerSkills } from './manager-skills.ts';
 import { resolveProfileEnvForRoot } from '../workspace/agent-profiles.ts';
 import {
   changedSettingFields,
@@ -356,6 +358,17 @@ const LEASE_RETRY_MS = 5_000;
 const LEASE_RETRY_LIMIT = 24;
 const TICK_FLOOR_MS = 5_000;
 const AUTO_PROJECT_MANAGERS_MS = 60_000;
+
+/** Under the temp folder or inside a cezar worktree: a sandbox, never a project worth a manager. */
+export function isScratchRoot(root: string): boolean {
+  const roots = [tmpdir(), '/tmp', '/var/tmp', process.env.TMPDIR].filter((dir): dir is string => Boolean(dir));
+  const normalized = resolve(root);
+  if (normalized.includes(`${sep}.ai${sep}cezar${sep}worktrees${sep}`)) return true;
+  return roots.some((dir) => {
+    const base = resolve(dir);
+    return normalized === base || normalized.startsWith(base + sep);
+  });
+}
 
 /** The goal an automatic project manager starts with: generic, so it fits any repository. What is
  *  specific to one project belongs in that repository's AGENTS.md, which the manager reads. */
@@ -690,38 +703,55 @@ export class ManagerEngine {
     if (this.disposed) return [];
     const path = join(managersDir(), 'auto-projects.json');
     let seen: string[] = [];
+    let created: Record<string, string> = {};
     try {
-      const parsed = JSON.parse(readFileSync(path, 'utf8')) as { projects?: unknown };
+      const parsed = JSON.parse(readFileSync(path, 'utf8')) as { projects?: unknown; created?: unknown };
       if (Array.isArray(parsed.projects)) seen = parsed.projects.filter((p): p is string => typeof p === 'string');
+      if (parsed.created && typeof parsed.created === 'object') {
+        created = Object.fromEntries(Object.entries(parsed.created as Record<string, unknown>).filter((e): e is [string, string] => typeof e[1] === 'string'));
+      }
     } catch {
       // first run, or unreadable: start from the managers that exist
     }
     const known = new Set(seen);
     const named = new Set(this.deps.store.list().flatMap((manager) => (manager.projects === 'all' ? [] : manager.projects)));
-    const created: string[] = [];
+    const sources = await this.deps.projects().catch(() => null);
+    if (!sources) return [];
+    const made: string[] = [];
     let changed = false;
-    for (const source of await this.deps.projects().catch(() => [])) {
+    for (const source of sources) {
       if (known.has(source.id)) continue;
+      // A throwaway project (a test sandbox under the temp folder, a task worktree) gets no manager.
+      if (isScratchRoot(source.root)) continue;
       known.add(source.id);
       changed = true;
       if (named.has(source.id) || !source.available) continue;
-      const made = await this.create({
+      const result = await this.create({
         name: source.name.slice(0, 80) || source.id,
         instructions: projectManagerGoal(source.name || source.id),
         projects: [source.id],
         autonomous: true,
       });
-      if (!('error' in made)) {
-        await this.update(made.id, { cancelAnyTask: true });
-        created.push(made.id);
+      if (!('error' in result)) {
+        await this.update(result.id, { cancelAnyTask: true });
+        created[source.id] = result.id;
+        made.push(result.id);
       }
+    }
+    // A project that left the cockpit takes its automatic manager along, unless anyone talked to it.
+    const present = new Set(sources.map((source) => source.id));
+    for (const [projectId, managerId] of Object.entries(created)) {
+      if (present.has(projectId)) continue;
+      if (this.deps.store.get(managerId) && this.deps.store.messages(managerId).length === 0) await this.remove(managerId);
+      delete created[projectId];
+      changed = true;
     }
     if (changed) {
       assertCezarHomeWriteIsSandboxed(dirname(path));
       mkdirSync(dirname(path), { recursive: true });
-      writeFileSync(path, `${JSON.stringify({ projects: [...known].sort() }, null, 2)}\n`);
+      writeFileSync(path, `${JSON.stringify({ projects: [...known].sort(), created }, null, 2)}\n`);
     }
-    return created;
+    return made;
   }
 
   private inactive(id: string): boolean {
@@ -2353,6 +2383,12 @@ export class ManagerEngine {
     const planAccount = turn.planAccount;
     // Stopped or deleted during setup: building the spec would recreate the workdir.
     if (turn.stopped) return { text: '', commands: [], costUsd: 0 };
+    // The manager playbook and its kin live only in a manager's own folder, never globally.
+    try {
+      provisionManagerSkills(store.workdir(id));
+    } catch (error) {
+      console.warn(`[cezar] manager skills: ${error instanceof Error ? error.message : String(error)}`);
+    }
     const apiUrl = process.env.CEZ_API_URL;
     let shimDir: string | undefined;
     try {

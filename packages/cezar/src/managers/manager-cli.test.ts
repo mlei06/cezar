@@ -216,6 +216,14 @@ describe('cez manager', () => {
     expect(logs.join()).toContain('approval');
   });
 
+  it('task create --skill attaches the skill as the composer does, with a leading /name', async () => {
+    const { run, calls, errors } = harness();
+    expect(await run('task', 'create', '--skill', 'write-cezar-workflow', '--runner', 'opencode', '--model', 'davy/mistral-large-4', 'Write', 'it')).toBe(0);
+    expect(calls.at(-1)?.body).toMatchObject({ task: '/write-cezar-workflow Write it', runner: 'opencode', model: 'davy/mistral-large-4' });
+    expect(await run('task', 'create', '--skill', 'two words', 'x')).toBe(1);
+    expect(errors.at(-1)).toContain('--skill takes one skill name');
+  });
+
   it('task create prints the card', async () => {
     const { run, logs, calls } = harness();
     expect(await run('task', 'create', '--title', 'T', 'Do', 'it')).toBe(0);

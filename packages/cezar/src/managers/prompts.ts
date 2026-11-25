@@ -34,7 +34,7 @@ ${managerBashPromptSection(manager.bashAllow, options)}`}
 The cez-manager commands:
   cez-manager status | attention | tasks | prs        what is going on (add --json for data)
   cez-manager task <run> [--project <id>]             one task: who started it, model, effort, PR, last message, children
-  cez-manager task create --project <id> [--title t] [--workflow w] [--runner r] [--account id] [--model m] [--effort low|medium|high|max] [--dispatch] "<objective>"
+  cez-manager task create --project <id> [--title t] [--workflow w] [--skill s] [--runner r] [--account id] [--model m] [--effort low|medium|high|max] [--dispatch] "<objective>"
   cez-manager task say --project <id> <run> "<text>"  message a running task, or continue a finished one (--model/--effort only then)
   cez-manager task switch --project <id> <run> [--runner r] [--account id] [--model m] [--effort low|medium|high|max]
   cez-manager task follow|unfollow [--project <id>] <run>   hear when a task you did not start finishes or needs the user

@@ -38,7 +38,7 @@ const USAGE = `cez manager — the tools of a cezar manager's agent (CEZ_MANAGER
 
   cez manager status | attention | tasks | prs   what is going on (add --json for data)
   cez manager task <run> [--project <id>]        one task, its model, PR, last message and children
-  cez manager task create --project <id> [--title t] [--workflow w] [--runner r] [--account id] [--model m] [--effort e] [--dispatch] "<objective>"
+  cez manager task create --project <id> [--title t] [--workflow w] [--skill s] [--runner r] [--account id] [--model m] [--effort e] [--dispatch] "<objective>"
   cez manager task say --project <id> <run> [--model m] [--effort e] "<text>"
                                                  --model/--effort only when it continues a finished task
   cez manager task switch --project <id> <run> [--runner r] [--account id] [--model m] [--effort e]
@@ -124,6 +124,7 @@ Starts a task.
   --project <id>     the project (required unless only one is connected)
   --title <t>        its title
   --workflow <w>     a workflow name (default quick-task); see cez manager workflows
+  --skill <s>        attach one skill, as the composer's /skill does: it is installed into the task
   --runner <r>       the agent backend, e.g. claude or codex, from the manager's allowed task accounts
   --account <id>     the agent account id from those accounts
                      Omit both to use the manager's settings: its first allowed account with usage capacity,
@@ -553,10 +554,14 @@ export async function runManagerCommand(
           const { values, positionals } = parse('task create', taskArgs, {
             project: { type: 'string' }, title: { type: 'string' }, workflow: { type: 'string' },
             runner: { type: 'string' }, account: { type: 'string' }, model: { type: 'string' }, effort: { type: 'string' }, dispatch: { type: 'boolean' },
+            skill: { type: 'string' },
             ...CONTENT_OPTIONS,
           }, true);
           const effort = effortOf(values.effort);
-          const { text: task, ...content } = await contentOf(positionals, values, io, env);
+          if (values.skill !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(values.skill)) fail(`--skill takes one skill name, e.g. --skill write-cezar-workflow, not '${values.skill}'`);
+          const { text: objective, ...content } = await contentOf(positionals, values, io, env);
+          // Attached as the composer does: a leading `/name`, which installs the skill into the task.
+          const task = values.skill ? `/${values.skill} ${objective ?? ''}`.trim() : objective;
           if (!task && !content.fromMessage) fail('an objective is required: cez manager task create --project <id> "<objective>" (or --attach-last-user-message)');
           const project = await projectOf(values.project);
           const created = await call<ManagerCreateTaskResponse>('/tasks', {
