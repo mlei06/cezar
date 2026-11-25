@@ -36,6 +36,9 @@ Since 2026-11-25 17:25 the manager runs the harness project on its own (owner de
 
 ## Open overseer items
 
+- **Paused (2026-11-25 23:37 UTC, owner):** the `cezar` project's manager is deactivated, and a separate implementer agent builds from the handoff prompt. Its M1 acceptance check was interrupted: only the `operate` smoke ran (task e5c86fd3, passed, but on the project's default runner, because `factory.models.lowReasoning` is not set on this machine yet). Nothing else was checked. Reactivate the manager with `PATCH /api/v1/workspace/managers/<id> {"active": true}` only if the owner asks.
+- **Machine setting still to do:** set `factory.models.lowReasoning` (runner `opencode` plus the self-hosted model named in `~/.config/factory-overseer.json`) in the workspace config. The workspace config API doesn't take `factory` yet, so either add that or write it through the config merge-writer, never by hand while the cockpit runs.
+
 - **Handoff (roadmap v3.1):** the manager finishes M1 and stops. M1.5 (spec D11, D12) and M2–M6 go to an implementer agent started from `2026-11-25-self-improving-factory-handoff.md`.
 
 
