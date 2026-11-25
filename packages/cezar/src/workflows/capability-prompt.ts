@@ -55,7 +55,11 @@ export function capabilityPrompt(input: {
   }
   if (payloadLength <= CAP) return `${render()}\n${omissions()}`;
   const compact = render(true);
-  if (compact.length <= CAP || !names.length) return `${compact}\n${omissions()}`;
+  if (compact.length <= CAP) return `${compact}\n${omissions()}`;
+  if (!names.length) {
+    const boundedHeader = header.slice(0, CAP - noSecrets.length - 1);
+    return `${boundedHeader}\n${noSecrets}\n${omissions()}`;
+  }
 
   const spacedNames = names.join(', ');
   const namesLine = spacedNames.length <= CAP ? spacedNames : names.join(',');

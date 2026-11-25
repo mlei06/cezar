@@ -52,6 +52,14 @@ describe('task capability block', () => {
     expect(block).toContain('Omitted: 1 workflow names, 30 secret descriptions.');
   });
 
+  it('bounds a long workflow header with no granted secrets', () => {
+    const block = capabilityPrompt({ ...input, workflow: 'w'.repeat(3_000), workflows: ['plan'], secrets: [] });
+    const lines = block.split('\n');
+    expect(lines.pop()).toBe('Omitted: 1 workflow names, 0 secret descriptions.');
+    expect(lines.join('\n').length).toBe(2_000);
+    expect(lines.at(-1)).toBe('Secrets in your environment: none.');
+  });
+
   it('keeps the omission line when names leave no space for it', () => {
     const names = Array.from({ length: 16 }, (_, i) => `KEY_${String(i).padStart(2, '0')}_${'X'.repeat(117)}`);
     const block = capabilityPrompt({

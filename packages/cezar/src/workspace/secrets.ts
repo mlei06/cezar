@@ -50,7 +50,7 @@ const KEY_FILE = '.key';
 const DEFAULT_AUDIENCES: readonly SecretAudience[] = ['checks', 'agents'];
 
 function refuseOwnValue(description: string | undefined, value: string): void {
-  if (description && value && description.includes(value)) {
+  if (description && value && description.includes(Buffer.from(value, 'utf8').toString('utf8'))) {
     throw new SecretsError('A description must not contain its own secret value.');
   }
 }

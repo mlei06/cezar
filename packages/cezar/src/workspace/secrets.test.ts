@@ -77,6 +77,18 @@ describe('SecretStore (spec 2026-10-10-project-secrets-vault-options)', () => {
     expect((await store.read(scope)).values.GUARD_KEY).toMatchObject({ value, description: 'Synthetic description' });
   });
 
+  it('guards creation and rotation against the value stored as UTF-8', async () => {
+    const input = 'synthetic-\uD800';
+    const description = 'Copied: synthetic-\uFFFD';
+    const refused = 'A description must not contain its own secret value.';
+    await expect(store.set(workspace, 'GUARD_KEY', input, ['agents'], description)).rejects.toThrow(refused);
+    expect((await store.list(workspace)).secrets).toEqual([]);
+
+    await store.set(workspace, 'GUARD_KEY', 'synthetic-original', ['agents'], description);
+    await expect(store.set(workspace, 'GUARD_KEY', input, ['agents'])).rejects.toThrow(refused);
+    expect((await store.read(workspace)).values.GUARD_KEY).toMatchObject({ value: 'synthetic-original', description });
+  });
+
   it('preserves a readable vault when a description would exceed the UTF-8 file limit', async () => {
     const path = join(home, 'secrets', 'workspace.json');
     const maxBytes = 1024 * 1024;
