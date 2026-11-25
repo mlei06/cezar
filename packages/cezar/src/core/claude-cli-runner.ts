@@ -58,10 +58,10 @@ export const AUTO_END_DELAY_MS = 250;
  */
 export const CLAUDE_HEADLESS_GUIDANCE = `You are running Claude Code through cezar's headless integration. Permission prompts cannot be answered in the cezar cockpit. If a tool call is denied, do not suggest Shift+Tab, /permissions, changing Claude permission settings, or replying Continue to retry it. Report the exact blocked tool and path or command, stop retrying that operation, and explain that the task's actual Open in… action is the workaround: continue in an interactive claude --resume <session id> shell in the task worktree and approve the prompt there. Do not use filesystem workarounds or claim that cezar can approve the request.`;
 
-/** Encode NUL before the prompt reaches argv or a prompt file, then add Claude guidance. */
+/** Keep caller-owned instructions intact while adding guidance owned by this backend. */
 export function appendClaudeSystemPrompt(systemPrompt?: string): string {
   return systemPrompt
-    ? `${systemPrompt.replaceAll('\0', '\\u0000')}\n\n---\n\n${CLAUDE_HEADLESS_GUIDANCE}`
+    ? `${systemPrompt}\n\n---\n\n${CLAUDE_HEADLESS_GUIDANCE}`
     : CLAUDE_HEADLESS_GUIDANCE;
 }
 

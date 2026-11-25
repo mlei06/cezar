@@ -77,6 +77,19 @@ describe('SecretStore (spec 2026-10-10-project-secrets-vault-options)', () => {
     expect((await store.read(scope)).values.GUARD_KEY).toMatchObject({ value, description: 'Synthetic description' });
   });
 
+  it.each(['\0', '\t', '\n', '\r', '\u007f', '\u0085', '\u2028', '\u2029'])(
+    'refuses non-printable or multiline descriptions on set and describe (%j)',
+    async (control) => {
+      const description = `Synthetic${control}description`;
+      const refused = 'A description must be one line without control characters.';
+      await expect(store.set(workspace, 'GUARD_KEY', 'synthetic-value', ['agents'], description)).rejects.toThrow(refused);
+      expect((await store.list(workspace)).secrets).toEqual([]);
+      await store.set(workspace, 'GUARD_KEY', 'synthetic-value', ['agents'], 'Original');
+      await expect(store.describe(workspace, 'GUARD_KEY', description)).rejects.toThrow(refused);
+      expect((await store.read(workspace)).values.GUARD_KEY?.description).toBe('Original');
+    },
+  );
+
   it('guards creation and rotation against the value stored as UTF-8', async () => {
     const input = 'synthetic-\uD800';
     const description = 'Copied: synthetic-\uFFFD';

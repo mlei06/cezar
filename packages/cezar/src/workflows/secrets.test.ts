@@ -290,29 +290,13 @@ describe('project and workspace secrets in check steps', () => {
     await settle(record.id);
   }, 30_000);
 
-  it('launches Claude with a NUL in an existing vault description', async () => {
-    const description = 'Operator\0metadata';
-    await secrets.set(scope, 'FIXTURE_KEY', 'synthetic-nul-fixture-value', ['agents'], description);
-    const record = manager.startRun({
-      name: 'nul-fixture',
-      source: 'file',
-      steps: [{ id: 'work', prompt: '{{task}}', secrets: ['FIXTURE_KEY'] }, { id: 'verify', command: 'true' }],
-    }, { task: 'mock:done inspect capabilities', runner: 'claude', worktree: false });
-    await settle(record.id);
-
-    expect(store.getRun(record.id)?.status).toMatch(/^(done|review)$/);
-    const [prompt] = capturedPrompts();
-    expect(prompt).toContain('  FIXTURE_KEY: Operator\\u0000metadata');
-    expect(prompt).not.toContain('\0');
-    store.flush();
-    const saved = RunStore.open(join(repoRoot, '.ai/cezar')).getRun(record.id)?.steps[0]?.capabilityPrompt;
-    expect(saved).toContain(`  FIXTURE_KEY: ${description}`);
-    expect((await secrets.list(scope)).secrets).toMatchObject([{ name: 'FIXTURE_KEY', description }]);
-  }, 30_000);
-
-  it('omits a legacy self-referential description while keeping its grant and vault data', async () => {
+  it.each([
+    { binding: 'unbound', secrets: undefined, kind: 'own value', description: 'Copied synthetic-legacy-fixture-value' },
+    { binding: 'bound', secrets: ['LEGACY_KEY'], kind: 'own value', description: 'Copied synthetic-legacy-fixture-value' },
+    { binding: 'unbound', secrets: undefined, kind: 'control character', description: 'Operator\0metadata' },
+    { binding: 'bound', secrets: ['LEGACY_KEY'], kind: 'control character', description: 'Operator\0metadata' },
+  ])('omits a legacy description with a $kind for $binding grants', async ({ secrets: bindings, description }) => {
     const value = 'synthetic-legacy-fixture-value';
-    const description = `Legacy copied value: ${value}`;
     process.env.CEZ_REDACT_SECRETS = '0';
     await secrets.set(scope, 'LEGACY_KEY', value, ['agents']);
     const path = join(process.env.CEZ_HOME!, 'secrets', `${project}.json`);
@@ -331,8 +315,8 @@ describe('project and workspace secrets in check steps', () => {
     const record = manager.startRun({
       name: 'legacy-fixture',
       source: 'file',
-      steps: [{ id: 'work', prompt: '{{task}}', secrets: ['LEGACY_KEY'] }, { id: 'verify', command: 'true' }],
-    }, { task: 'mock:done inspect capabilities', runner: 'claude', worktree: false });
+      steps: [{ id: 'work', prompt: '{{task}}' }, { id: 'verify', command: 'true' }],
+    }, { task: 'mock:done inspect capabilities', runner: 'claude', secrets: bindings, worktree: false });
     await settle(record.id);
 
     expect(store.getRun(record.id)?.status).toMatch(/^(done|review)$/);
@@ -340,10 +324,12 @@ describe('project and workspace secrets in check steps', () => {
     const [prompt] = capturedPrompts();
     expect(prompt).toContain('  LEGACY_KEY\n');
     expect(prompt).not.toContain(value);
+    expect(prompt).not.toContain(description);
     store.flush();
     const saved = RunStore.open(join(repoRoot, '.ai/cezar')).getRun(record.id)?.steps[0]?.capabilityPrompt;
     expect(saved).toContain('  LEGACY_KEY\n');
     expect(saved).not.toContain(value);
+    expect(saved).not.toContain(description);
     expect(readFileSync(path, 'utf8')).toBe(original);
   }, 30_000);
 

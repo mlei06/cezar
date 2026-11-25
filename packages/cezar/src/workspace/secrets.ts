@@ -49,14 +49,20 @@ const FILE_VERSION = 1;
 const KEY_FILE = '.key';
 const DEFAULT_AUDIENCES: readonly SecretAudience[] = ['checks', 'agents'];
 
-function descriptionContainsOwnValue(description: string | undefined, value: string): boolean {
-  return Boolean(value && description?.includes(value));
+function descriptionIssue(description: string | undefined, value: string): string | undefined {
+  if (!description) return undefined;
+  if (/[\p{Cc}\p{Zl}\p{Zp}]/u.test(description)) {
+    return 'A description must be one line without control characters.';
+  }
+  if (value && description.includes(value)) {
+    return 'A description must not contain its own secret value.';
+  }
+  return undefined;
 }
 
-function refuseOwnValue(description: string | undefined, value: string): void {
-  if (descriptionContainsOwnValue(description, value)) {
-    throw new SecretsError('A description must not contain its own secret value.');
-  }
+function refuseUnsafeDescription(description: string | undefined, value: string): void {
+  const issue = descriptionIssue(description, value);
+  if (issue) throw new SecretsError(issue);
 }
 
 export class SecretsError extends Error {}
@@ -262,7 +268,7 @@ export class SecretStore {
       const now = new Date().toISOString();
       const previous = file.secrets[name];
       const nextDescription = description ?? previous?.description;
-      refuseOwnValue(nextDescription, Buffer.from(value, 'utf8').toString('utf8'));
+      refuseUnsafeDescription(nextDescription, Buffer.from(value, 'utf8').toString('utf8'));
       file.secrets[name] = {
         audiences: admitted,
         ...(nextDescription ? { description: nextDescription } : {}),
@@ -288,7 +294,7 @@ export class SecretStore {
         const dataKey = await this.loadDataKey().catch(() => null);
         const value = dataKey && decrypt(dataKey.key, aad(id, name), entry);
         if (value === null) throw new SecretsError('The secret value is unavailable for validating its description.');
-        refuseOwnValue(description, value);
+        refuseUnsafeDescription(description, value);
         entry.description = description;
       }
       entry.updatedAt = new Date().toISOString();
@@ -347,7 +353,7 @@ export class SecretStore {
     const values: Record<string, string> = {};
     const descriptions: ResolvedSecrets['descriptions'] = {};
     const descriptionFor = ({ description, value }: SecretsRead['values'][string]) =>
-      audience === 'agents' && descriptionContainsOwnValue(description, value) ? undefined : description;
+      audience === 'agents' && descriptionIssue(description, value) ? undefined : description;
 
     if (!bindings) {
       for (const source of sources) {
