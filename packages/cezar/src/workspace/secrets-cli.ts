@@ -8,6 +8,7 @@ const USAGE = 'Usage: cezar secrets list | get <NAME> | env | set <NAME> [--audi
   '  get prints one value (project first, then workspace); env prints `export NAME=…` lines for every agents-audience secret.\n' +
   '  set reads the value from stdin (pipe it in, or type it at the hidden prompt) — never from argv.\n' +
   '  Descriptions are public metadata, up to 200 characters. Pass an empty string to clear.\n' +
+  '  Use --description=<text> for text that looks like an option.\n' +
   '  --workspace addresses the user\'s own secrets, shared by every project; the default is this project\'s.\n' +
   `  --audience names who may read the secret (${SECRET_AUDIENCES.join(', ')}); the default is checks,agents.`;
 
@@ -146,12 +147,17 @@ function parseArgs(args: string[]): ParsedArgs | undefined {
     if (flag === '--workspace') {
       workspace = true;
       rest.splice(i, 1);
+    } else if (flag?.startsWith('--description=')) {
+      description = flag.slice('--description='.length);
+      rest.splice(i, 1);
     } else if (flag === '--repo' || flag === '--audience' || flag === '--description') {
       const value = rest[i + 1];
       if (value === undefined || (flag !== '--description' && value === '')) return undefined;
       if (flag === '--repo') repo = value;
-      else if (flag === '--description') description = value;
-      else {
+      else if (flag === '--description') {
+        if (['--workspace', '--repo', '--audience', '--description'].includes(value) || value.startsWith('--description=')) return undefined;
+        description = value;
+      } else {
         const names = value.split(',').map((s) => s.trim()).filter(Boolean);
         if (!names.length || !names.every((n): n is SecretAudience => (SECRET_AUDIENCES as readonly string[]).includes(n))) return undefined;
         audiences = names;

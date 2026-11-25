@@ -3,7 +3,7 @@ import { chmod, cp, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { secretNameIssue } from '@open-mercato/cezar-contract';
+import { SECRET_VALUE_MAX_BYTES, secretNameIssue } from '@open-mercato/cezar-contract';
 import type { DataKeyring } from './secret-keyring.ts';
 import { SecretStore, SecretsError, parseSecretFile, type SecretScopeRef } from './secrets.ts';
 
@@ -62,6 +62,31 @@ describe('SecretStore (spec 2026-10-10-project-secrets-vault-options)', () => {
     expect(await store.unset(project, 'ZED')).toBe(true);
     expect(await store.unset(project, 'ZED')).toBe(false);
     expect((await store.list(project)).secrets.map((s) => s.name)).toEqual(['ALPHA']);
+  });
+
+  it('preserves a readable vault when a description would exceed the UTF-8 file limit', async () => {
+    const path = join(home, 'secrets', 'workspace.json');
+    const maxBytes = 1024 * 1024;
+    for (let i = 0; i < 47; i++) {
+      await store.set(workspace, `FILLER_${i}`, 'x'.repeat(SECRET_VALUE_MAX_BYTES));
+    }
+    await store.set(workspace, 'KEY', 'key', ['checks'], 'original');
+    const available = maxBytes - (await stat(path)).size;
+    // Base64 grows by four bytes for every three bytes added to the value.
+    const value = 'x'.repeat(3 + 3 * Math.floor((available - 300) / 4));
+    await store.set(workspace, 'KEY', value, ['checks']);
+    const before = await readFile(path);
+    const description = '界'.repeat(200);
+    const candidate = before.toString('utf8').replace('"original"', JSON.stringify(description));
+    expect(candidate.length).toBeLessThan(maxBytes);
+    expect(Buffer.byteLength(candidate, 'utf8')).toBeGreaterThan(maxBytes);
+
+    await expect(store.describe(workspace, 'KEY', description)).rejects.toThrow('at most');
+    expect(await readFile(path)).toEqual(before);
+    const readable = await store.read(workspace);
+    expect(readable.skipped).toBeUndefined();
+    expect(Object.keys(readable.values)).toHaveLength(48);
+    expect(readable.values.KEY).toMatchObject({ value, audiences: ['checks'], description: 'original' });
   });
 
   it('keeps the data key in the keychain when one is usable, and in a file otherwise', async () => {

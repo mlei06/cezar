@@ -7547,7 +7547,8 @@ export function createApp(deps: ServerDeps) {
     try {
       if (await secretStore.describe(scope, name, description)) return null;
       return { status: 404 as const, error: 'no secret with that name' };
-    } catch {
+    } catch (error) {
+      if (error instanceof SecretsError) return { status: 400 as const, error: error.message };
       return { status: 409 as const, error: 'Could not update the description. Check local storage permissions.' };
     }
   };

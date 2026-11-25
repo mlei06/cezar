@@ -357,7 +357,11 @@ export class SecretStore {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT' && !(error instanceof SecretsError)) throw error;
       }
       if (!mutate(file, id)) return false;
-      await this.save(this.file(id), `${JSON.stringify(file, null, 2)}\n`);
+      const serialized = `${JSON.stringify(file, null, 2)}\n`;
+      if (Buffer.byteLength(serialized, 'utf8') > FILE_MAX_BYTES) {
+        throw new SecretsError(`a secret store is at most ${FILE_MAX_BYTES} bytes`);
+      }
+      await this.save(this.file(id), serialized);
       return true;
     });
   }

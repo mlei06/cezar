@@ -16,12 +16,18 @@ const DEFAULT: Stored[] = [
 
 function setup(options: { secrets?: Stored[]; putStatus?: number; keyBackend?: 'keychain' | 'file'; scope?: 'project' | 'workspace'; skipped?: string } = {}) {
   const { secrets = DEFAULT, putStatus = 204, keyBackend = 'keychain', scope = 'project', skipped } = options
+  let stored = secrets
   const calls: { method: string; url: string; body?: string }[] = []
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const method = init?.method ?? 'GET'
     calls.push({ method, url: String(input), body: typeof init?.body === 'string' ? init.body : undefined })
-    if (method === 'GET') return new Response(JSON.stringify({ secrets, keyBackend, ...(skipped ? { skipped } : {}) }), { status: 200 })
+    if (method === 'GET') return new Response(JSON.stringify({ secrets: stored, keyBackend, ...(skipped ? { skipped } : {}) }), { status: 200 })
     if (method === 'PUT' && putStatus !== 204) return new Response(JSON.stringify({ error: 'storage failed' }), { status: putStatus })
+    if (method === 'PATCH') {
+      const name = String(input).split('/').at(-1)
+      const { description } = JSON.parse(String(init?.body)) as { description: string }
+      stored = stored.map((entry) => entry.name === name ? { ...entry, description: description || undefined } : entry)
+    }
     return new Response(null, { status: 204 })
   }))
   const Section = scope === 'project' ? ProjectSecretsSection : WorkspaceSecretsSection
@@ -88,15 +94,21 @@ describe('Secrets settings', () => {
     await waitFor(() => expect(calls.some((c) => c.method === 'DELETE' && c.url.endsWith('/workspace/secrets/STAGING_TOKEN'))).toBe(true))
   })
 
-  it.each(['project', 'workspace'] as const)('edits a %s description without sending a value', async (scope) => {
+  it.each(['project', 'workspace'] as const)('clears a %s description and refreshes without sending a value', async (scope) => {
     const calls = setup({ scope })
-    fireEvent.click(await screen.findByRole('button', { name: 'Edit description for STAGING_TOKEN' }))
+    expect(await screen.findByText('Staging deploy token')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Edit description for STAGING_TOKEN' }))
     const description = screen.getByLabelText('Description for STAGING_TOKEN') as HTMLInputElement
     expect(description.value).toBe('Staging deploy token')
     expect(description.maxLength).toBe(200)
     fireEvent.change(description, { target: { value: '' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save description' }))
-    await waitFor(() => expect(screen.queryByLabelText('Description for STAGING_TOKEN')).toBeNull())
+    await waitFor(() => {
+      expect(screen.queryByLabelText('Description for STAGING_TOKEN')).toBeNull()
+      expect(screen.queryByText('Staging deploy token')).toBeNull()
+    })
+    expect(screen.getByText('STAGING_TOKEN')).toBeTruthy()
+    expect(calls.filter((c) => c.method === 'GET')).toHaveLength(2)
     const patch = calls.find((c) => c.method === 'PATCH')!
     expect(patch.url).toMatch(/\/secrets\/STAGING_TOKEN$/)
     expect(patch.url.includes('/workspace/')).toBe(scope === 'workspace')
