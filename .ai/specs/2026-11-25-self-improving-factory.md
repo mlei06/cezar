@@ -466,7 +466,7 @@ The harness uses exactly that:
 - **A release:**
   1. check out the merged commit in a dedicated build worktree (`~/.cezar/factory/builds/<sha>`), never the fork checkout;
   2. run the AGENTS.md validation order there;
-  3. run that build's own `cezar install`, which packs it into `~/.cezar/versions/<id>`.
+  3. register it as its own version with self-update's `linkCheckout` (`cezar link`). The build worktree is on a `release/<sha7>` branch, so each release gets its own id. A local `cezar install` would reuse one id per package version (`<version>+local`) and overwrite the previous release.
   
   The fork checkout is an ordinary project, edited only in task worktrees, so a merge can't change the live harness.
 - **The version id and commit** are `harnessVersion` (D8).
@@ -480,7 +480,7 @@ The harness uses exactly that:
 5. **Roll back** on any failure: `cezar use <previous id>`, restart, and report.
 6. **Report:** post the release notes (the merged PRs since the last release), the benchmark comparison and the switch result to the harness manager. Append every step to `~/.cezar/factory/release-log.ndjson`.
 
-The new pieces are waiting for idle, the health check with automatic rollback, the staging cockpit and the log. Installing, switching, restarting and pruning are self-update's. The workflow's own changes are owner-protected, like the grader.
+The new pieces are waiting for idle, the health check with automatic rollback, the staging cockpit and the log. Linking, switching and the launchers are self-update's. The release script also removes old build worktrees (keeping 5) and their links. The workflow's own changes are owner-protected, like the grader.
 
 **3. Attribution.** Every score records `harnessVersion` (the version id and its commit). After a release, the harness manager compares failure rates for the clusters the release's PRs targeted, once 10 runs have been scored on it. A release that made them worse is reverted with `harness-release --rollback`, which switches back and opens a revert PR.
 
@@ -604,7 +604,7 @@ workflow implement · codex gpt-6.2-sol · started by manager · status done · 
 | `cez-manager improve --project p` | the manager starts an improvement run |
 | `cez-manager task create … --workflow w --secrets a,b --budget-tokens N --budget-minutes M` | task options |
 | `cez-manager task budget <run> --tokens N --minutes M` | raise a budget |
-| `harness-release [<sha>] [--rollback] [--force]` | the harness release workflow (harness project), built on `cezar install` and `cezar use` |
+| `harness-release [<sha>] [--rollback] [--force]` | the harness release workflow (harness project), built on `cezar link` and `cezar use` |
 | `cezar install`, `cezar use <id>`, `cezar versions` | (exist) self-update's install, switch and list |
 
 **API (all under `/api/v1`; project routes also under `/p/:projectId`):**
@@ -690,7 +690,7 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
 | web | score columns, Scores panel, Factory view, Factory settings |
 | `manager-skills/` | `manage-project` (list commands, workflow choice, budgets, improvement); `manage-harness` (new) |
 | `skills/improve-factory` (new) | the improvement playbook |
-| `self-update/` | used as is: `cezar install` from a build worktree, `cezar use`, supervisor restart, `versionRetention: 5` |
+| `self-update/` | used as is: `linkCheckout` from a build worktree, `activate` (`cezar use`), the launchers, supervisor restart |
 | release | `scripts/harness-release.mjs` (wait for idle, health check, automatic `use <previous>`, staging cockpit, log) and the `harness-release` workflow; the unit runs `~/.cezar/bin/cezar` with `CEZ_SUPERVISED=1` |
 | variants (spec 010) | per-variant overrides; replay source; cap 5 for replay groups; score columns in the Compare view; no winner pick for replay groups |
 | `automations/` | the `factory` event source and a built-in automation per project |
@@ -728,7 +728,7 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
 - **Budgets:** an old dispatch record with `budgetUsd` parses and still parks; a top-level run notifies.
 - **Benchmarks:** a suite replays every task under every configuration, `times` each, without side effects, and records a matrix.
 - **Harness release:**
-  - it installs through `cezar install` and switches through `cezar use`;
+  - it links each build as its own version and switches through `cezar use`;
   - a failing build, benchmark or health check keeps or restores the previous version;
   - no switch happens while work is active;
   - scores record `harnessVersion`.
