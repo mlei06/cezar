@@ -330,6 +330,11 @@ it.each(['malformed', 'unsafe-mode'])('degrades %s keychain markers on reads but
     await expect(restarted.set(scope, 'OTHER', 'must-not-write')).rejects.toThrow();
     expect(writes).toBe(1);
     expect(await readFile(file, 'utf8')).toBe(ciphertext);
+    expect(await restarted.describe(scope, 'KEY', 'Deployment credential')).toBe(true);
+    await expect(restarted.list(scope)).resolves.toEqual({
+      secrets: [{ name: 'KEY', audiences: ['checks', 'agents'], description: 'Deployment credential', updatedAt: expect.any(String) }],
+      skipped: expect.any(String),
+    });
     await expect(stat(join(home, 'secrets', '.key'))).rejects.toMatchObject({ code: 'ENOENT' });
     await writeFile(marker, identity); await chmod(marker, 0o600);
     expect((await new SecretStore({ CEZ_HOME: home }, { keychain }).read(scope)).values.KEY?.value).toBe('synthetic-secret');

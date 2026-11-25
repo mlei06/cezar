@@ -61,6 +61,26 @@ describe('cezar secrets (spec 2026-10-10-project-secrets-vault-options)', () => 
     }
   });
 
+  it('accepts a description on set and edits it without reading stdin', async () => {
+    const scope = { kind: 'workspace' } as const;
+    const max = 'x'.repeat(200);
+    const tooLong = 'x'.repeat(201);
+    expect(await cli(['set', 'KEY', '--workspace', '--description', tooLong])).toBe(1);
+    expect(errors.at(-1)).toContain('at most 200 characters');
+    expect(await cli(['set', 'KEY', '--workspace', '--description', max], 'original-value')).toBe(0);
+    expect((await store.list(scope)).secrets[0]?.description).toBe(max);
+    expect(await cli(['describe', 'KEY', tooLong, '--workspace'])).toBe(1);
+    expect(await cli(['describe', 'KEY', 'Deployment token', '--workspace'])).toBe(0);
+    expect((await store.read(scope)).values.KEY).toMatchObject({
+      value: 'original-value', description: 'Deployment token', audiences: ['checks', 'agents'],
+    });
+    expect(await cli(['describe', 'KEY', '', '--workspace'])).toBe(0);
+    expect((await store.list(scope)).secrets[0]).not.toHaveProperty('description');
+    expect(await cli(['describe', 'MISSING', max, '--workspace'])).toBe(1);
+    expect(errors.at(-1)).toContain('no secret named MISSING');
+    expect(lines).toEqual(['KEY', 'KEY', 'KEY']);
+  });
+
   it('prints a value with get (project over workspace) and agents secrets as exports with env', async () => {
     await registerProject(root);
     expect(await cli(['set', 'SSH_USER', '--workspace'], 'ws-user')).toBe(0);

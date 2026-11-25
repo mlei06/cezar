@@ -19,7 +19,7 @@ import {
   trackerCandidatesQuerySchema, trackerListQuerySchema, trackerSearchQuerySchema, trackerItemQuerySchema, trackerReadScope,
   trackerCredentialsSchema, trackerItemParamsSchema, trackerAssociationInputSchema, type TrackerChangedEvent,
   trackerContextSchema, trackerOperationInputSchema, trackerOperationResultSchema,
-  secretParamsSchema, secretValueInputSchema, type SecretsList, type SecretValueInput,
+  secretDescriptionInputSchema, secretParamsSchema, secretValueInputSchema, type SecretsList, type SecretValueInput,
   e2eSetupInputSchema, type E2eStatus, taskActionSurfaceSchema,
 } from '@open-mercato/cezar-contract';
 import { sendSystemNotification } from '../managers/system-notify.ts';
@@ -7527,7 +7527,7 @@ export function createApp(deps: ServerDeps) {
   // keyed by the same project id the run manager reads with, so the reserved boot alias of an
   // unregistered boot project is refused rather than written somewhere nothing reads. The
   // workspace scope has its own single-mount family below (`workspaceSecretsRoutes`), the same
-  // three handlers over the `workspace` scope.
+  // operations over the `workspace` scope.
   const secretStore = deps.secrets ?? new SecretStore();
   const unregisteredSecrets = { error: 'this project is not registered; project secrets need a project id' };
   const secretsList = async (scope: SecretScopeRef): Promise<SecretsList> => {
@@ -7536,12 +7536,20 @@ export function createApp(deps: ServerDeps) {
   };
   const putSecret = async (scope: SecretScopeRef, name: string, input: SecretValueInput) => {
     try {
-      await secretStore.set(scope, name, input.value, input.audiences);
+      await secretStore.set(scope, name, input.value, input.audiences, input.description);
     } catch (error) {
       if (error instanceof SecretsError) return { status: 400 as const, error: error.message };
       return { status: 409 as const, error: 'Could not save the secret. Check local storage permissions.' };
     }
     return null;
+  };
+  const describeSecret = async (scope: SecretScopeRef, name: string, description: string) => {
+    try {
+      if (await secretStore.describe(scope, name, description)) return null;
+      return { status: 404 as const, error: 'no secret with that name' };
+    } catch {
+      return { status: 409 as const, error: 'Could not update the description. Check local storage permissions.' };
+    }
   };
   const deleteSecret = async (scope: SecretScopeRef, name: string) => {
     let removed: boolean;
@@ -7561,6 +7569,13 @@ export function createApp(deps: ServerDeps) {
       const project = c.get('project');
       if (project.id === 'default') return c.json(unregisteredSecrets, 409);
       const failed = await putSecret({ kind: 'project', projectId: project.id, root: project.root }, c.req.valid('param').name, c.req.valid('json'));
+      if (failed) return c.json({ error: failed.error }, failed.status);
+      return c.body(null, 204);
+    })
+    .patch('/secrets/:name', paramZodValidator(secretParamsSchema), jsonZodValidator(secretDescriptionInputSchema), async (c) => {
+      const project = c.get('project');
+      if (project.id === 'default') return c.json(unregisteredSecrets, 409);
+      const failed = await describeSecret({ kind: 'project', projectId: project.id, root: project.root }, c.req.valid('param').name, c.req.valid('json').description);
       if (failed) return c.json({ error: failed.error }, failed.status);
       return c.body(null, 204);
     })
@@ -7629,6 +7644,11 @@ export function createApp(deps: ServerDeps) {
     .get('/workspace/secrets', async (c) => c.json(await secretsList({ kind: 'workspace' }), 200))
     .put('/workspace/secrets/:name', paramZodValidator(secretParamsSchema), jsonZodValidator(secretValueInputSchema), async (c) => {
       const failed = await putSecret({ kind: 'workspace' }, c.req.valid('param').name, c.req.valid('json'));
+      if (failed) return c.json({ error: failed.error }, failed.status);
+      return c.body(null, 204);
+    })
+    .patch('/workspace/secrets/:name', paramZodValidator(secretParamsSchema), jsonZodValidator(secretDescriptionInputSchema), async (c) => {
+      const failed = await describeSecret({ kind: 'workspace' }, c.req.valid('param').name, c.req.valid('json').description);
       if (failed) return c.json({ error: failed.error }, failed.status);
       return c.body(null, 204);
     })

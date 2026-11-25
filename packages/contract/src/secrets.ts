@@ -90,10 +90,18 @@ export function secretValueIssue(value: string): string | null {
   return null;
 }
 
+/** Plain metadata. An empty description clears it. */
+export const SECRET_DESCRIPTION_MAX_LENGTH = 200;
+export const secretDescriptionSchema = z.string().max(
+  SECRET_DESCRIPTION_MAX_LENGTH, 'a description is at most 200 characters',
+);
+export const secretDescriptionInputSchema = z.object({ description: secretDescriptionSchema }).strict();
+export type SecretDescriptionInput = z.infer<typeof secretDescriptionInputSchema>;
+
 /**
  * `PUT /secrets/:name`: the value, and who may read it. `audiences` omitted means `['checks', 'agents']`
  * — the one consumer that exists today, and what the first release of this store meant by a
- * secret. Setting a name that exists REPLACES it, audiences included.
+ * secret. Setting an existing name replaces the value and audiences. Omit the description to keep it.
  */
 export const secretValueInputSchema = z.object({
   value: z.string().superRefine((value, ctx) => {
@@ -101,6 +109,7 @@ export const secretValueInputSchema = z.object({
     if (issue) ctx.addIssue({ code: 'custom', message: issue });
   }),
   audiences: z.array(secretAudienceSchema).min(1).optional(),
+  description: secretDescriptionSchema.optional(),
 });
 export type SecretValueInput = z.infer<typeof secretValueInputSchema>;
 
@@ -109,6 +118,7 @@ export const secretEntrySchema = z.object({
   name: z.string(),
   audiences: z.array(secretAudienceSchema),
   updatedAt: z.string(),
+  description: secretDescriptionSchema.optional(),
 });
 export type SecretEntry = z.infer<typeof secretEntrySchema>;
 

@@ -6,6 +6,7 @@ import { z } from 'zod';
 import {
   SECRET_AUDIENCES,
   secretAudienceSchema,
+  secretDescriptionSchema,
   secretNameIssue,
   secretValueIssue,
   type SecretAudience,
@@ -22,7 +23,7 @@ import { osKeychain, KEYCHAIN_ACCOUNT, type DataKeyring } from './secret-keyring
  *
  * One JSON file per scope holder under `~/.cezar/secrets/`: `<projectId>.json` for a project,
  * `workspace.json` for the user's whole workspace. The file carries every secret's METADATA in
- * the clear (name, audiences, timestamps) and its VALUE as AES-256-GCM ciphertext under one
+ * the clear (name, audiences, description, timestamps) and its VALUE as AES-256-GCM ciphertext under one
  * per-home data key (legacy homes retain their shared key). The data key lives in the OS keychain when one is usable
  * (`secret-keyring.ts`) and in `~/.cezar/secrets/.key` (`0600`) otherwise — in which case the
  * store is exactly as strong as a private plaintext file, and `keyBackend()` says so.
@@ -53,14 +54,22 @@ export class SecretsError extends Error {}
 /** Which file a call addresses. A project's identity is its slug AND its root (see above). */
 export type SecretScopeRef = { kind: 'project'; projectId: string; root: string } | { kind: 'workspace' };
 
+function validateDescription(description: string | undefined): void {
+  const parsed = secretDescriptionSchema.optional().safeParse(description);
+  if (!parsed.success) throw new SecretsError(parsed.error.issues[0]?.message);
+}
+
 const storedSecretSchema = z.object({
   audiences: z.array(secretAudienceSchema).min(1),
   createdAt: z.string(),
   updatedAt: z.string(),
+  description: secretDescriptionSchema.optional(),
   iv: z.string(),
   data: z.string(),
   tag: z.string(),
 });
+type SecretMetadata = Omit<SecretEntry, 'name'>;
+type ReadSecret = SecretMetadata & { value: string };
 type StoredSecret = z.infer<typeof storedSecretSchema>;
 
 const secretFileSchema = z.object({
@@ -162,12 +171,14 @@ export class SecretStore {
     // Undecryptable entries still list by name, so they can be unset after a lost key.
     const entries = read.skipped ? await this.storedMetadata(scope) : read.values;
     const secrets = Object.entries(entries)
-      .map(([name, entry]) => ({ name, audiences: entry.audiences, updatedAt: entry.updatedAt }))
+      .map(([name, { audiences, updatedAt, description }]) => ({
+        name, audiences, updatedAt, ...(description !== undefined ? { description } : {}),
+      }))
       .sort((a, b) => a.name.localeCompare(b.name));
     return read.skipped ? { secrets, skipped: read.skipped } : { secrets };
   }
 
-  private async storedMetadata(scope: SecretScopeRef): Promise<Record<string, { audiences: SecretAudience[]; updatedAt: string }>> {
+  private async storedMetadata(scope: SecretScopeRef): Promise<Record<string, SecretMetadata>> {
     const id = fileId(scope);
     if (!id) return {};
     try {
@@ -182,7 +193,7 @@ export class SecretStore {
    * the next check rather than one already running. Every failure reads as empty: a check
    * without its credential fails on its own terms, and a corrupt store must not stop runs.
    */
-  async read(scope: SecretScopeRef): Promise<SecretsRead & { values: Record<string, { value: string; audiences: SecretAudience[]; updatedAt: string }> }> {
+  async read(scope: SecretScopeRef): Promise<SecretsRead & { values: Record<string, ReadSecret> }> {
     const id = fileId(scope);
     if (!id) return { values: {} };
     let file: SecretFile;
@@ -216,32 +227,52 @@ export class SecretStore {
       return { values: {}, skipped: 'the data key metadata is unreadable or invalid — restore the keychain account marker and its private permissions' };
     }
     if (!dataKey) return { values: {}, skipped: await this.missingKeyReason() };
-    const values: Record<string, { value: string; audiences: SecretAudience[]; updatedAt: string }> = {};
+    const values: Record<string, ReadSecret> = {};
     for (const [name, stored] of Object.entries(file.secrets)) {
       if (secretNameIssue(name)) continue;
       const value = decrypt(dataKey.key, aad(id, name), stored);
       if (value === null) {
         return { values: {}, skipped: 'the data key does not decrypt this store — it was written under another key (a reset keychain, a replaced key file); store the secrets again' };
       }
-      values[name] = { value, audiences: stored.audiences, updatedAt: stored.updatedAt };
+      const { audiences, updatedAt, description } = stored;
+      values[name] = { value, audiences, updatedAt, ...(description !== undefined ? { description } : {}) };
     }
     return { values };
   }
 
-  async set(scope: SecretScopeRef, name: string, value: string, audiences: readonly SecretAudience[] = DEFAULT_AUDIENCES): Promise<void> {
+  async set(scope: SecretScopeRef, name: string, value: string, audiences: readonly SecretAudience[] = DEFAULT_AUDIENCES, description?: string): Promise<void> {
     const issue = secretNameIssue(name) ?? secretValueIssue(value);
     if (issue) throw new SecretsError(issue);
+    validateDescription(description);
     const admitted = [...new Set(audiences)].filter((a): a is SecretAudience => (SECRET_AUDIENCES as readonly string[]).includes(a));
     if (admitted.length === 0) throw new SecretsError(`a secret names at least one audience (${SECRET_AUDIENCES.join(', ')})`);
     const dataKey = await this.loadOrCreateDataKey();
     await this.update(scope, (file, id) => {
       const now = new Date().toISOString();
+      const previous = file.secrets[name];
+      const nextDescription = description ?? previous?.description;
       file.secrets[name] = {
         audiences: admitted,
-        createdAt: file.secrets[name]?.createdAt ?? now,
+        ...(nextDescription ? { description: nextDescription } : {}),
+        createdAt: previous?.createdAt ?? now,
         updatedAt: now,
         ...encrypt(dataKey.key, aad(id, name), value),
       };
+      return true;
+    });
+  }
+
+  /** Change only metadata, even when the encryption key is unavailable. */
+  async describe(scope: SecretScopeRef, name: string, description: string): Promise<boolean> {
+    const issue = secretNameIssue(name);
+    if (issue) throw new SecretsError(issue);
+    validateDescription(description);
+    return this.update(scope, (file) => {
+      const entry = file.secrets[name];
+      if (!entry) return false;
+      if (description === '') delete entry.description;
+      else entry.description = description;
+      entry.updatedAt = new Date().toISOString();
       return true;
     });
   }

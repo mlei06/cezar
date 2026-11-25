@@ -74,6 +74,37 @@ describe('secrets API (spec 2026-10-10-project-secrets-vault-options)', () => {
     expect((await apiRequest(instance, '/api/v1/workspace/secrets/SHARED', { method: 'DELETE' })).status).toBe(404);
   });
 
+  it('updates descriptions independently in both scopes and accepts old records', async () => {
+    const { id, instance } = await app();
+    const patch = (body: unknown): RequestInit => ({ ...put(body), method: 'PATCH' });
+    for (const [path, file] of [
+      [`/api/v1/p/${id}/secrets`, `${id}.json`],
+      ['/api/v1/workspace/secrets', 'workspace.json'],
+    ] as const) {
+      const url = `${path}/KEY`;
+      const list = async () => (await (await apiRequest(instance, path)).json()) as { secrets: object[] };
+      const persisted = () => JSON.parse(readFileSync(join(root, 'home', 'secrets', file), 'utf8')).secrets.KEY;
+      expect((await apiRequest(instance, url, patch({ description: 'Missing' }))).status).toBe(404);
+      expect((await apiRequest(instance, url, put({ value: 'original-value', audiences: ['checks'] }))).status).toBe(204);
+      expect((await list()).secrets[0]).not.toHaveProperty('description');
+      const original = persisted();
+      const description = 'd'.repeat(200);
+      expect((await apiRequest(instance, url, patch({ description: description + 'd' }))).status).toBe(400);
+      expect((await apiRequest(instance, url, patch({ description, value: 'ignored' }))).status).toBe(400);
+      expect((await apiRequest(instance, url, put({ value: 'new-value', description: description + 'd' }))).status).toBe(400);
+      expect(persisted()).toEqual(original);
+      expect((await apiRequest(instance, url, patch({ description }))).status).toBe(204);
+      expect(persisted()).toEqual({ ...original, description, updatedAt: expect.any(String) });
+      expect((await list()).secrets).toEqual([{ name: 'KEY', audiences: ['checks'], description, updatedAt: expect.any(String) }]);
+      expect((await apiRequest(instance, url, put({ value: 'new-value' }))).status).toBe(204);
+      expect((await list()).secrets[0]).toHaveProperty('description', description);
+      expect((await apiRequest(instance, url, put({ value: 'newer-value', description: 'Replacement' }))).status).toBe(204);
+      expect((await list()).secrets[0]).toHaveProperty('description', 'Replacement');
+      expect((await apiRequest(instance, url, patch({ description: '' }))).status).toBe(204);
+      expect((await list()).secrets[0]).not.toHaveProperty('description');
+    }
+  });
+
   it('refuses a bad name, value or audience with a 400 naming the reason', async () => {
     const { instance } = await app();
     for (const [name, reason] of [

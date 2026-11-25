@@ -1,12 +1,13 @@
 import { realpath } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { SECRET_AUDIENCES, secretNameIssue, type SecretAudience } from '@open-mercato/cezar-contract';
+import { SECRET_AUDIENCES, secretDescriptionSchema, secretNameIssue, type SecretAudience } from '@open-mercato/cezar-contract';
 import { SecretStore, SecretsError, type SecretScopeRef } from './secrets.ts';
 import { loadWorkspaceConfig } from './config.ts';
 
-const USAGE = 'Usage: cezar secrets list | get <NAME> | env | set <NAME> [--audience checks,agents,cezar] | unset <NAME>   [--workspace] [--repo <dir>]\n' +
+const USAGE = 'Usage: cezar secrets list | get <NAME> | env | set <NAME> [--audience checks,agents,cezar] [--description <text>] | describe <NAME> <text> | unset <NAME>   [--workspace] [--repo <dir>]\n' +
   '  get prints one value (project first, then workspace); env prints `export NAME=…` lines for every agents-audience secret.\n' +
   '  set reads the value from stdin (pipe it in, or type it at the hidden prompt) — never from argv.\n' +
+  '  Descriptions are public metadata, up to 200 characters. Pass an empty string to clear.\n' +
   '  --workspace addresses the user\'s own secrets, shared by every project; the default is this project\'s.\n' +
   `  --audience names who may read the secret (${SECRET_AUDIENCES.join(', ')}); the default is checks,agents.`;
 
@@ -35,6 +36,13 @@ export async function runSecretsCommand(
     return 1;
   }
   const { action, workspace, repo, audiences } = parsed;
+  if (action.kind === 'set' || action.kind === 'describe') {
+    const description = secretDescriptionSchema.optional().safeParse(action.description);
+    if (!description.success) {
+      io.error(`cezar secrets: ${description.error.issues[0]?.message}`);
+      return 1;
+    }
+  }
   if ('name' in action) {
     const issue = secretNameIssue(action.name);
     if (issue) {
@@ -89,11 +97,14 @@ export async function runSecretsCommand(
         io.error('cezar secrets: empty value — nothing saved');
         return 1;
       }
-      await store.set(scope, action.name, value, audiences);
+      await store.set(scope, action.name, value, audiences, action.description);
       io.log(action.name);
       return 0;
     }
-    if (!(await store.unset(scope, action.name))) {
+    const changed = action.kind === 'describe'
+      ? await store.describe(scope, action.name, action.description)
+      : await store.unset(scope, action.name);
+    if (!changed) {
       io.error(`cezar secrets: no secret named ${action.name}`);
       return 1;
     }
@@ -109,9 +120,11 @@ export async function runSecretsCommand(
   }
 }
 
-/** `list` takes no operand; `set` and `unset` take exactly a name. Parsing it into this shape
- *  once is what lets the body above use `action.name` as a string without an assertion. */
-type SecretsAction = { kind: 'list' } | { kind: 'env' } | { kind: 'set' } & { name: string } | { kind: 'unset'; name: string } | { kind: 'get'; name: string };
+type SecretsAction =
+  | { kind: 'list' } | { kind: 'env' }
+  | { kind: 'get'; name: string } | { kind: 'unset'; name: string }
+  | { kind: 'set'; name: string; description?: string }
+  | { kind: 'describe'; name: string; description: string };
 
 const shellQuote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
 
@@ -127,15 +140,17 @@ function parseArgs(args: string[]): ParsedArgs | undefined {
   let workspace = false;
   let repo: string | undefined;
   let audiences: SecretAudience[] | undefined;
+  let description: string | undefined;
   for (let i = 0; i < rest.length; ) {
     const flag = rest[i];
     if (flag === '--workspace') {
       workspace = true;
       rest.splice(i, 1);
-    } else if (flag === '--repo' || flag === '--audience') {
+    } else if (flag === '--repo' || flag === '--audience' || flag === '--description') {
       const value = rest[i + 1];
-      if (!value) return undefined;
+      if (value === undefined || (flag !== '--description' && value === '')) return undefined;
       if (flag === '--repo') repo = value;
+      else if (flag === '--description') description = value;
       else {
         const names = value.split(',').map((s) => s.trim()).filter(Boolean);
         if (!names.length || !names.every((n): n is SecretAudience => (SECRET_AUDIENCES as readonly string[]).includes(n))) return undefined;
@@ -147,12 +162,17 @@ function parseArgs(args: string[]): ParsedArgs | undefined {
     }
   }
   const [command, ...operands] = rest;
+  const [name, text] = operands;
+  if (command === 'set' && name !== undefined && operands.length === 1) {
+    return { action: { kind: 'set', name, description }, workspace, repo, audiences };
+  }
+  if (description !== undefined) return undefined;
   if ((command === 'list' || command === 'env') && operands.length === 0) return { action: command === 'env' ? { kind: 'env' } : { kind: 'list' }, workspace, repo };
-  if (command === 'get' && operands.length === 1 && !audiences) return { action: { kind: 'get', name: operands[0]! }, workspace, repo };
-  const [name] = operands;
-  if ((command === 'set' || command === 'unset') && name !== undefined && operands.length === 1) {
-    if (command === 'unset' && audiences) return undefined;
-    return { action: { kind: command, name }, workspace, repo, audiences };
+  if ((command === 'get' || command === 'unset') && name !== undefined && operands.length === 1 && !audiences) {
+    return { action: { kind: command, name }, workspace, repo };
+  }
+  if (command === 'describe' && name !== undefined && text !== undefined && operands.length === 2 && !audiences) {
+    return { action: { kind: 'describe', name, description: text }, workspace, repo };
   }
   return undefined;
 }
