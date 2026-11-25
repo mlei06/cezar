@@ -1,6 +1,6 @@
 # The self-improving factory
 
-Status: draft v4, 2026-11-25. Fork: `mlei06/cezar`, trunk `factory`. Owner: Michael. Spec owner: the overseer (see the roadmap). Implementation plan: `2026-11-25-self-improving-factory-roadmap.md`. Findings during the build: `2026-11-25-self-improving-factory-observations.md`.
+Status: draft v5, 2026-11-25. Fork: `mlei06/cezar`, trunk `factory`. Owner: Michael. Spec owner: the overseer (see the roadmap). Implementation plan: `2026-11-25-self-improving-factory-roadmap.md`. Findings during the build: `2026-11-25-self-improving-factory-observations.md`.
 
 ## TLDR
 
@@ -11,12 +11,13 @@ Cezar already runs a factory: managers turn outcomes into tasks, tasks run workf
 3. **Bounded tasks.** A per-task token and time budget that wakes the manager when crossed.
 4. **Scoring.** After every run, scorers (each a rubric, labels with scores, a pass threshold) are judged by a cheap, self-hosted model. The judge reads Cezar's existing metrics plus the full transcript. A failing score names one to three root causes, each with a target: the place its fix belongs.
 5. **Self-improvement.** Root causes are routed to the queue of whoever can fix them: the project or the harness. A deterministic timer starts an improvement run when a queue fills or ages; the manager or the owner can also start one. The run clusters the causes and opens a pull request of redrafts that lists the regressions it addresses.
-6. **Verification.** Before/after comparison of scores, and benchmarks (reference tasks across configurations) where a change needs a real comparison.
+6. **Verification and replay.** Every run records its starting commit and harness version, so any task can be replayed from its original input with one thing changed (harness release, workflow, model, skill or brief), as a variant beside the original, and compared by score. Benchmarks are saved collections of replays. Before/after comparison of scores checks a change after it merges.
 7. **A self-maintaining harness.** The Cezar fork is a project with its own manager. Cezar runs from pinned releases, so a harness change ships through a benchmarked release with automatic rollback.
 
 ## Contents
 
 - Evidence, Principles, Glossary
+- Reuse map: what Cezar already has, part by part
 - Decisions D1–D10
 - Data model and storage
 - Settings, CLI and API reference
@@ -71,6 +72,31 @@ One task often has several causes in different places. That's why a failure carr
 | Improvement run | a task that turns a queue's batch into a pull request |
 | Cluster | causes an improvement run judged to share one underlying problem |
 | Benchmark | reference tasks with success criteria, run across configurations and scored |
+
+## Reuse map: what Cezar already has, part by part
+
+Every part of this spec builds on something Cezar already has. Where a part needs something new, the reason is given. The decisions below follow this map.
+
+| Spec part | What Cezar already has | Use | What's new, and why |
+|---|---|---|---|
+| Factory files (D1) | workflows in `.ai/cezar/workflows/`; skills with local-first discovery; AGENTS.md; workflow validation (`stepsIssue`, `graphIssues`, `POST /workflows/parse`); the `.ai/cezar/.gitignore` allowlist | reuse | scorer and benchmark files, which have no home today; `cez factory check` wraps the existing validators and adds theirs |
+| Settings (D1) | workspace `~/.cezar/config.json` and project `.ai/cezar/config.json`, with the schema rules (every field optional with `.catch`, `mergeWriteWorkspaceConfig`), and the Settings frame | extend | a `factory` section in both |
+| Task workflows (D2) | per-step runner, model, effort, skill, allowed tools; step choice wins over task and project defaults; built-ins via `builtIn()` in `workflows/templates.ts`; `secrets:` on check steps; `budgetUsd` on dispatched subtasks | extend | workflow `budget:`, agent-step `secrets:`, three built-in task workflows |
+| List commands (D3) | `cez-manager workflows`; the `/models`, `/skills`, `/secrets` and `/workflows` routes; agent accounts in `cez-manager status`; manager tools forward in process to existing routes | reuse | thin `cez-manager` commands over the existing routes |
+| Capability block (D3) | the run's system prompt is composed from global, project, workflow and skill instructions and saved on the run (`systemPrompt`) so Continue reuses it; secrets are already injected | extend | one more composed section, saved with the rest |
+| Secret descriptions (D3) | the secret store keeps metadata (audiences, `updatedAt`) beside the encrypted value | extend | a `description` field |
+| Budgets (D4) | dispatch's `budgetUsd`: a child's budget is carved from its parent's, and a run that reaches it parks at turn end and stops auto-continuing; usage-limit parking; manager follow-up events | rework | one run budget with `usd`, `tokens` and `minutes`, for every run; the existing park behaviour stays for dispatch children, and top-level runs notify instead |
+| Metrics (D5) | run record tokens, cost, times, diff stats, models, peak memory, live context; per-step usage counters; the plan-usage ledger; event timestamps; `TurnStatsCollector` (manager turns only) | reuse | `TurnStatsCollector` extended to task sessions; a derived summary file |
+| Judge (D5) | one-shot model calls for commit messages, titles and branch names: `createRunner` + `runner.run({ allowedTools: [] })`, two attempts with the rejection reason, a timeout, and `trackOneShot` with `INTERNAL_CONSUMERS` in the usage ledger | reuse | an `INTERNAL_CONSUMERS.scoring` entry; the judge prompt and validation |
+| Score columns and panels (D5) | the Tasks table's column system (tokens, cost, CPU, memory, plan limit…) and column menu; task detail panels; the plan-usage chip | extend | three columns and a Scores panel |
+| Improvement trigger (D6) | automations: a coordinator, event sources (`github`, `schedule`, `tracker`), dedupe and receipts, the execution log, skipped-with-reason entries, and reporting each run to a manager | extend | a `factory` event source that fires when a queue passes its threshold or age; the guards live in the source; a built-in automation per project launches `improve-factory` |
+| Improvement runs (D6) | ordinary tasks; manager follow-ups; `review-pr`; manager merge; draft PR and mark-ready nodes (GitHub and Azure) | reuse | the `improve-factory` workflow and skill; queues and bookkeeping, which have no home today |
+| Replay (D8) | parallel variants (spec 010): runs sharing a `groupId`, each with a `variant` label, grouped in the task list, compared side by side in `/groups/:groupId`; `task retry` with another runner or model; the run's saved `workflowDef` and `systemPrompt` snapshots | extend | run identity (`startCommit`, `harnessVersion`); variants with per-variant overrides and a replay source; score columns in the Compare view |
+| Benchmarks (D8) | variants and the Compare view (above) | extend | suites: saved replays with success criteria, run as a matrix |
+| Harness releases (D9) | self-update: installs in `~/.cezar/versions/<id>` with a `current` link and `~/.cezar/bin` launchers; `cezar install` packs and installs the running build; `cezar use <id>` switches (rollback); `cezar link`; supervisor restart (`CEZ_SUPERVISED=1`); version pruning with in-use leases | reuse | the `harness-release` workflow around them: wait for idle, the health check with automatic `use <previous>`, the staging cockpit, the release log |
+| Reports (D10) | manager jobs; HTML artifacts in a task's Assets (sandboxed, CDN allowlist) | reuse | the report content |
+| Proactive triggers (D10) | schedule automations; the built-in `fix-ci` workflow; GitHub check events | reuse | a `credential-health` workflow per project; on Azure Repos, CI failures need an Azure event source (backlog) |
+| Events (all) | the workspace SSE bus, and the WebSocket topic bus | reuse | new event kinds only |
 
 ## Decisions
 
@@ -187,21 +213,25 @@ Over the cap, Cezar trims in this order: other workflows' names, then secret des
 
 **Secret descriptions.** A secret gains an optional `description` (at most 200 characters, never secret, never redacted). It's set with `cezar secrets set NAME --description "…"`, `cezar secrets describe NAME "…"`, in Settings, or by a manager.
 
-### D4. A budget per task that wakes the manager
+### D4. One run budget, for every run
 
-**Precedence:** the task flag, else the workflow's `budget:`, else the project setting, else the global setting (default 3M input tokens and 30 active minutes).
+Cezar already has a budget: dispatch's `budgetUsd`. A dispatched child's budget is carved from its parent's, and a run that reaches it parks at turn end and stops auto-continuing. This decision generalizes it rather than adding a second one.
 
-**Accounting:**
-- **Tokens** are input tokens summed over every step and model call, which the run record already tracks.
-- **Active time** is time with a step running. Queued time, parking (usage-limit holds, waiting on the owner) and time at a human gate don't count.
-
-**Crossing it doesn't stop the task.** The run records `budgetExceeded: { metric, at, value }`. A managed run wakes its manager with a follow-up event: the metrics so far, the five largest tool outputs, and the current step. The manager can:
-- raise the budget: `cez-manager task budget <run> --tokens N --minutes M`;
-- steer the task with `task say`;
-- switch its model with `task switch`;
-- or cancel and retry.
-
-The next alert comes at 2× the budget, then 4×. An unmanaged run gets an amber marker on its row and in the task header.
+- **The budget** is `{ usd?, tokens?, minutes? }` on any run. It replaces `budgetUsd` on dispatch records, which keep parsing; `budgetUsd: n` reads as `{ usd: n }`. Cost alone isn't enough: Codex and OpenCode on subscriptions report little or no cost, so tokens and time are the reliable limits.
+- **Precedence:** the task flag, else the workflow's `budget:`, else (for a dispatched child) the share carved from its parent, else the project setting, else the global setting (default 3M input tokens and 30 active minutes).
+- **Accounting:**
+  - **Tokens** are input tokens summed over every step and model call, which the run record already tracks.
+  - **Active time** is time with a step running. Queued time, parking (usage-limit holds, waiting on the owner) and time at a human gate don't count.
+- **What happens when it's crossed** depends on the run's `onBudget` action:
+  - `park` (the existing dispatch behaviour, still the default for dispatched children): the run parks at turn end and stops auto-continuing.
+  - `notify` (the default for every other run): the run keeps going and records `budgetExceeded: { metric, at, value }`. A managed run wakes its manager through the existing follow-up channel, with the metrics so far, the five largest tool outputs and the current step.
+- **The manager's options when woken:**
+  - raise the budget: `cez-manager task budget <run> --tokens N --minutes M`;
+  - steer the task with `task say`;
+  - switch its model with `task switch`;
+  - cancel and retry.
+- **Repeats:** the next `notify` alert comes at 2× the budget, then 4×.
+- **Unmanaged runs** get an amber marker on their row and in the task header.
 
 ### D5. Scoring
 
@@ -246,7 +276,7 @@ The built-in rubrics start as the overseer's tuned drafts from the build (roadma
 
 **The judge.**
 - **Who:** by default OpenCode with `davy/mistral-large-4`, self-hosted, so transcripts stay on the company network and scoring costs only time.
-- **How:** one tool-less call per scorer, never a task, so scoring creates no runs. Calls run one at a time per machine (a small queue).
+- **How:** the same one-shot call Cezar already makes for commit messages and titles. That's `createRunner` and `runner.run` with no tools, a timeout, and two attempts where the second carries the rejection reason. It's tracked in the usage ledger as a new internal consumer, `scoring`. One call per scorer, never a task, so scoring creates no runs. Calls run one at a time per machine (a small queue).
 - **What it reads:** the rubric, the labels, the metrics, then the full transcript as plain text ("Data model" describes the format).
 - **Too long:** a transcript longer than the judge's window is shortened only in its largest tool outputs, keeping each one's head and tail. A call or message is never dropped.
 - **Its reply:** JSON, validated against the scorer's labels; retried once if invalid, then recorded as an error.
@@ -290,15 +320,17 @@ So one failure can feed both queues.
 
 **The harness queue** is workspace-wide, because harness causes come from every project. It's consumed by the harness project (setting `factory.harnessProject`). It's detected automatically when exactly one registered project is a Cezar repository, judged by its package name or the `.ai/cezar/HARNESS` marker the fork carries. With no harness project, the queue still fills and shows in the Factory view, and nothing consumes it.
 
-**Triggers.** A deterministic Cezar timer checks every hour, with no model call. It starts an improvement run for a queue when:
+**Triggers: an automation, not a new timer.** Cezar's automations already have what a trigger needs: a coordinator, event sources (GitHub, schedule, tracker), dedupe, an execution log with skipped-with-reason entries, and reporting each run to a manager. Self-improvement adds one event source, `factory`. Every hour it checks a queue, with no model call, and fires when either:
 - the queue holds the threshold number of unprocessed causes, or
 - its oldest unprocessed cause is old enough and there are at least the minimum number.
 
-Two guards apply:
-- **one at a time:** never while the same queue has an improvement run in flight or an improvement PR open;
-- **cooldown:** after an improvement PR merges, no run until the cooldown has passed (D7).
+Each project, and the harness project, gets a **built-in automation** of kind `factory` that launches the `improve-factory` workflow when its source fires. It's enabled by default and can be paused like any automation. Its runs report to the project's manager, which is how the manager is told.
 
-The project's **manager** (`cez-manager improve --project <id>`), or the **owner** (the Factory view's "Improve now", or `cez improve`), can start a run at any time. That skips the threshold but still respects both guards. When a guard blocks a start, the reason is shown. The manager is told whenever the timer starts a run, like any task it follows.
+The source applies two guards and logs a skip with the reason when one holds:
+- **one at a time:** never while the same queue has an improvement run in flight or an improvement PR open;
+- **cooldown:** after an improvement PR merges, nothing until the cooldown has passed (D7).
+
+The project's **manager** (`cez-manager improve --project <id>`), or the **owner** (the Factory view's "Improve now", or `cez improve`), can start a run at any time. That skips the threshold but still respects both guards, and a blocked start shows the reason. It's the automation's "run now", scoped to this source: the manager may run this built-in automation, though it can't run automations in general.
 
 **The harness queue's other inputs:**
 - **Escalations:** a project improvement run may judge a cluster generic ("every project's tasks will hit this") and escalate it. Cezar moves those causes to the harness queue instead of the project patching the repo.
@@ -358,67 +390,98 @@ Cezar enforces this. A PR that touches a protected path is marked owner-only, an
 | Task budget | 3M input tokens, 30 active minutes | same |
 | Judge | opencode, davy/mistral-large-4 | same |
 
-### D8. Benchmarks
+### D8. Replay and benchmarks
 
-A suite lives in `.ai/cezar/benchmarks/<suite>/`:
+**Run identity.** Every run records, when it starts:
+- `startCommit`, the exact commit its worktree forked from;
+- `harnessVersion`, the self-update version id it ran under, with its commit.
+
+These join the run's existing snapshots of its workflow definition (`workflowDef`) and saved instructions (`systemPrompt`). With its original inputs (brief, attachments, runner, model, effort, skill), that's enough to reproduce a run. The worktree isn't needed: it's the run's output, not its input. Today Cezar records only the base branch's name and works out the fork point later from git's reflog, which expires, so recording these must start early. Runs from before the change can't be replayed exactly.
+
+**Replay.** `cez replay <run>` reruns a task from its `startCommit` with its original inputs, and changes at most one thing:
+- `--harness <version>`;
+- `--workflow <name>`, or the original's saved `workflowDef` (the default);
+- `--model`, `--runner`, `--effort`;
+- `--skill <name>`;
+- `--brief <text|file>`;
+- `--times <n>` (default 1, at most 5).
+
+Replays reuse parallel variants (spec 010):
+- **Grouping:** the original joins a variant group as the baseline, and each replay is a variant labelled with its change (`harness 3a12b69`, `model mistral`, `skill jenkins-deploy`, `brief v2`).
+- **The task list** shows the group as one tile that expands, as it does for variants today. Each replay's row has its own Outcome, Efficiency and main cause.
+- **The Compare view** (`/groups/:groupId`) gains score columns per variant: pass or fail per scorer, tokens, active time and cost. With several replays per variant it also shows the pass rate and averages. It keeps its file and diff comparison; the "choose a winner" action is hidden for replay groups, since they're experiments.
+
+Two extensions to variants make this work:
+- per-variant overrides (today every variant shares one configuration);
+- a cap of 5 for replay groups (3 stays the cap for ordinary variants).
+
+**What a replay may do:**
+- **Outside systems:** replays never push, merge or deploy, and they skip check steps marked `sideEffects: true`.
+- **Harness version:** a replay on another harness version runs on a staging cockpit started from that installed version (D9), with its own `CEZ_HOME`.
+- **Mid-task messages:** the original's owner and manager messages are appended to the replay's brief as context, not resent mid-run.
+- **Queues:** replays never feed improvement queues. They're experiments, and a deliberately weak variant would otherwise flood the queues.
+- **Noise:** models vary between runs, so a comparison means 3–5 replays per variant.
+
+**Benchmarks are saved replays.** A suite lives in `.ai/cezar/benchmarks/<suite>/`, and each task is a frozen replay input:
 
 ```yaml
 # suite.yaml
 description: Deploy-status tasks for open-webui
-workflow: operate
 configurations:
   - { name: mistral, model: davy/mistral-large-4 }
   - { name: sol-low, runner: codex, model: gpt-6.2-sol, effort: low }
 tasks: [jenkins-status, prod-health]
 scorers: [outcome, efficiency]
+times: 3
 ---
 # tasks/jenkins-status.yaml
 title: Report the last CI and CD builds
+sourceRun: 43299e6b-29eb-450a-8c2e-e38c1ef8a533   # optional
+workflow: operate
 prompt: Report the last chatbot/build-push and chatbot/deploy builds and their results.
 successCriteria: Both build numbers and results are correct.
-startingRef: 97d817021174027d647df63c890423771ef9d330
+startCommit: 97d817021174027d647df63c890423771ef9d330
 ```
 
-**Running a suite.** `cez benchmark <suite> [--config c]` runs every task under every configuration as safe tasks:
-- in worktrees at `startingRef`;
-- no merges, pushes or deploys;
-- check steps marked `sideEffects: true` are skipped.
-
-It scores them with the suite's scorers and reports a matrix of pass rate, cost and time per configuration. The results are stored under the run data and shown in the Factory view.
-
-**Growing suites.** `cez benchmark add <run> --suite s` turns a completed run into a task: its brief becomes the prompt, its outcome the success criteria, and its starting commit the `startingRef`.
-
-**When suites run:**
-- **Model changes:** an improvement run that changes a workflow's model runs the matching suite (the one whose `workflow` is that workflow) on both configurations, and puts the matrix in its PR.
-- **Harness releases:** a release always runs the harness suite (D9).
+- **Growing a suite:** `cez benchmark add <run> --suite s` writes a task file from a run's identity and inputs: its brief as the prompt, its outcome as the success criteria, its start commit.
+- **Running a suite:** `cez benchmark <suite> [--config c]` replays every task under every configuration, `times` each, as one variant group per task. It reports the matrix (pass rate, cost and time per configuration), stored as a task artifact and shown in the Factory view.
+- **When suites run automatically:**
+  - an improvement run that changes a workflow's model runs the matching suite and puts the matrix in its PR;
+  - a harness release always runs the harness suite (D9).
 
 ### D9. The self-maintaining harness
 
 The Cezar fork (`~/dev/cezar`, remote `mlei06/cezar`, trunk `factory`) is the harness project, with its own manager, the harness manager. Its workflows and skills are for working on Cezar's code, and its queue receives harness causes from every project.
 
-**1. The running harness is a release, never the working tree.**
+**1. The running harness is an installed version, never the working tree.** Cezar's self-update already provides the layout:
+- installs in `~/.cezar/versions/<id>`, with a `current` link and launchers in `~/.cezar/bin`;
+- `cezar install`, which packs the running build and installs it;
+- `cezar use <id>`, which switches versions;
+- a supervisor restart (`CEZ_SUPERVISED=1`: the process exits, and systemd relaunches it through the launcher);
+- pruning that keeps the running version plus two and never removes one in use.
 
-```text
-~/.cezar/harness/
-  releases/<sha>/        an exported commit, with node_modules and its build
-  current -> releases/<sha>
-  previous -> releases/<sha>
-  release-log.ndjson     every release, switch and rollback
-```
+The harness uses exactly that:
+- **The service:** the systemd unit runs `~/.cezar/bin/cezar` with `CEZ_SUPERVISED=1` and `Restart=always`. The global `cezar` and `cez` are those launchers.
+- **A release:**
+  1. check out the merged commit in a dedicated build worktree (`~/.cezar/factory/builds/<sha>`), never the fork checkout;
+  2. run the AGENTS.md validation order there;
+  3. run that build's own `cezar install`, which packs it into `~/.cezar/versions/<id>`.
+  
+  The fork checkout is an ordinary project, edited only in task worktrees, so a merge can't change the live harness.
+- **The version id and commit** are `harnessVersion` (D8).
+- **Retention:** set to 5 for this fork (`versionRetention`), so a few recent releases stay available for rollback and replay.
 
-The systemd unit runs `current`. The fork checkout is an ordinary project, edited only in task worktrees, so a merge can't change the live harness. Releases are kept for the last 5 commits.
-
-**2. Shipping is the `harness-release` workflow** in the harness project. It's check steps, apart from one summary:
-1. **Build:** typecheck, test and build the merged commit (the AGENTS.md validation order), then install it as a new release.
-2. **Stage:** start a staging cockpit from it on another port with its own `CEZ_HOME`. Run the harness benchmark suite against it: `CEZ_DRY_RUN=1` by default, plus a few real cheap tasks when the release touches runners, prompts or the judge. Compare with the current release's last results; a drop beyond the tolerance (default 10 points of pass rate) stops the release.
+**2. Shipping is the `harness-release` workflow** in the harness project. It's check steps around the self-update commands, apart from one summary:
+1. **Build and install:** as above. A failing validation stops here.
+2. **Stage:** start a staging cockpit from the new version's entry, on another port with its own `CEZ_HOME`. Replay the harness benchmark suite against it (D8): `CEZ_DRY_RUN=1` by default, plus real replays when the release touches runners, prompts or the judge. Compare with the current version's last results; a drop beyond the tolerance (default 10 points of pass rate) stops the release.
 3. **Wait for idle:** wait until no task is running and no manager turn is active, holding new task starts (they queue) for at most 15 minutes; then stop and report.
-4. **Switch:** move `current`, restart, then check `/api/v1/health` and run one dry-run task.
-5. **Roll back** on any failure: switch back to `previous`, restart, and report.
-6. **Report:** post the release notes (the merged PRs since the last release), the benchmark comparison and the switch result to the harness manager.
+4. **Switch:** `cezar use <id>`, then a supervisor restart. Then check `/api/v1/health` within 60 s and run one dry-run task.
+5. **Roll back** on any failure: `cezar use <previous id>`, restart, and report.
+6. **Report:** post the release notes (the merged PRs since the last release), the benchmark comparison and the switch result to the harness manager. Append every step to `~/.cezar/factory/release-log.ndjson`.
 
-The workflow's own changes are owner-protected, like the grader.
+The new pieces are waiting for idle, the health check with automatic rollback, the staging cockpit and the log. Installing, switching, restarting and pruning are self-update's. The workflow's own changes are owner-protected, like the grader.
 
-**3. Attribution.** Every score records `harnessVersion`, the release's commit. After a release, the harness manager compares failure rates for the clusters the release's PRs targeted, once 10 runs have been scored on it. A release that made them worse is reverted with `harness-release --rollback`, which switches back and opens a revert PR.
+**3. Attribution.** Every score records `harnessVersion` (the version id and its commit). After a release, the harness manager compares failure rates for the clusters the release's PRs targeted, once 10 runs have been scored on it. A release that made them worse is reverted with `harness-release --rollback`, which switches back and opens a revert PR.
 
 **4. Limits.**
 - The grader rule applies to the harness too.
@@ -429,7 +492,7 @@ The workflow's own changes are owner-protected, like the grader.
 
 These use Cezar's existing automations and manager jobs:
 - **Hourly:** the improvement-run check (D6).
-- **Weekly, per project:** the manager posts a factory report, read only from stored scores:
+- **Weekly, per project:** a manager job writes a factory report as an HTML artifact (Cezar's existing artifacts) and posts its summary, read only from stored scores:
   - pass rates and their trend;
   - cost per merged PR;
   - human touchpoints per PR;
@@ -449,7 +512,11 @@ These use Cezar's existing automations and manager jobs:
 | Harness queue | `~/.cezar/factory/harness-queue.json` | workspace-wide |
 | Improvements | `.ai/cezar/factory/improvements.json` | run, clusters, decisions, PR, merge commit, before/after |
 | Benchmark results | `.ai/cezar/factory/benchmarks/<suite>/<at>.json` | one matrix per run |
-| Release log | `~/.cezar/harness/release-log.ndjson` | releases, switches, rollbacks |
+| Run identity | the run record: `startCommit`, `harnessVersion` | written at run start, beside the existing `workflowDef` and `systemPrompt` snapshots |
+| Replay source | the run record: `replayOf` (run id), `replayChange` (what was changed), and the existing `groupId`/`variant` | replays are variants |
+| Installed harness versions | `~/.cezar/versions/<id>` (self-update's layout) | unchanged |
+| Harness build worktrees | `~/.cezar/factory/builds/<sha>` | one per release; pruned with its version |
+| Release log | `~/.cezar/factory/release-log.ndjson` | releases, stages, switches, rollbacks |
 
 `.ai/cezar/factory/` joins the `ensureDataGitignore` allowlist as ignored state. Every file is optional and rebuilt when missing. A missing queue starts empty, and causes that were never processed are re-derived from recent scores.
 
@@ -457,7 +524,8 @@ These use Cezar's existing automations and manager jobs:
 
 ```json
 { "runId": "…", "workflow": "implement", "runner": "codex", "model": "gpt-6.2-sol",
-  "startedBy": "manager | owner | automation | improvement | benchmark",
+  "startedBy": "manager | owner | automation | improvement | benchmark | replay",
+  "startCommit": "<sha>", "harnessVersion": { "id": "…", "commit": "<sha>" },
   "wallMs": 0, "activeMs": 0, "modelMs": 0, "toolMs": 0,
   "tokens": { "input": 0, "output": 0, "cacheRead": 0 },
   "requests": 0, "contextAvg": 0, "contextPeak": 0,
@@ -528,18 +596,21 @@ workflow implement · codex gpt-6.2-sol · started by manager · status done · 
 | `cez factory check` | validate the project's factory files |
 | `cez score <run> [--scorer s]` | score or re-score a run |
 | `cez improve [--project p]` | start an improvement run now (guards apply) |
+| `cez replay <run> [--harness v] [--workflow w] [--model m] [--runner r] [--effort e] [--skill s] [--brief t] [--times n]` | replay a run with one change, as a variant beside it |
 | `cez benchmark <suite> [--config c]`, `cez benchmark add <run> --suite s` | run or grow a benchmark |
 | `cezar secrets set NAME --description "…"`, `cezar secrets describe NAME "…"` | secret descriptions |
 | `cez-manager workflows|secrets|skills|models|agents|scores` | list commands (D3) |
 | `cez-manager improve --project p` | the manager starts an improvement run |
 | `cez-manager task create … --workflow w --secrets a,b --budget-tokens N --budget-minutes M` | task options |
 | `cez-manager task budget <run> --tokens N --minutes M` | raise a budget |
-| `harness-release [<sha>] [--rollback] [--force]` | the harness release workflow (harness project) |
+| `harness-release [<sha>] [--rollback] [--force]` | the harness release workflow (harness project), built on `cezar install` and `cezar use` |
+| `cezar install`, `cezar use <id>`, `cezar versions` | (exist) self-update's install, switch and list |
 
 **API (all under `/api/v1`; project routes also under `/p/:projectId`):**
 - `GET /runs/:id/metrics`, `GET /runs/:id/scores`, `POST /runs/:id/score`;
 - `GET /factory` (definition, settings, queue, improvements), `GET /factory/check`, `POST /factory/improve`;
 - `GET /scores?since&groupBy=scorer|category|target`;
+- `POST /runs/:id/replay` (returns the variant group), and the existing `GET /groups/:groupId`, which gains scores per variant;
 - `GET|POST /benchmarks`, `GET /benchmarks/:suite/results`;
 - `GET /workspace/scores`, `GET /workspace/factory/harness-queue`;
 - `PUT /secrets/:name` gains `description`.
@@ -564,7 +635,10 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
 | An improvement run fails or is cancelled | its causes return to `open`; the next trigger retries; three failures in a row pause that queue and tell the owner |
 | An improvement PR is closed unmerged | its clusters return to `open` with the close reason |
 | The harness project isn't registered | the harness queue fills and is visible; nothing consumes it |
-| A release fails mid-switch | `previous` is restored; the release log records it; the harness manager is told |
+| A release fails mid-switch | `cezar use <previous id>` restores it; the release log records it; the harness manager is told |
+| A replay's original predates run identity | it's refused, with the reason; it can still be added to a benchmark by hand with a chosen `startCommit` |
+| A replay's start commit is gone (history rewritten) | it's refused, with the reason |
+| A replay asks for a harness version that's been pruned | it's refused, listing the installed versions |
 | The owner edits factory files by hand | normal; `cez factory check` runs on load; scoring and improvement use whatever is committed |
 | Two machines share a project | queues and scores are machine-local state; each machine scores its own runs |
 
@@ -603,7 +677,7 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
 
 | Area | Change |
 |---|---|
-| `contract/` | workflow `budget`; agent-step `secrets`; run fields `grantedSecrets`, `budget`, `budgetExceeded`, `harnessVersion`; metrics, score, cause, queue, improvement, scorer, suite and task schemas; secret `description`; `factory` settings in workspace and project config; new events |
+| `contract/` | workflow `budget`; agent-step `secrets`; run fields `grantedSecrets`, `budget` (generalizing dispatch's `budgetUsd`), `onBudget`, `budgetExceeded`, `startCommit`, `harnessVersion`, `replayOf`, `replayChange`; variant overrides; metrics, score, cause, queue, improvement, scorer, suite and task schemas; secret `description`; `factory` settings in workspace and project config; new events |
 | `workflows/` | lift the agent-step `secrets` rule; built-in task workflows; the capability block; budget accounting |
 | `factory/` (new) | load and validate scorers and benchmarks with built-in defaults; `cez factory check`; settings resolution |
 | `managers/` | list commands; `--secrets`, `--budget-*`, `task budget`, `improve`; budget and improvement follow-ups; `TurnStatsCollector` reused for tasks |
@@ -615,7 +689,11 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
 | web | score columns, Scores panel, Factory view, Factory settings |
 | `manager-skills/` | `manage-project` (list commands, workflow choice, budgets, improvement); `manage-harness` (new) |
 | `skills/improve-factory` (new) | the improvement playbook |
-| release | `scripts/harness-release.mjs`, the `~/.cezar/harness` layout and unit file, the `harness-release` workflow |
+| `self-update/` | used as is: `cezar install` from a build worktree, `cezar use`, supervisor restart, `versionRetention: 5` |
+| release | `scripts/harness-release.mjs` (wait for idle, health check, automatic `use <previous>`, staging cockpit, log) and the `harness-release` workflow; the unit runs `~/.cezar/bin/cezar` with `CEZ_SUPERVISED=1` |
+| variants (spec 010) | per-variant overrides; replay source; cap 5 for replay groups; score columns in the Compare view; no winner pick for replay groups |
+| `automations/` | the `factory` event source and a built-in automation per project |
+| `usage-ledger/` | `INTERNAL_CONSUMERS.scoring` |
 
 ## Tests and acceptance
 
@@ -640,9 +718,17 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
   - nothing starts while a run is in flight or its PR is open, or during cooldown;
   - a failed run returns its causes.
 - **Approval:** a PR touching a protected path is owner-only, even under `none`, and the manager's merge is refused.
-- **Benchmarks:** a suite runs every task under every configuration without side effects and records a matrix.
+- **Run identity:** every run records `startCommit` and `harnessVersion` at start, including dispatched children and Continue.
+- **Replay:**
+  - a replay starts from the original's `startCommit` with its saved workflow and inputs, changes exactly the one thing asked, and joins the original's variant group;
+  - its row has its own scores, and the Compare view shows them per variant;
+  - it never pushes, merges or deploys, and never feeds a queue;
+  - a `--harness` replay runs on a staging cockpit of that version.
+- **Budgets:** an old dispatch record with `budgetUsd` parses and still parks; a top-level run notifies.
+- **Benchmarks:** a suite replays every task under every configuration, `times` each, without side effects, and records a matrix.
 - **Harness release:**
-  - a failing build, benchmark or health check keeps or restores the previous release;
+  - it installs through `cezar install` and switches through `cezar use`;
+  - a failing build, benchmark or health check keeps or restores the previous version;
   - no switch happens while work is active;
   - scores record `harnessVersion`.
 - **Compatibility:** old run files parse; contract-parity and route-parity tests pass; every new env var is in `.env.example`.
@@ -672,6 +758,14 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
   - Cezar's existing metrics reused;
   - 1–3 routed causes per failure;
   - one-person defaults.
+- **v5:**
+  - a reuse map of what Cezar already has, part by part;
+  - budgets generalize dispatch's `budgetUsd` with park or notify;
+  - the judge reuses the one-shot model-call path;
+  - the improvement trigger is an automation event source;
+  - run identity (`startCommit`, `harnessVersion`) and replay as variants (spec 010), with benchmarks as saved replays;
+  - harness releases built on self-update (`~/.cezar/versions`, `cezar install`, `cezar use`, supervisor restart) instead of a new layout;
+  - weekly reports as artifacts.
 - **v4:** data model and storage; settings, CLI, API and events reference; failure handling and edge cases; security and privacy; zero-config and compatibility (env vars, owner-approved exceptions); calibration targets in acceptance.
 
 ## Sources
