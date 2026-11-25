@@ -4,74 +4,74 @@ Paste everything below the line into a new Codex session started in `~/dev/cezar
 
 ---
 
-You are taking over the build of the "self-improving factory" in this Cezar fork (`~/dev/cezar`, GitHub `mlei06/cezar`, trunk branch `factory`). Cezar is a local cockpit that runs coding agents as tasks under per-project managers. The spec adds budgets, metrics, scoring, self-improvement, replay, a self-releasing harness, and managers that lead their projects. **Your job is to finish the roadmap:** verify M1, then build M1.5 and M2 to M6 directly as code on `factory`, release each milestone, and verify it on the live cockpit. Fix errors and make improvements along the way. The owner isn't available to unblock you: decide, record the decision and keep going.
+You are the implementer for the "self-improving factory" in this Cezar fork (`~/dev/cezar`, GitHub `mlei06/cezar`, trunk `factory`). Cezar is a local cockpit that runs coding agents as tasks under per-project managers. **Verify M1, then implement M1.5 and M2–M6 from a coding session outside Cezar.** Work through PRs to `factory`, release the merged changes, and verify each milestone on the live cockpit. Make and record routine implementation decisions. When a check needs the owner or more live evidence, record it as pending and continue work whose prerequisites are satisfied.
 
 ## Read first, in this order
 
-1. `.ai/specs/2026-11-25-self-improving-factory-overseer-state.md`: where the build stands, machine state and open items. It's your resume point. Re-read it after any restart.
-2. `.ai/specs/2026-11-25-self-improving-factory-roadmap.md`: the Progress table, "Who does what", the definition of done, and for your current milestone its goal, deliverables, acceptance, watch points and the backlog rows assigned to it.
-3. `.ai/specs/2026-11-25-self-improving-factory.md` (the spec): for each milestone, only the decisions it names, their "Reuse map" rows, and the matching rows of "Data model and storage", "Settings, CLI and API reference", "Failure handling", "Security" and "Tests and acceptance". D11 and D12 also describe how the managers you're building should behave.
+1. `.ai/specs/2026-11-25-self-improving-factory-overseer-state.md` is the resume point for progress, machine state and open items. Re-read it after any restart. Reconcile it with git, open PRs and the release log before repeating work.
+2. Read the current milestone, assigned backlog rows, dependencies and definition of done in `.ai/specs/2026-11-25-self-improving-factory-roadmap.md`. Use this handoff for current responsibilities. The roadmap's old prompts and overseer runbook describe the earlier manager-led build.
+3. Read the milestone's decisions and matching reuse, storage, API, failure, security and test requirements in `.ai/specs/2026-11-25-self-improving-factory.md`. Include decisions referenced by the deliverables, such as D8 run identity in M2 and D8 replay in M4. D11 and D12 govern manager behavior.
 4. `.ai/specs/2026-11-25-self-improving-factory-observations.md`: what went wrong so far and why the spec says what it says.
-5. `.ai/skills/factory-work/SKILL.md`: how to work in this repository: which AGENTS.md sections matter, the validation order, test-resource rules, known host test failures, the public-fork rule, and what never to touch. Follow it as if it were your own instructions. AGENTS.md is about 62k characters, so read only the sections it names (`rg -n` and line ranges).
+5. Read `.ai/skills/factory-work/SKILL.md` and the relevant AGENTS.md sections it points to. The skill's staging-only and escalation rules apply to delegated tasks. This handoff gives the outside implementer responsibility for the live acceptance checks, releases and routine spec decisions described below. Apply the skill's validation, resource and public-fork rules throughout.
 
 ## Where things stand
 
-- **M0** is done. **M1** (spec D2, D3: built-in task workflows, the capability block, secret descriptions, list commands) is merged and live as release `0.21.0+release-41a8ac9`. The `cezar` project's manager was asked to verify M1's acceptance and then stand by.
-- **Your first step:** if the state file doesn't record M1's acceptance as verified, verify it yourself against the roadmap's M1 acceptance, including the check that a task made by hand from a project's New task form (description, workflow, model, skill) runs with the capability block in its prompt. Fix anything that fails. Write the M1 review into the observation log, mark M1 done in the Progress table, then start **M1.5** (spec D11, D12: the manager as project lead), then **M2** onward in order.
-- **The manager stands by.** Don't give it roadmap work. You may ask it for a Cezar task run if that's useful (`POST http://127.0.0.1:4321/api/v1/workspace/managers/<id>/messages`; the id is in `cezar-manager-id` under the `dataDir` named in `~/.config/factory-overseer.json`), but you don't need to.
+- At handoff, M0 was done and M1 (D2, D3) was merged and reported live as `0.21.0+release-41a8ac9`. M1 acceptance was pending. Use the state file and startup checks below for the current status.
+- **First, verify M1.** Check the manager's evidence against every M1 acceptance item and run any missing checks. Create the hand-made task through the live project's New task form with a description, workflow, model and skill. Verify its actual prompt locally for the expected capability block. Use a harmless task with no deployment or repository writes. Inspect secret-list output without printing values. Fix failures, write the M1 review and mark M1 done when acceptance holds. Then start M1.5 (D11, D12) and continue in roadmap order.
+- Keep implementation in the outside session. Use the harness manager for bounded live acceptance tasks and the release handover at M4. For an acceptance task, use the manager chat or `POST /api/v1/workspace/managers/<id>/messages`. The manager ID is in `cezar-manager-id` under the `dataDir` in the local overseer config.
 
 ## How to work
 
-- **Branches and PRs:** one branch and PR per deliverable, from current `origin/factory`, named `impl/m<N>-<slug>`, targeting `factory`. Small and reviewable beats complete and sprawling. In each PR, say which existing module you reused (the spec's reuse map) and list any "Spec decisions" you made.
-- **Reuse first.** Extend the module the reuse map names, and don't build a parallel one. Keep old run files, workflows and config parsing working exactly as before. New `CEZ_*` variables go in `.env.example` in the same commit.
-- **Validate before each PR**, in order, through npm:
+- **Branches and PRs.** Start each deliverable from current `origin/factory` on `impl/m<N>-<slug>`. Open the PR against `mlei06/cezar:factory` and verify the head and base before merging. Label it `fork-only` or `upstreamable` (D9). In the PR, name the reused module and list any spec decisions.
+- **Reuse first.** Extend the module in the reuse map and preserve compatibility with old run files, workflows and settings. Update `.env.example` for each `CEZ_*` contract change and the env table in `docs/reference.md` for user-facing variables.
+- **Validate runtime changes** through npm in this order, following AGENTS.md before commit and PR:
   1. `npm run typecheck`
   2. `npm test -- <dirs you touched>`
   3. the full `npm test`, once
   4. `npm run test:unit`
   5. `npm run build`
+  6. `npm run test:package`
 
-  Add a test that fails without your change. The known host failures listed in `factory-work` get noted, then you carry on.
+  Add a test for the changed behavior and prove it fails without the implementation. Record the exact known host failures from `factory-work` in the PR and continue validation. Investigate any new failure. Keep transcript-based checks local and use synthetic fixtures for committed tests.
 - **Test resources.** This is one laptop, and it has crashed under load:
   - never pass `--maxWorkers` or `--pool` to Vitest;
   - run at most one full suite at a time across everything you run;
   - wait for long commands inside one shell command rather than checking back;
   - rerun a timing failure on its own before believing it.
-- **Review.** Runtime PRs get one independent review pass before merging. Runtime means anything that executes: `packages/`, `scripts/`, build, test or CI config, and workflows. Re-read the full diff against the spec sections as a reviewer would, separately from writing it. At most two rounds, then decide by the merge rule:
+- **Review.** Give each runtime PR a separate review pass after implementation. Review the full diff against the relevant spec sections and acceptance checks. Runtime includes product code, scripts, build, test and CI config, and workflows. After at most two rounds, apply the merge rule:
   - **blocks the merge:** correctness bugs, data loss, secret-value leaks, security issues;
   - **merges anyway:** everything else, with the remaining findings listed as follow-ups in the PR and in the roadmap backlog.
 
   Docs, specs and skills merge after your own diff check.
-- **Merge** with a squash merge through `gh` once validation and review pass and the head includes current `factory`. Trunk commits that only touch docs, specs or skills don't force a rebase.
-- **Release** after merging runtime PRs, batching merges that land close together. From `~/dev/cezar`, run `node scripts/harness-release.mjs <merged sha> --wait-minutes 30`. It:
-  - builds that commit in its own worktree;
-  - waits until no Cezar task or manager is busy;
-  - switches versions and restarts the `cezar` user service;
-  - checks health and rolls back automatically.
+- **Merge** with a squash merge through `gh` once validation and review pass. Fetch `factory` again and check for runtime changes since the validated base. If there are any, rebase and revalidate before merging. Docs, specs and skill changes alone can wait until the next rebase.
+- **Release through M4.** Batch nearby runtime merges and release a SHA confirmed on `origin/factory`. Until the D9 workflow is ready, run `node scripts/harness-release.mjs <merged-sha> --wait-minutes 30` from the fork. Confirm the cockpit's task and manager status is readable before starting. The bootstrap script can treat failed status reads as idle. Keep starts quiet during the switch and leave a busy timeout pending for a retry.
 
-  If the restart would kill your own process, start the script detached (`systemd-run --user --collect --unit=harness-release-<sha7> --working-directory=$HOME/dev/cezar --setenv=PATH="$PATH" node scripts/harness-release.mjs <sha> --wait-minutes 30`), then read `journalctl --user -u harness-release-<sha7>` and the last line of `~/.cezar/factory/release-log.ndjson`. A rollback means the merge is broken: fix it forward or revert it. Never install or switch versions any other way, and never touch `~/.cezar/versions` or `~/.cezar/bin` by hand.
-- **Verify each milestone live**, against its acceptance in the roadmap, on the released cockpit, using real tasks where acceptance needs them. Then mark it done in the Progress table and write a short milestone review in the observation log: what worked, what didn't, and the spec changes it caused.
+  If a restart would kill your session, start the release detached with `systemd-run --user --collect --unit=harness-release-<sha7> --working-directory="$HOME/dev/cezar" --setenv=PATH="$PATH" node scripts/harness-release.mjs <merged-sha> --wait-minutes 30`. Check the command result or unit journal, the release log and the running version. The bootstrap script rolls back a failed health check when it has a previous version. A restart-command failure can exit before that rollback. After a failed switch, confirm the active version and recovery status before retrying. If the candidate was rolled back, fix it forward or revert its PR. The bootstrap script's manual rollback immediately after an automatic rollback can select the failed candidate.
+
+  At M4, verify the new D9 workflow, including a benchmark rejection and an automatic rollback, then verify its first good release. After that, hand routine releases to the harness manager through the workflow. Use the release path for version switches.
+- **Verify each milestone live** against the roadmap on the released cockpit. Record the released SHA, what passed, and any pending check with its prerequisite. Mark it done when its acceptance holds and write the review in the observation log. Use isolated staging for development, fixture replay, outage simulation and failure injection. Record staging results as such when an acceptance item still needs live evidence.
 - **Fix and improve as you go.** When you hit a bug, a flaky or slow path, or a gap in the spec, fix it in its own small PR, or add it to the roadmap backlog with the milestone it belongs to. Log notable findings in the observation log, with evidence, class and decision, as the existing entries do.
-- **Spec gaps.** When the spec is unclear or infeasible, decide in the direction that best fits its decisions and reuse map, and continue. Record the decision in the PR and as a spec changelog entry, bumping the version (`v5.16`, …). Stop only for something that would contradict the spec outright or weaken security.
-- **Owner-protected parts** (spec D6, and D7's "Always the owner" list): the scorer rubrics in `.ai/cezar/scorers/` (use them as written), the judge settings, the `improve-factory` skill, secrets and permissions. Build the mechanisms around them. Draft `improve-factory` in its own PR and leave it unmerged for the owner. Make the rest of M5 work without it where possible, and record that as a spec decision.
+- **Spec gaps.** Resolve routine ambiguities using the decisions and reuse map. Record the decision in the PR and, when it changes the spec, add a changelog entry and bump the version. Leave decisions that contradict the spec outright or affect protected security boundaries pending for the owner.
+- **Owner-protected parts.** Follow D6/D7 for scorers, judge settings, `improve-factory`, widening secrets or permissions, and the owner gate for manager-approved PRs with more than 400 changed lines of product code. D9 also protects changes to the release workflow. Use the scorer rubrics as written. Draft `improve-factory` in its own PR and leave it for the owner to merge. Once M5 can start, verify its mechanisms in staging with controlled fixtures and leave live launches pending until the owner approves the required workflow and skill.
+
+## Milestone gates
+
+- **M1.5:** verify the charter and manager behavior with bounded tasks. The deployment project's charter belongs in that project's repo. Preserve the owner gate on vision, goals and non-goals.
+- **M2:** if the historical run used in the metrics acceptance is available locally, compare it against the roadmap's counts there. Use synthetic data for committed tests and record the historical comparison as pending if the run is unavailable.
+- **M3 to M5:** record blind verdicts before viewing the judge's results. M5 starts only after calibration passes on at least 20 runs, at 80% or better for pass/fail and 70% or better for the main cause's target. M5 also depends on M4's rollback demonstration. If the judge is unavailable or a gate misses, record the missing evidence and continue only with work whose prerequisites hold.
 
 ## Commits, pushes and progress notes, for clean transitions
 
 The laptop crashes, and another agent or the owner may pick up after you, so:
 - **Commit small and often,** at least after every passing step. Use plain conventional messages (`feat(scoring): …`, `fix(release): …`, `docs(factory): …`). **Add no `Co-authored-by` or other trailer.**
 - **Push your branch after every commit.** Before pushing `factory`, always `git pull --rebase`.
-- **After every merge, release, milestone step or decision,** update the docs and push them to `factory` in the same sitting:
-  - the state file: "Last updated", "Where the build stands", "Open items";
-  - the roadmap's Progress table and backlog;
-  - the observation log, for anything notable.
+- **After every merge, release, milestone step or decision,** update the state file's "Last updated", "Where the build stands" and "Open items", plus the roadmap's Progress table and backlog. Log notable findings in the observation log. Push the update to `factory` in the same sitting. Use a separate worktree for the docs update when implementation changes are in progress.
 
-  The state file must always say what's in flight (branch, PR, step), what's next, and anything half-done that a newcomer would need to know.
-- **After a restart or a new session:**
-  1. read the state file;
-  2. check `systemctl --user is-active cezar factory-poller model-relay`;
-  3. check the last release-log line and the open PRs (`gh pr list`);
-  4. check your own `impl/*` branches;
-  5. resume from what the state file says.
+  The state file must always say what's in flight (branch, PR, step or release unit), which checks passed, what's pending and what's next. Keep evidence in public-safe summaries.
+- **After a restart or a new session**, reconcile the state file against these checks before resuming at the first outstanding step.
+  1. Check `systemctl --user is-active cezar factory-poller model-relay`.
+  2. Check cockpit health, the latest release attempt, the last successful switch or rollback, and any release unit still running.
+  3. Check the fork's open PRs (`gh pr list --repo mlei06/cezar --base factory`), your `impl/*` branches and any worktrees with local changes.
 
 ## Hard rules
 
@@ -84,9 +84,9 @@ The laptop crashes, and another agent or the owner may pick up after you, so:
 
   Use generic placeholders. Machine-specific settings live in `~/.config/factory-overseer.json` (never committed) and in local workspace settings. Run data stays outside the repository.
 - **Branches:** never commit to `main`, and never force-push `factory` or `main`. Force-with-lease on your own `impl/*` branches is fine.
-- **Secrets:** never print a secret's value.
-- **System settings:** don't change them without the owner. That covers `.wslconfig`, systemd units (other than through the release script) and OS config.
-- **Other projects:** don't deploy any of them to production (for example the paused deployment project) unless the owner asks. Acceptance that needs a production deploy is recorded as pending on the owner, with everything up to the deploy verified.
+- **Secrets:** leave live credentials and grants to the owner. Never print a secret's value.
+- **System settings:** leave `.wslconfig`, systemd service definitions and OS config to the owner. Use the release path for changes to `~/.cezar/versions` and `~/.cezar/bin`.
+- **Other projects:** production deployment requires the owner's authorization. Verify through staging and record the live deployment and behavior checks as pending on the owner. Apply this to both the resumed rollout after M2 and the D12.7 one-message production acceptance.
 - **Overseer tooling:** don't edit `.ai/factory-overseer/` beyond reading it, except to retire the judge prototype once M3's built-in judge replaces it.
 - **Git history:** leave the pending history purge in the state file alone; it's the owner's call.
 
@@ -98,4 +98,4 @@ The laptop crashes, and another agent or the owner may pick up after you, so:
 
 ## Done
 
-The program is done when the roadmap's definition of done holds. Some items need weeks of real use, such as merged improvement PRs whose clusters' failure rates have fallen; others need the owner, such as production deploys. Report those as pending, saying who they wait on, with the mechanism verified. Finish by writing a summary into the state file: what shipped, what's pending and on whom, and the backlog that remains. Push it.
+Use the roadmap's full definition of done. A released mechanism, a verified workflow and measured outcomes can land at different times. Keep the program open while production checks, approvals or improvement results still need evidence. Before handing off or finishing, update the state file with what shipped, verified outcomes, pending checks and their owners, and the remaining backlog. Push the update to `factory`.
