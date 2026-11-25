@@ -213,7 +213,7 @@ Attached skill: deploy (scripts in its folder)
 
 Over the cap, Cezar trims in this order: other workflows' names, then secret descriptions. Secret names are never dropped, and the cap doesn't apply to them. If the names alone would exceed 2k, they're listed compactly, comma-separated on one line, and the block may run over the cap by that much. It also reports how many entries it omitted, on one short line. That omission line, like the secret names, is mandatory and exempt from the cap: the cap governs only the optional content (descriptions and other workflows). (v5.3, v5.5, both after the manager flagged boundary conflicts.)
 
-**Secret descriptions.** A secret gains an optional `description` (at most 200 characters, never secret, never redacted). A description is user-written metadata. The only guard is at write time: a description that contains its own secret's value is refused. There is no scanning of descriptions against other secrets or host credentials. Prompts render descriptions as stored, except that a description containing its own secret's value is omitted: the same single check, which covers descriptions written before the guard existed (v5.7). (v5.6, settled after review rounds kept extending description scrubbing.) It's set with `cezar secrets set NAME --description "…"`, `cezar secrets describe NAME "…"`, in Settings, or by a manager.
+**Secret descriptions.** A secret gains an optional `description` (at most 200 characters, never secret, never redacted). A description is user-written metadata: printable text, one line. At write time, a description containing control characters (NUL included) or its own secret's value is refused. There is no scanning of descriptions against other secrets or host credentials. Prompts render descriptions as stored, except that a description failing either write-time check (its own secret's value, or control characters) is omitted. That covers descriptions written before the checks existed, and no runner ever needs to escape a description (v5.7, v5.10). (v5.6, settled after review rounds kept extending description scrubbing.) It's set with `cezar secrets set NAME --description "…"`, `cezar secrets describe NAME "…"`, in Settings, or by a manager.
 
 ### D4. One run budget, for every run
 
@@ -762,6 +762,7 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
   - Cezar's existing metrics reused;
   - 1–3 routed causes per failure;
   - one-person defaults.
+- **v5.10:** descriptions are printable one-line text: control characters are refused at write and omitted at render, so runners never escape them.
 - **v5.9:** `implement` without `validation.commands`: the `test` script, else no checks and a note on the PR.
 - **v5.8:** no provider or project-specific names in the harness: the judge and the low-reasoning model (`operate`) are machine settings (`factory.judge`, `factory.models.lowReasoning`); evidence and examples made generic.
 - **v5.7:** render applies the same own-value check (omit), covering older descriptions; still no other scanning.
