@@ -54,6 +54,7 @@ After M3, this log is also the calibration set for the automated judge.
 | M1-6 | A built-in workflow task added a human gate to `implement` that the spec doesn't have | PR #6 | task-setup | corrected through the manager; spec D2 unchanged |
 | M1-7 | Scope drift that matches the brief but not the spec is invisible to the judge, which only sees the brief | calibration on e04a507e | harness | backlog B19: give the `scope` scorer the spec sections a task names |
 | M1-8 | Load of 9 to 11 on 12 cores, a likely cause of the host crashes: the PR #7 task ran two full Vitest suites at once in one worktree, one with `--maxWorkers=5` against the repository's cap of 2, while other tasks ran suites too; PR #6 then reported five timing failures in web scheduling tests | process list, 16:51; task 0705b477; PR #6 final message | harness (resources), task-setup | stopped the duplicate run; workspace `maxParallel` back to 2; manager rules (no worker overrides, one full suite per task, rerun timing failures alone) into briefs and `factory-work`; backlog B22 |
+| M1-9 | Confirms M1-8: under the new test rules, PR #6's full suite passed with only the three documented host failures; the five web scheduling failures were load-induced | PR #6 final run, 18,554 passes | none | keep the rules |
 
 ## Judge calibration
 
