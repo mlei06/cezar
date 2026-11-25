@@ -172,6 +172,24 @@ Until M3 and M5 exist, this is the manual version of scoring and self-improvemen
 
 These numbers are the baseline the factory should improve on over later milestones.
 
+## Spec revisions and the backlog
+
+The build is itself a source of findings. Whatever goes wrong or turns out missing while the manager implements the spec is diagnosed by the overseer: what failed, its root cause and where the fix belongs. Each finding then becomes one of:
+- **a spec revision,** when it conflicts with or changes something the spec decides. The overseer edits the spec and records it in the spec's changelog. If the affected milestone is in progress, the overseer tells the manager.
+- **a backlog item,** when it's a new feature or improvement that doesn't change current decisions. It goes into the backlog below, with its evidence, and is scheduled into a milestone, or a later one, at the next milestone review.
+- **a manager change** (goal, memory, settings), or **a repository change** given to the manager as a prompt (AGENTS.md, a skill, a workflow).
+- **nothing,** with the reason logged.
+
+**The overseer owns the spec and the backlog.** The manager implements them and doesn't rewrite its own requirements. When the manager or a task finds the spec infeasible, wrong or ambiguous, it says so in its report, with the reason. The overseer decides and revises.
+
+## Backlog
+
+New features and improvements found during the build, not yet scheduled. Each entry: what, why (evidence), and the milestone it's proposed for.
+
+| # | Item | Evidence | Proposed for |
+|---|---|---|---|
+| | (empty) | | |
+
 ## Risks
 
 | Risk | Mitigation |
@@ -187,3 +205,4 @@ These numbers are the baseline the factory should improve on over later mileston
 ## Changelog
 
 - v1 (2026-11-25): first plan.
+- v1.1 (2026-11-25): spec revisions and the backlog (owned by the overseer).
