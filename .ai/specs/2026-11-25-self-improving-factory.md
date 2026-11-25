@@ -81,7 +81,7 @@ Every part of this spec builds on something Cezar already has. Where a part need
 |---|---|---|---|
 | Factory files (D1) | workflows in `.ai/cezar/workflows/`; skills with local-first discovery; AGENTS.md; workflow validation (`stepsIssue`, `graphIssues`, `POST /workflows/parse`); the `.ai/cezar/.gitignore` allowlist | reuse | scorer and benchmark files, which have no home today; `cez factory check` wraps the existing validators and adds theirs |
 | Settings (D1) | workspace `~/.cezar/config.json` and project `.ai/cezar/config.json`, with the schema rules (every field optional with `.catch`, `mergeWriteWorkspaceConfig`), and the Settings frame | extend | a `factory` section in both |
-| Task workflows (D2) | per-step runner, model, effort, skill, allowed tools; step choice wins over task and project defaults; built-ins via `builtIn()` in `workflows/templates.ts`; `secrets:` on check steps; `budgetUsd` on dispatched subtasks | extend | workflow `budget:`, agent-step `secrets:`, three built-in task workflows |
+| Task workflows (D2) | per-step runner, model, effort, skill, allowed tools; step choice wins over task and project defaults; built-ins via `builtIn()` in `workflows/templates.ts`; `secrets:` on check steps; `budgetUsd` on dispatched subtasks; `.ai/agentic.config.json` `validation.commands` | extend | workflow `budget:`, agent-step `secrets:`, three built-in task workflows |
 | List commands (D3) | `cez-manager workflows`; the `/models`, `/skills`, `/secrets` and `/workflows` routes; agent accounts in `cez-manager status`; manager tools forward in process to existing routes | reuse | thin `cez-manager` commands over the existing routes |
 | Capability block (D3) | the run's system prompt is composed from global, project, workflow and skill instructions and saved on the run (`systemPrompt`) so Continue reuses it; secrets are already injected | extend | one more composed section, saved with the rest |
 | Secret descriptions (D3) | the secret store keeps metadata (audiences, `updatedAt`) beside the encrypted value | extend | a `description` field |
@@ -153,6 +153,8 @@ steps:
 | `review-pr` (exists) | codex, gpt-6.2-sol, read-only | 1.5M, 20 min | PR review |
 | `operate` | opencode, davy/mistral-large-4 | 800k, 20 min | running known workflows or scripts, status, summaries, moving docs |
 | `improve-factory` | codex, gpt-6.2-sol | 4M, 45 min | improvement runs (D6); owner-protected |
+
+**`implement` validates with check steps, not with the model.** Its graph is an agent step, then one check step per validation command, with a failing check looping back to the agent (at most twice). Waiting for the tests is then the engine's job. The commands come from the project's existing `.ai/agentic.config.json` (`validation.commands`, which the om-* skills already read), else from the project's `test` script. Guidance in a skill wasn't enough: the M0 warm-up task polled its test run across eight model turns although `factory-work` told it not to (observation M0-6).
 
 The built-in model choices are defaults for this fork's machine. A project overrides a built-in by committing a workflow with the same name. A machine without OpenCode or Mistral falls back to the project's default runner for `operate`, with a note on the task.
 
@@ -759,6 +761,7 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
   - Cezar's existing metrics reused;
   - 1–3 routed causes per failure;
   - one-person defaults.
+- **v5.2:** `implement` validates with check steps from `.ai/agentic.config.json` (M0 warm-up finding).
 - **v5.1:** findings from M0: release ids via linked build worktrees, the davy TLS relay, Mistral's 262k window.
 - **v5:**
   - a reuse map of what Cezar already has, part by part;

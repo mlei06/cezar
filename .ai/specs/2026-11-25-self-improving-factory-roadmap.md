@@ -295,6 +295,7 @@ New features and improvements found so far, not yet scheduled into a milestone. 
 | B10 | **Monitoring webhooks** that start investigation tasks | spec D10 | after M6 |
 | B11 | **Upstream #1617:** wait for the maintainers' reply, then open the Azure PR from `feat/azure-repos-forge` | the upstream thread | when they reply |
 | B12 | **Seed the queues by re-scoring earlier runs** with `cez score` when M3 ships (both projects, including the open-webui upgrade task), so improvement starts from real evidence | the queues would otherwise start empty; point 3 of the definition of done needs failures to accumulate | M3 |
+| B13 | **Global skills read by every task** (graphify and others) add noise to first reads; consider a per-project skill allowlist, or keeping tool-specific skills out of the global folders | M0-8 | after M3, using efficiency scores |
 
 ## Risks
 

@@ -36,6 +36,10 @@ After M3, this log is also the calibration set for the automated judge.
 | M0-3 | The OpenCode binary ignores every custom-CA setting (`NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `BUN_CA_BUNDLE_PATH`), so it can't verify davy's corporate certificate. Every OpenCode-Mistral task, the planned `operate` workflow and an OpenCode judge would fail on this machine. | `UNABLE_TO_VERIFY_LEAF_SIGNATURE` on `opencode run`; openssl verifies with the same bundle | access (infra) | a localhost-only, fixed-destination TLS relay (`davy-relay` user service, 127.0.0.1:5001) and OpenCode's davy provider pointed at it; spec D5 judge note |
 | M0-4 | `mistral-large-4` on davy has a 262,144-token window; the largest transcript so far (the upgrade task) renders to about 630k characters, roughly 160k tokens, and fits whole | davy `/v1/models` `max_model_len` | none | answers spec open question 3 |
 | M0-5 | A fork with an `upstream` remote could make task PRs target open-mercato/cezar through cezar's fork-parent lookup | AGENTS.md, fork-parent lookup | harness | `gh repo set-default mlei06/cezar`; upstream push disabled |
+| M0-6 | The warm-up task (85efd7a7) polled its backgrounded test run across 8 model turns, although `factory-work` says to wait inside one command: 46 requests and 2.2M tokens for a two-line change | judge efficiency: wasteful; transcript +1:34 to +6:18 | harness | spec v5.2: `implement` validates with check steps; the M1 prompt names it |
+| M0-7 | The warm-up task stopped to investigate a known, environment-dependent test failure (`open-in-app`, WSL) | transcript +6:18 | repository (harness) | the manager adds known pre-existing failures to `factory-work` (M1 item 0) |
+| M0-8 | Tasks read unrelated global skills up front (graphify, about 19k characters with two others) | warm-up first call | harness | backlog B13 |
+| M0-9 | The first warm-up review approved after reading the diff without running tests ("Tests were not run") | review 89c3fffa | task-setup | acceptable for review-pr (read-only); validation belongs in the implement workflow's checks (v5.2) |
 
 ## Judge calibration
 
@@ -47,6 +51,11 @@ Blind comparisons: the overseer's verdict is written before Mistral's is read, o
 | open-webui 43299e6b | efficiency | wasteful | some-waste (rubric v1), then wasteful (v2) | no, then yes | no: judge harness/workflow, overseer docs + brief | v2 anchors the labels; the judge prompt now defines targets |
 | open-webui 43299e6b | procedure | minor-lapse (read the manager skill) | followed | yes (both pass) | n/a | judge didn't treat reading a manager skill as a lapse; harmless now it's manager-only |
 | open-webui 43299e6b | scope | in-scope (follow-ups were authorized) | in-scope | yes | n/a | |
+
+| cezar 85efd7a7 (warm-up) | outcome | delivered | delivered | yes | n/a | blind verdict written first |
+| cezar 85efd7a7 | efficiency | wasteful (after seeing metrics) | wasteful | yes | yes: workflow | |
+| cezar 85efd7a7 | procedure | followed | followed | yes | n/a | |
+| cezar 85efd7a7 | scope | in-scope | in-scope | yes | n/a | |
 
 Rubric revisions: efficiency v2 (2026-11-25), anchored labels after the 43299e6b disagreement. Judge prompt: target definitions added after the same run.
 
