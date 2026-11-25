@@ -21,11 +21,13 @@ Last updated: 2026-11-25 21:50 UTC.
 - **Before merging:** the PR head must include current `factory`. Commits that only touch `.ai/specs/` or `.ai/factory-overseer/` don't force a rebase or revalidation.
 - **After a runtime merge:** hold new starts until the overseer confirms the release (until M4's `harness-release` can hold starts itself).
 - **Pushes:** a task's force-with-lease push to its own `cez/*` branch is approved by the manager itself. Never `factory` or `main`.
+- **Test resources (M1-8):** never override Vitest's worker cap, at most one full `npm test` per task at a time, rerun timing failures alone before reporting them.
 
 ## Machine state the overseer depends on
 
 - **Services** (user systemd): `cezar` (runs `~/.cezar/bin/cezar`, the released harness), `factory-poller`, `model-relay`.
 - **Config:** `~/.config/factory-overseer.json` (local, never committed).
+- **Workspace `maxParallel` is 2** (back from 4 after the host overloaded). Raise it only once B22 limits a task's CPU.
 - **Tooling and restore steps:** `.ai/factory-overseer/README.md`.
 - **The judge prototype needs the VPN:** the judge endpoint only resolves on the internal network.
 
