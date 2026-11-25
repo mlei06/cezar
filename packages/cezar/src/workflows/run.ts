@@ -6925,6 +6925,7 @@ export class RunManager {
       profile: typeof continueProfile, names: string[] | undefined,
     ): AgentSession => {
       const contextualOpeningPrompt = withContext(context);
+      const capability = capabilities(profile.secrets);
       const started = this.launchWithSecretPolicy(runId, state, stepId, {
         sessionId: launchSessionId, backend: continueBackend, profileId: profile.profileId,
       }, names, (observe) => runner.startSession(
@@ -6937,10 +6938,11 @@ export class RunManager {
             dispatchPromptPart(state.dispatchPrompt, record?.systemPrompt),
             state.automationsPrompt,
             record?.systemPrompt,
-            capabilities(profile.secrets),
+            capability,
             artifactsPromptPart(artifactsDir(this.dataDir, runId)),
             generateFollowups ? HANDOFF_INSTRUCTIONS : HANDOFF_ONLY_INSTRUCTIONS,
           ),
+          resumeSystemPrompt: capability,
           userPrompt: attachments.length
             ? `${contextualOpeningPrompt}\n\n${pastedAttachmentsText(attachments, this.attachmentLibraryHint(attachments, state.grantedAttachmentLibrary))}`
             : contextualOpeningPrompt,
@@ -9530,7 +9532,9 @@ export class RunManager {
     const launch = (
       launchSessionId: string, resume: boolean, prompt: string,
       profile: typeof stepProfile, names: string[] | undefined,
-    ): AgentSession => this.launchWithSecretPolicy(runId, state, step.id, {
+    ): AgentSession => {
+      const capability = capabilities(profile.secrets);
+      return this.launchWithSecretPolicy(runId, state, step.id, {
         sessionId: launchSessionId, backend: stepBackend, profileId: profile.profileId,
       }, names, (observe) => runner.startSession(
         {
@@ -9544,12 +9548,13 @@ export class RunManager {
             dispatchPromptPart(state.dispatchPrompt, extraSystemPrompt),
             state.automationsPrompt,
             extraSystemPrompt,
-            capabilities(profile.secrets),
+            capability,
             artifactsPromptPart(artifactsDir(this.dataDir, runId)),
             followupsEnabled() && input.generateFollowups !== false
               ? HANDOFF_INSTRUCTIONS
               : HANDOFF_ONLY_INSTRUCTIONS,
           ),
+          resumeSystemPrompt: capability,
           userPrompt: [profile.trackerContext, prompt].filter(Boolean).join('\n\n'),
           images,
           cwd: state.cwd,
@@ -9596,6 +9601,7 @@ export class RunManager {
           canAskPermission: () => this.canAskPermission(state),
         },
       ));
+    };
     const attach = (started: AgentSession, resume: boolean): AgentSession => {
       state.session = resume ? resumeGuard.track(started) : started;
       state.sessionEverOpened = true;

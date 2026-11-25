@@ -44,6 +44,7 @@
 // `MOCK_START=silent` never prints the URL line; `MOCK_START=stderr` prints it on
 // stderr. `MOCK_PATH_DIR` overrides the `directory` `GET /path` reports.
 // `MOCK_API=v2` answers every non-`/api/` POST with 405, as OpenCode 2.x does.
+import { appendFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 
 const args = process.argv.slice(2);
@@ -86,6 +87,12 @@ const info = (extra) => ({
   ...extra,
 });
 
+function recordCapabilityRequest(request) {
+  if (process.env.D3_MOCK_REQUESTS_FILE) {
+    appendFileSync(process.env.D3_MOCK_REQUESTS_FILE, JSON.stringify(request) + '\n');
+  }
+}
+
 const server = createServer((req, res) => {
   const url = req.url ?? '';
   if (req.method === 'GET' && url === '/path') {
@@ -105,6 +112,7 @@ const server = createServer((req, res) => {
     return;
   }
   if (req.method === 'GET' && url.startsWith('/session/') && !url.slice('/session/'.length).includes('/')) {
+    recordCapabilityRequest({ method: 'GET', url });
     // Reopening a session (#1193): only the mock's own session still exists.
     if (url !== `/session/${SESSION_ID}`) {
       res.writeHead(404, { 'content-type': 'application/json' });
@@ -186,6 +194,9 @@ const server = createServer((req, res) => {
           return '';
         }
       })();
+      recordCapabilityRequest({
+        method: 'POST', url, text: promptText, hasRevokedKey: Boolean(process.env.D3_REVOKED_KEY),
+      });
       const script = promptText.includes('#drop-then-die')
         ? 'drop-then-die'
         : promptText.includes('#drop-post')

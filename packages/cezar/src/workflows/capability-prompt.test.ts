@@ -41,15 +41,33 @@ describe('task capability block', () => {
     expect(descriptionsTrimmed.match(/^  KEY_\d+/gm)).toEqual(secrets.map(({ name }) => `  ${name}`));
   });
 
+  it('fits all names and omissions at the compact boundary', () => {
+    const names = Array.from({ length: 30 }, (_, i) => `KEY_${String(i).padStart(2, '0')}_${'X'.repeat(56)}`);
+    const block = capabilityPrompt({
+      ...input, workflows: ['plan'], secrets: names.map((name) => ({ name, description: 'Fixture description' })),
+    });
+    expect(block.length).toBeLessThanOrEqual(2_000);
+    expect(block.split('\n')[0]?.split(',').map((name) => name.trim())).toEqual(names);
+    expect(block).toContain('Omitted: 1 workflow names, 30 secret descriptions.');
+  });
+
+  it('uses every character for names if there is no room for the omission note', () => {
+    const names = Array.from({ length: 16 }, (_, i) => `KEY_${String(i).padStart(2, '0')}_${'X'.repeat(117)}`);
+    const block = capabilityPrompt({
+      ...input, workflows: ['plan'], secrets: names.map((name) => ({ name })),
+    });
+    expect(block.length).toBe(1_999);
+    expect(block.split(',')).toEqual(names);
+  });
+
   it('preserves every name on one line when names alone exceed the cap', () => {
     const names = Array.from({ length: 40 }, (_, i) => `KEY_${String(i).padStart(2, '0')}_${'X'.repeat(60)}`);
     const block = capabilityPrompt({
       ...input, workflows: ['plan'], secrets: names.map((name) => ({ name, description: 'Fixture description' })),
     });
     expect(block.length).toBeGreaterThan(2_000);
-    expect(block.split('\n').filter((line) => line.startsWith('  '))).toEqual([`  ${names.join(', ')}`]);
+    expect(block.split('\n')[0]?.split(',').map((name) => name.trim())).toEqual(names);
     expect(block).toContain('Omitted: 1 workflow names, 40 secret descriptions.');
     expect(block).not.toContain('Fixture description');
-    expect(block).toContain('Attached skill: jenkins-deploy');
   });
 });

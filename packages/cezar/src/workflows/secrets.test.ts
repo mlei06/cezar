@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync }
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildChildEnv } from '../core/agent-env.ts';
 import { RunStore } from '../runs/store.ts';
@@ -56,7 +57,7 @@ describe('project and workspace secrets in check steps', () => {
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-secrets-'));
     project = `secrets-${randomUUID()}`;
     scope = { kind: 'project', projectId: project, root: repoRoot };
-    for (const key of ['CEZ_DRY_RUN', 'CEZ_MOCK_STDIN_FILE', 'CEZ_MOCK_ARGS_FILE']) savedEnv[key] = process.env[key];
+    for (const key of ['CEZ_DRY_RUN', 'CEZ_MOCK_STDIN_FILE', 'CEZ_MOCK_ARGS_FILE', 'CEZ_OPENCODE_BIN', 'CEZ_REDACT_SECRETS']) savedEnv[key] = process.env[key];
     process.env.CEZ_DRY_RUN = '1';
     stdinLog = join(repoRoot, '.mock-stdin.ndjson');
     process.env.CEZ_MOCK_STDIN_FILE = stdinLog;
@@ -91,6 +92,11 @@ describe('project and workspace secrets in check steps', () => {
       await new Promise((r) => setTimeout(r, 100));
     }
   };
+
+  const capturedPrompts = () => readFileSync(argsLog, 'utf8').trim().split('\n')
+    .map((line) => JSON.parse(line) as string[])
+    .filter((argv) => argv.includes('--append-system-prompt'))
+    .map((argv) => argv[argv.indexOf('--append-system-prompt') + 1]!);
 
   const checkOutputs = (id: string): string[] =>
     readFileSync(join(repoRoot, '.ai/cezar/runs', `${id}.ndjson`), 'utf8')
@@ -217,7 +223,13 @@ describe('project and workspace secrets in check steps', () => {
     const steps = store.getRun(record.id)?.steps;
     expect(steps?.[0]?.capabilityPrompt).toContain('  SHARED_KEY');
     expect(steps?.[1]?.capabilityPrompt).toContain('Workflow: scoped');
-    expect(steps?.[1]?.capabilityPrompt).not.toContain('Secrets in your environment');
+    expect(steps?.[1]?.capabilityPrompt).toContain('Secrets in your environment: none.');
+    const prompts = capturedPrompts();
+    expect(prompts).toHaveLength(2);
+    expect(prompts[0]).toContain(steps![0]!.capabilityPrompt!);
+    expect(prompts[1]).toContain(steps![1]!.capabilityPrompt!);
+    expect(prompts[1]).not.toContain('SHARED_KEY');
+    expect(prompts.join('\n')).not.toContain('fixture-value');
     store.flush();
     expect(RunStore.open(join(repoRoot, '.ai/cezar')).getRun(record.id)?.workflowDef?.budget).toEqual(budget);
 
@@ -228,8 +240,19 @@ describe('project and workspace secrets in check steps', () => {
   }, 30_000);
 
   it('composes and snapshots effective capabilities on start and Continue', async () => {
+    process.env.CEZ_REDACT_SECRETS = '0';
     await secrets.set(workspace, 'SHARED_KEY', 'workspace-fixture-value', ['agents'], 'Workspace description');
     await secrets.set(scope, 'SHARED_KEY', 'project-fixture-value', ['agents'], 'Project description');
+    await secrets.set(scope, 'LEAKY_DESCRIPTION', 'synthetic-own-fixture-value', ['agents'],
+      'Copied: synthetic-own-fixture-value');
+    await secrets.set(scope, 'CROSS_DESCRIPTION', 'synthetic-granted-value', ['agents'],
+      'Copied another value: check-fixture-value');
+    await secrets.set(scope, 'NORMALIZED_DESCRIPTION', 'synthetic-other-granted-value', ['agents'],
+      'Copied a short value: x   y');
+    await secrets.set(scope, 'SHORT_ONLY', 'x y', ['checks']);
+    await secrets.set(scope, 'MARKER_ONLY', '[REDACTED]', ['checks']);
+    await secrets.set(scope, 'MARKER_DESCRIPTION', 'synthetic-marker-granted-value', ['agents'],
+      'Copied exactly: [REDACTED]');
     await secrets.set(scope, 'CHECK_ONLY', 'check-fixture-value', ['checks']);
     await secrets.set(scope, 'UNLISTED', 'unlisted-fixture-value', ['agents']);
     await secrets.set(scope, 'OPENAI_API_KEY', 'login-fixture-value', ['agents']);
@@ -243,7 +266,7 @@ describe('project and workspace secrets in check steps', () => {
       source: 'file',
       budget: { tokens: 300_000, minutes: 30 },
       steps: [
-        { id: 'work', prompt: '{{task}}', skill: 'fixture-skill', secrets: ['SHARED_KEY', 'CHECK_ONLY', 'OPENAI_API_KEY', 'MISSING'] },
+        { id: 'work', prompt: '{{task}}', skill: 'fixture-skill', secrets: ['SHARED_KEY', 'LEAKY_DESCRIPTION', 'CROSS_DESCRIPTION', 'NORMALIZED_DESCRIPTION', 'MARKER_DESCRIPTION', 'CHECK_ONLY', 'OPENAI_API_KEY', 'MISSING'] },
         { id: 'verify', command: 'true' },
       ],
     };
@@ -251,16 +274,12 @@ describe('project and workspace secrets in check steps', () => {
     const record = manager.startRun(workflow, { task: 'mock:done go', worktree: false, systemPrompt: instructions });
     await settle(record.id);
 
-    const capturedPrompts = () => readFileSync(argsLog, 'utf8').trim().split('\n')
-      .map((line) => JSON.parse(line) as string[])
-      .filter((argv) => argv.includes('--append-system-prompt'))
-      .map((argv) => argv[argv.indexOf('--append-system-prompt') + 1]!);
     const capabilityBlock = (prompt: string) => prompt.split('\n\n---\n\n').find((part) => part.startsWith('Workflow: capability-fixture'));
     const opening = capturedPrompts()[0]!;
     const block = capabilityBlock(opening);
     expect(block).toBeDefined();
     expect(opening).toContain(`${instructions}\n\n---\n\n${block}\n\n---\n\n`);
-    expect(block?.split('\n').filter((line) => line.startsWith('  '))).toEqual(['  SHARED_KEY: Project description']);
+    expect(block?.split('\n').filter((line) => line.startsWith('  '))).toEqual(['  CROSS_DESCRIPTION', '  LEAKY_DESCRIPTION', '  MARKER_DESCRIPTION', '  NORMALIZED_DESCRIPTION', '  SHARED_KEY: Project description']);
     expect(block).toContain('Workflow: capability-fixture (claude); budget 300000 tokens, 30 min active');
     expect(block).toContain('Other workflows in this project: ');
     expect(block).toContain('quick-task');
@@ -270,11 +289,55 @@ describe('project and workspace secrets in check steps', () => {
     expect(RunStore.open(join(repoRoot, '.ai/cezar')).getRun(record.id)?.steps[0]?.capabilityPrompt).toBe(block);
 
     await secrets.describe(scope, 'SHARED_KEY', 'Updated project description');
+    await secrets.unset(scope, 'LEAKY_DESCRIPTION');
     expect(manager.continueRun(record.id, { text: 'mock:done continue' })).toEqual({ ok: true });
     await vi.waitFor(() => {
-      expect(capturedPrompts().map(capabilityBlock)).toContain(block?.replace('Project description', 'Updated project description'));
+      expect(capturedPrompts().map(capabilityBlock)).toContain(block?.replace('  LEAKY_DESCRIPTION\n', '').replace('Project description', 'Updated project description'));
     }, { timeout: 10_000 });
     await settle(record.id);
+  }, 30_000);
+
+  it('refreshes actual OpenCode 1.x resume prompts after a vault grant is revoked', async () => {
+    process.env.CEZ_OPENCODE_BIN = fileURLToPath(new URL('../core/__fixtures__/opencode/mock-opencode-serve.mjs', import.meta.url));
+    const requestsLog = join(repoRoot, 'requests.ndjson');
+    const resolveEnv = manager['agentEnvForStep'].bind(manager);
+    manager['agentEnvForStep'] = async (...args) => {
+      const profile = await resolveEnv(...args);
+      profile.env.D3_MOCK_REQUESTS_FILE = requestsLog;
+      return profile;
+    };
+    const value = 'synthetic-revoked-d3-credential';
+    await secrets.set(scope, 'D3_REVOKED_KEY', value, ['agents'], 'Old description');
+    const record = manager.startRun({
+      name: 'native-resume',
+      source: 'file',
+      steps: [
+        { id: 'work', prompt: '{{task}}', secrets: ['D3_REVOKED_KEY'] },
+        { id: 'check', command: 'true' },
+      ],
+    }, { task: 'Start the fixture', runner: 'opencode', worktree: false });
+    await settle(record.id);
+    const requests = () => readFileSync(requestsLog, 'utf8').trim().split('\n')
+      .map((line) => JSON.parse(line) as { method: string; url: string; text?: string; hasRevokedKey?: boolean });
+    expect(requests()).toEqual([
+      expect.objectContaining({ method: 'POST', hasRevokedKey: true, text: expect.stringContaining('  D3_REVOKED_KEY: Old description') }),
+    ]);
+
+    await secrets.set(scope, 'D3_REVOKED_KEY', value, ['checks']);
+    expect(manager.continueRun(record.id, { text: 'Continue the fixture' })).toEqual({ ok: true });
+    await vi.waitFor(() => expect(requests()).toHaveLength(3), { timeout: 10_000 });
+    const [opening, reopen, resume] = requests();
+    expect(reopen).toEqual({ method: 'GET', url: '/session/ses_mock_1' });
+    expect(resume).toMatchObject({
+      method: 'POST', url: '/session/ses_mock_1/message', hasRevokedKey: false,
+      text: expect.stringContaining('Secrets in your environment: none.'),
+    });
+    expect(resume?.text).toContain('Continue the fixture');
+    expect(resume?.text).not.toContain('D3_REVOKED_KEY');
+    expect(resume?.text).not.toContain('Old description');
+    expect(`${opening?.text}${resume?.text}`).not.toContain(value);
+    expect(resume?.text).toContain(store.getRun(record.id)!.steps.at(-1)!.capabilityPrompt!);
+    await vi.waitFor(() => expect(store.getRun(record.id)?.status).toBe('waiting'), { timeout: 10_000 });
   }, 30_000);
 
   it('never leaks a secret into the server process env', async () => {

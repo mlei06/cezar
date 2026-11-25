@@ -1,6 +1,7 @@
 import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from 'node:crypto';
 import { promises as fs, constants } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { redactSecrets } from '../core/secret-redaction.ts';
 import { renameWithRetry } from '../fs-rename.ts';
 import { z } from 'zod';
 import {
@@ -314,12 +315,24 @@ export class SecretStore {
     };
     const values: Record<string, string> = {};
     const descriptions: ResolvedSecrets['descriptions'] = {};
+    // Agent descriptions may reach prompts. Include shadowed, ungranted and short vault
+    // values in the check, even when transcript redaction is disabled.
+    const knownValues = audience === 'agents'
+      ? sources.flatMap(({ read }) => Object.values(read.values).map(({ value }) => value)).filter(Boolean)
+      : [];
+    const describe = (description: string | undefined) => {
+      if (!description || audience !== 'agents') return description;
+      const normalized = description.replace(/\s+/g, ' ').trim();
+      if (knownValues.some((value) => description.includes(value) || normalized.includes(value))) return undefined;
+      return normalized && redactSecrets(normalized, []) === normalized ? normalized : undefined;
+    };
+
     if (!bindings) {
       for (const source of sources) {
         for (const [name, entry] of Object.entries(source.read.values)) {
           if (!entry.audiences.includes(audience)) continue;
           values[name] = entry.value;
-          descriptions[name] = entry.description;
+          descriptions[name] = describe(entry.description);
         }
       }
       return { values, descriptions, notes };
@@ -337,7 +350,7 @@ export class SecretStore {
         continue;
       }
       values[as] = entry.value;
-      descriptions[as] = entry.description;
+      descriptions[as] = describe(entry.description);
     }
     return { values, descriptions, notes };
   }
