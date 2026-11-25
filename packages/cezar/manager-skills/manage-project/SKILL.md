@@ -45,7 +45,7 @@ Keep the workflow's settings by default. For a one-off need, use the relevant li
 - `--runner <runner>`, `--account <id>`, `--model <model>` and `--effort <level>` set task-level agent choices. Explicit workflow step settings take precedence over task defaults.
 - `--skill <name>` attaches a task skill as the composer does. Use a listed project skill when it fits, and use `write-cezar-workflow` for workflow authoring. Manager-only skills stay with the manager.
 - `--secrets <name1,name2>` selects agent secret names for this task. Use agent-audience names from the list, or `--secrets ""` for none.
-- `--budget-tokens <n>`, `--budget-minutes <n>` and `--budget-usd <n>` override the corresponding run budget limits for this task.
+- `--budget-tokens <n>`, `--budget-minutes <n>` and `--budget-usd <n>` record per-task budget overrides on the run. Enforcement is pending in M2.
 
 ### Write a lean brief
 
