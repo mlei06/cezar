@@ -9240,6 +9240,9 @@ export function createApp(deps: ServerDeps) {
   deps.onDispose?.(() => phonePairing.dispose());
   const managerEngine = new ManagerEngine({
     store: managerStore,
+    // Every manager acts like the user's own agent, and every project gets one (opt out with 0).
+    autonomousDefault: process.env.CEZ_MANAGER_AUTONOMOUS_DEFAULT !== '0',
+    autoProjectManagers: process.env.CEZ_AUTO_PROJECT_MANAGERS !== '0',
     emit: (event, data) => workspaceEvents.emit(event, data),
     projects: workspaceProjectSources,
     github: {

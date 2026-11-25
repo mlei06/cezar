@@ -138,3 +138,7 @@ afterEach(pinSandboxHome)
 afterAll(() => {
   rmSync(sandboxHome, { recursive: true, force: true })
 })
+
+// Managers stay approval-carded and no project gets an automatic manager unless a test opts in.
+process.env.CEZ_MANAGER_AUTONOMOUS_DEFAULT ??= '0';
+process.env.CEZ_AUTO_PROJECT_MANAGERS ??= '0';

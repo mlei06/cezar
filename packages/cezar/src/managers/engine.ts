@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, writeFileSync } from 'node:fs';
-import { delimiter, join, resolve } from 'node:path';
+import { delimiter, dirname, join, resolve } from 'node:path';
 import lockfile from 'proper-lockfile';
 import {
   isImageMediaType,
@@ -180,6 +180,10 @@ export interface ManagerEngineDeps {
   olderAfterDays?: () => number | undefined | Promise<number | undefined>;
   /** Test seam for `TURN_LIMIT_MS`. */
   turnLimitMs?: number;
+  /** New managers start autonomous unless created with `autonomous: false`. Absent = off. */
+  autonomousDefault?: boolean;
+  /** Every registered project with no manager of its own gets one, once (a deleted one stays gone). */
+  autoProjectManagers?: boolean;
   /** Test seam for `RETRY_BACKOFF_MS`. */
   retryDelayMs?: number;
   /** A manager was deactivated or reactivated: the Questions count leaves its cards out while inactive. */
@@ -348,6 +352,13 @@ const LEASE_STALE_MS = 30_000;
 const LEASE_RETRY_MS = 5_000;
 const LEASE_RETRY_LIMIT = 24;
 const TICK_FLOOR_MS = 5_000;
+const AUTO_PROJECT_MANAGERS_MS = 60_000;
+
+/** The goal an automatic project manager starts with: generic, so it fits any repository. What is
+ *  specific to one project belongs in that repository's AGENTS.md, which the manager reads. */
+export function projectManagerGoal(project: string): string {
+  return `You are the project manager of ${project}. The owner states outcomes and hears back when they are done; you carry each one from plan to finish with tasks, pull requests, reviews, merges and deployment. Follow the manage-project skill. Everything specific to this project (its forge, branches, tests, deployment, conventions) is in the repository's AGENTS.md and the docs it points to: read them before planning.`;
+}
 const MAX_TIMER_MS = 2 ** 31 - 1;
 const MAX_WATCH_BACKOFF = 4;
 /** The pause before the one retry a passing failure (network, busy servers) earns. */
@@ -631,11 +642,70 @@ export class ManagerEngine {
       this.recoveryTimer.unref?.();
     }
     this.reschedule();
+    if (this.deps.autoProjectManagers) {
+      void this.ensureProjectManagers();
+      // Projects added by another process (`cezar projects add`) are picked up within minutes.
+      this.autoTimer = setInterval(() => void this.ensureProjectManagers(), AUTO_PROJECT_MANAGERS_MS);
+      this.autoTimer.unref?.();
+    }
     // Events that happened while cezar was down: their cards, then the turns still owed.
     void this.reconcileFollows().catch((error) => console.warn(`[cezar] manager follows: ${error instanceof Error ? error.message : String(error)}`));
     for (const manager of this.deps.store.list()) {
       if (!manager.inactive && this.deps.store.state(manager.id).followups.length > 0) this.scheduleFollowup(manager.id);
     }
+  }
+
+  private autoTimer: ReturnType<typeof setInterval> | undefined;
+  private ensuring: Promise<string[]> | undefined;
+
+  /**
+   * One manager per registered project that has none naming it: autonomous, the project's own
+   * name, the generic project-manager goal. Each project is offered once — recorded in
+   * `auto-projects.json` — so a manager the user deleted is never recreated. Returns new ids.
+   */
+  ensureProjectManagers(): Promise<string[]> {
+    this.ensuring ??= this.ensureProjectManagersNow().finally(() => {
+      this.ensuring = undefined;
+    });
+    return this.ensuring;
+  }
+
+  private async ensureProjectManagersNow(): Promise<string[]> {
+    if (this.disposed) return [];
+    const path = join(managersDir(), 'auto-projects.json');
+    let seen: string[] = [];
+    try {
+      const parsed = JSON.parse(readFileSync(path, 'utf8')) as { projects?: unknown };
+      if (Array.isArray(parsed.projects)) seen = parsed.projects.filter((p): p is string => typeof p === 'string');
+    } catch {
+      // first run, or unreadable: start from the managers that exist
+    }
+    const known = new Set(seen);
+    const named = new Set(this.deps.store.list().flatMap((manager) => (manager.projects === 'all' ? [] : manager.projects)));
+    const created: string[] = [];
+    let changed = false;
+    for (const source of await this.deps.projects().catch(() => [])) {
+      if (known.has(source.id)) continue;
+      known.add(source.id);
+      changed = true;
+      if (named.has(source.id) || !source.available) continue;
+      const made = await this.create({
+        name: source.name.slice(0, 80) || source.id,
+        instructions: projectManagerGoal(source.name || source.id),
+        projects: [source.id],
+        autonomous: true,
+      });
+      if (!('error' in made)) {
+        await this.update(made.id, { cancelAnyTask: true });
+        created.push(made.id);
+      }
+    }
+    if (changed) {
+      assertCezarHomeWriteIsSandboxed(dirname(path));
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, `${JSON.stringify({ projects: [...known].sort() }, null, 2)}\n`);
+    }
+    return created;
   }
 
   private inactive(id: string): boolean {
@@ -691,6 +761,7 @@ export class ManagerEngine {
     this.disposed = true;
     if (this.timer) clearTimeout(this.timer);
     if (this.recoveryTimer) clearTimeout(this.recoveryTimer);
+    if (this.autoTimer) clearInterval(this.autoTimer);
     for (const timer of this.alerts) clearTimeout(timer);
     this.alerts.clear();
     for (const timer of this.followupTimers.values()) clearTimeout(timer);
@@ -917,7 +988,7 @@ export class ManagerEngine {
       ...(input.effort !== undefined ? { effort: input.effort } : {}),
       ...(input.agentProfile !== undefined ? { agentProfile: input.agentProfile } : {}),
       ...(input.connectors !== undefined ? { connectors: input.connectors } : {}),
-      ...(input.autonomous ? { autonomous: true } : {}),
+      ...((input.autonomous ?? this.deps.autonomousDefault === true) ? { autonomous: true } : {}),
       cronMinutes: input.cronMinutes ?? MANAGER_DEFAULT_CRON_MINUTES,
       jobs: [],
       createdAt: at,
@@ -2312,9 +2383,12 @@ export class ManagerEngine {
       ),
       userPrompt: resumeId ? prompt : freshPrompt,
       cwd: store.workdir(id),
-      allowedTools: full
-        ? [...MANAGER_FULL_TOOLS, ...connectorRules]
-        : [...MANAGER_ALLOWED_TOOLS, ...(writable ? managerWriteRules(writable) : []), ...connectorRules],
+      // A full turn off Claude sends no tool list: Codex and the others then run unrestricted.
+      ...(full && runner !== 'claude' ? {} : {
+        allowedTools: full
+          ? [...MANAGER_FULL_TOOLS, ...connectorRules]
+          : [...MANAGER_ALLOWED_TOOLS, ...(writable ? managerWriteRules(writable) : []), ...connectorRules],
+      }),
       ...(full ? { bypassPermissions: true } : { bashAllowlist: [...MANAGER_BASH_ALLOWLIST, ...(manager.bashAllow ?? [])] }),
       ...(bashHook ? { bashHookCommand: bashHook } : {}),
       // The user's Bash sandbox blocks the loopback cockpit `cez-manager` talks to; the hook still vets it.

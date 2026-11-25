@@ -2659,6 +2659,40 @@ describe('ManagerEngine', () => {
       expect(watch?.bashAllowlist).toContain('cez-manager');
     });
 
+    it('starts new managers autonomous when the cockpit says so, unless asked not to', async () => {
+      const engine = makeEngine({ autonomousDefault: true });
+      const on = await create(engine);
+      expect(store.get(on)?.autonomous).toBe(true);
+      const off = await engine.create({ instructions: 'x', projects: ['alpha'], autonomous: false });
+      if ('error' in off) throw off;
+      expect(store.get(off.id)?.autonomous).toBeUndefined();
+    });
+
+    it('gives each project without a manager one, once: a deleted one is not recreated', async () => {
+      const engine = makeEngine({ autoProjectManagers: true });
+      const made = await engine.ensureProjectManagers();
+      expect(made).toHaveLength(1);
+      const manager = store.get(made[0]!)!;
+      expect(manager).toMatchObject({ projects: ['alpha'], autonomous: true, cancelAnyTask: true });
+      expect(manager.instructions).toContain('manage-project skill');
+      expect(manager.instructions).toContain('AGENTS.md');
+      expect(await engine.ensureProjectManagers()).toEqual([]);
+      await engine.remove(made[0]!);
+      expect(await engine.ensureProjectManagers()).toEqual([]);
+    });
+
+    it('runs a non-Claude autonomous turn with no tool list, so the backend is unrestricted', async () => {
+      const engine = makeEngine();
+      const id = await create(engine);
+      await engine.update(id, { autonomous: true, runner: 'pi' });
+      engine.send(id, 'hi');
+      await settled(engine);
+      const spec = backend.specs.at(-1)!;
+      expect(spec.allowedTools).toBeUndefined();
+      expect(spec.bashAllowlist).toBeUndefined();
+      expect(spec.brokeredShell).toBeUndefined();
+    });
+
     it('skips a disabled job', async () => {
       let now = Date.parse('2026-10-31T12:00:00.000Z');
       const engine = makeEngine({ now: () => now });
