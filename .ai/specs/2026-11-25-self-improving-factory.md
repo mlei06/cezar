@@ -1,6 +1,6 @@
 # The self-improving factory
 
-Status: draft v5, 2026-11-25. Fork: `mlei06/cezar`, trunk `factory`. Owner: Michael. Spec owner: the overseer (see the roadmap). Implementation plan: `2026-11-25-self-improving-factory-roadmap.md`. Findings during the build: `2026-11-25-self-improving-factory-observations.md`.
+Status: draft v5, 2026-11-25. Fork: `mlei06/cezar`, trunk `factory`. Spec owner: the overseer (see the roadmap). Implementation plan: `2026-11-25-self-improving-factory-roadmap.md`. Findings during the build: `2026-11-25-self-improving-factory-observations.md`.
 
 ## TLDR
 
@@ -56,7 +56,7 @@ One task often has several causes in different places. That's why a failure carr
 
 | Term | Meaning |
 |---|---|
-| Owner | the person the factory works for (Michael) |
+| Owner | the person the factory works for |
 | Overseer | the agent outside Cezar that, during the build, prompts and watches the harness manager and owns this spec (roadmap) |
 | Factory | a project's committed definition of how agents work on it: workflows, skills, scorers, benchmarks, AGENTS.md |
 | Harness | Cezar itself: engine, runners, grants, hooks, system prompts, manager skills, built-in workflows and scorers |

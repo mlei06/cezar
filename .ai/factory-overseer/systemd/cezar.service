@@ -5,7 +5,7 @@ After=network.target
 [Service]
 WorkingDirectory=%h/dev/open-webui
 ExecStart=%h/.cezar/bin/cezar --no-open --port 4321 --bind-host 127.0.0.1
-Environment=PATH=%h/.nvm/versions/node/v24.21.0/bin:%h/.local/bin:/home/mlei4/.codex/packages/standalone/releases/0.169.0-x86_64-unknown-linux-musl/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PATH=%h/.nvm/versions/node/v24.21.0/bin:%h/.local/bin:%h/.codex/bin:/usr/local/bin:/usr/bin:/bin
 Environment=CEZ_AUTONOMOUS_DEFAULT=1
 Environment=CEZ_SUPERVISED=1
 Restart=always

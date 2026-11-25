@@ -34,7 +34,7 @@ The program is done when all of these hold:
 
 | Who | What | How |
 |---|---|---|
-| **Owner** (Michael) | sets direction, approves owner-only changes, supplies credentials | talks to the overseer, or to any manager |
+| **Owner** | sets direction, approves owner-only changes, supplies credentials | talks to the overseer, or to any manager |
 | **Overseer** (Claude Code, outside Cezar) | builds M0, then writes no code. Prompts the harness manager, monitors it and its tasks, reviews milestones, releases the harness until M4, acts as the judge and improvement engine until the factory has its own, owns the spec, roadmap and observation log | the cockpit API, the manager's chat (as the owner), git and `gh` for reading, the release script, its judge prototype |
 | **Harness manager** (the `cezar` project's manager; Codex gpt-6.2-sol, autonomous) | turns each milestone into tasks, briefs them, reviews and merges their PRs, reports, and after M4 releases the harness | `cez-manager`, with the `manage-project` skill |
 | **Tasks** | implement, test and open PRs on the fork | Cezar workflows on Codex or OpenCode models |
