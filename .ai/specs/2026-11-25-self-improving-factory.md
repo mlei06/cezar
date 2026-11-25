@@ -1,6 +1,6 @@
 # The self-improving factory
 
-Status: draft v5.11, 2026-11-25. Fork: `mlei06/cezar`, trunk `factory`. Spec owner: the overseer (see the roadmap). Implementation plan: `2026-11-25-self-improving-factory-roadmap.md`. Findings during the build: `2026-11-25-self-improving-factory-observations.md`.
+Status: draft v5.12, 2026-11-25. Fork: `mlei06/cezar`, trunk `factory`. Spec owner: the overseer (see the roadmap). Implementation plan: `2026-11-25-self-improving-factory-roadmap.md`. Findings during the build: `2026-11-25-self-improving-factory-observations.md`.
 
 ## TLDR
 
@@ -45,6 +45,7 @@ One task often has several causes in different places. That's why a failure carr
 
 ## Principles
 
+- **The manager stands in for the owner, through the same doors.** Creating a task by hand (a project's New task: description, workflow, model, skill) stays the first-class path, and every addition here (workflows, the capability block, budgets, scores) applies to hand-made tasks exactly as to the manager's. The manager creates and oversees tasks through those same task paths; it never gets a mechanism the owner can't use by hand.
 - **Zero config.** Every file is optional. Cezar ships default workflows, scorers and settings, and an empty repo still gets scoring and self-improvement.
 - **Reuse before adding.** Extend Cezar's workflows, settings, metrics and automations; add a concept only when nothing existing can carry it.
 - **Fixes as pull requests.** Every improvement is a reviewed diff. Nothing rewrites factory files in place.
@@ -774,6 +775,7 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
 
 ## Changelog
 
+- **v5.12:** principle: the manager stands in for the owner through the same task paths; hand-made tasks stay first-class and get every addition.
 - **v5.11:** D11, manager operating rules, so the rules the harness manager was given during M1 live in the product: ungated by default, reviews only for runtime changes, two review rounds then the manager decides, ambiguities decided and recorded, docs-only trunk commits never force a rebase, shared-machine test limits and a lower CPU priority for runs, brief contents, detached harness releases, a public fork stays generic.
 - **v1:** first draft ("software factory feedback").
 - **v2:** separate list commands; optional `--secrets`; the judge reads the full transcript; helper scripts live in skills; pattern detectors dropped.
