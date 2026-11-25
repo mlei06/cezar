@@ -8,12 +8,14 @@ import { isAbsolute, join, relative, resolve } from 'node:path';
 import { cezarHomeDir } from '../paths.ts';
 import { parseArgs } from 'node:util';
 import type { ManagerAgentsResponse, ManagerCancelTaskResponse, ManagerCreateTaskResponse, ManagerFollowTaskResponse, ManagerForwarded, ManagerMemoryResponse, ManagerMessage, ManagerSnapshot, ManagerSnapshotProject, ManagerTaskMessageResponse, WorkflowCatalogEntry } from '@open-mercato/cezar-contract';
-import { agentStepSecretsSchema, MODEL_DISCOVERY_RUNNERS, modelDiscoveryRunnerSchema, runnerModelCatalogResponseSchema, runBudgetSchema, secretsListSchema, skillSchema, managerAccessOf, managerMemoryKeySchema, managerMemoryKindSchema, managerTaskEffortSchema, MANAGER_MEMORY_LIMITS, type Manager } from '@open-mercato/cezar-contract';
+import { agentStepSecretsSchema, RUNNER_IDS, runnerSchema, runnerDiscoversModels, runnerModelCatalogResponseSchema, runBudgetSchema, secretsListSchema, skillSchema, managerAccessOf, managerMemoryKeySchema, managerMemoryKindSchema, managerTaskEffortSchema, MANAGER_MEMORY_LIMITS, type Manager } from '@open-mercato/cezar-contract';
 import { runAutomationCommand } from '../automations/automation-cli.ts';
 import { missingCockpitMessage } from '../cockpit-address.ts';
 import { parseConnectorTool } from './connectors.ts';
 import { MANAGER_COMMANDS, MANAGER_JOB_SUBCOMMANDS, MANAGER_MEMORY_SUBCOMMANDS, MANAGER_TASK_SUBCOMMANDS } from './cli-vocabulary.ts';
 import { managerSkillSources } from './manager-skills.ts';
+import { KNOWN_PRESETS_BY_RUNNER } from '../core/model-presets.ts';
+import { STATIC_EFFORTS } from './task-model.ts';
 import { recentTasks } from './snapshot.ts';
 import { sameModel } from '../runs/reported-model.ts';
 
@@ -735,13 +737,24 @@ export async function runManagerCommand(
           if (values.json) printJson({ skills });
           else for (const skill of skills) io.log(`${skill.name}  ${skill.description ?? '-'}`);
         } else if (command === 'models') {
-          const runner = values.runner === undefined ? undefined : modelDiscoveryRunnerSchema.safeParse(values.runner);
-          if (runner && !runner.success) fail(`--runner must be one of ${MODEL_DISCOVERY_RUNNERS.join(', ')}`);
-          const catalogs = await Promise.all((runner?.success ? [runner.data] : MODEL_DISCOVERY_RUNNERS).map(async (id) =>
-            runnerModelCatalogResponseSchema.parse(await get(`/models?${new URLSearchParams({ runner: id })}`))));
+          const runner = values.runner === undefined ? undefined : runnerSchema.safeParse(values.runner);
+          if (runner && !runner.success) fail(`--runner must be one of ${RUNNER_IDS.join(', ')}`);
+          const catalogs = await Promise.all((runner?.success ? [runner.data] : RUNNER_IDS).map(async (id) => {
+            const live = runnerDiscoversModels(id)
+              ? runnerModelCatalogResponseSchema.parse(await get(`/models?${new URLSearchParams({ runner: id })}`))
+              : undefined;
+            if (live?.models.length) return live;
+            const models = KNOWN_PRESETS_BY_RUNNER[id].map((model) => ({
+              id: model, label: model, description: '',
+              ...(STATIC_EFFORTS[id] ? { reasoningEfforts: STATIC_EFFORTS[id].map((effort) => ({ id: effort, description: '' })) } : {}),
+            }));
+            return models.length
+              ? { runner: id, models, source: 'presets', stale: false }
+              : live ?? { runner: id, models, source: 'unavailable', stale: false, reason: 'no model catalog' };
+          }));
           if (values.json) printJson({ catalogs });
           else for (const catalog of catalogs) {
-            if (catalog.models.length === 0) io.log(`${catalog.runner}  ${catalog.reason ?? 'no models reported'}`);
+            if (catalog.models.length === 0) io.log(`${catalog.runner}  ${('reason' in catalog ? catalog.reason : undefined) ?? 'no models reported'}`);
             for (const model of catalog.models) io.log(`${catalog.runner}  ${model.id}  ${model.reasoningEfforts?.map((effort) => effort.id).join(', ') || '-'}`);
           }
         } else {

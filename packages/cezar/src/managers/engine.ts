@@ -3207,7 +3207,8 @@ export class ManagerEngine {
     const agents = manager.taskAgents?.filter((agent): agent is ManagerTaskAgent & { runner: RunnerId } => isRunnerId(agent.runner))
       ?? [{ runner: manager.taskRunner && isRunnerId(manager.taskRunner) ? manager.taskRunner : await this.runnerOf(manager) }];
     const now = this.now();
-    return Promise.all(agents.map(async (agent) => {
+    const rows = await Promise.all(agents.map(async (agent) => {
+      if (await this.accountIssue(agent.runner, agent.agentProfile)) return undefined;
       const option = await this.accountOption(agent.runner, agent.agentProfile, root);
       return {
         runner: option.runner,
@@ -3217,6 +3218,7 @@ export class ManagerEngine {
         ...(option.until !== undefined && option.until > now ? { outOfLimitsUntil: new Date(option.until).toISOString() } : {}),
       };
     }));
+    return rows.filter((row) => row !== undefined);
   }
 
   /** A live task takes the message; a finished one is continued with it. */

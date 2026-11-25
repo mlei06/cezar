@@ -28,7 +28,7 @@ export type AgentFallbackPolicy = {
 };
 
 /** A manager's current task accounts; `null` = the manager is gone or no longer limits tasks. */
-export type ManagerTaskAccountsLookup = (managerId: string) => ReadonlyArray<{ runner: string; agentProfile?: string }> | null;
+export type ManagerTaskAccountsLookup = (managerId: string, grantAccount?: AgentFallbackCandidate) => ReadonlyArray<{ runner: string; agentProfile?: string }> | null;
 let managerTaskAccounts: ManagerTaskAccountsLookup | undefined;
 /** Installed by the server, which owns the manager store; absent (`cezar run`, tests) keeps the snapshot. */
 export function setManagerTaskAccountsLookup(lookup: ManagerTaskAccountsLookup | undefined): void {
@@ -48,6 +48,21 @@ function inManagerList(
 ): boolean {
   return list.some((entry) => entry.runner === c.provider && (entry.agentProfile
     ?? (accounts ? resolveAccountId(accounts, { provider: c.provider, ...(repoRoot ? { repoRoot } : {}) }) : DEFAULT_AGENT_ACCOUNT_ID)) === c.profileId);
+}
+
+/** Explicit manager grants follow the manager's current account selection on every spawn. */
+export async function managerSecretAccountAllowed(
+  managerId: string,
+  account: AgentFallbackCandidate,
+  repoRoot: string,
+): Promise<boolean> {
+  const list = managerTaskAccounts?.(managerId, account);
+  if (list === undefined) return false;
+  const accounts = await loadAgentAccounts().catch(() => null);
+  if (account.profileId !== DEFAULT_AGENT_ACCOUNT_ID
+    && !accounts?.accounts.some((entry) => entry.provider === account.provider && entry.id === account.profileId)) return false;
+  // A null list belongs to a present manager with unrestricted account selection.
+  return list === null || inManagerList(list, account, accounts, repoRoot);
 }
 
 const candidateSchema = z.object({

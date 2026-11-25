@@ -24,7 +24,7 @@ import {
   e2eSetupInputSchema, type E2eStatus, taskActionSurfaceSchema,
 } from '@open-mercato/cezar-contract';
 import { sendSystemNotification } from '../managers/system-notify.ts';
-import { SecretStore, SecretsError, withoutAgentLogins, type SecretScopeRef } from '../workspace/secrets.ts';
+import { SecretStore, SecretsError, type SecretScopeRef } from '../workspace/secrets.ts';
 import { E2E_SETUP_TASK, e2eCredentialsAmong, e2eSetupWorkflow, latestE2eSetupRun, readE2eStatus, setupInFlight } from '../e2e-setup.ts';
 import { createTrackerService } from './tracker/index.ts';
 import { trackerTaskContext, executeTrackerOperation } from './tracker/task-access.ts';
@@ -1763,7 +1763,14 @@ export function createApp(deps: ServerDeps) {
   // Workspace-level, shared by the managers family and the automation report link.
   const managerStore = new ManagerStore();
   // A manager task's fallback follows the manager's list as it is now (deleted or Automatic = withdrawn).
-  setManagerTaskAccountsLookup((managerId) => managerStore.get(managerId)?.taskAgents ?? null);
+  setManagerTaskAccountsLookup((managerId, grantAccount) => {
+    const manager = managerStore.get(managerId);
+    if (!grantAccount) return manager?.taskAgents ?? null;
+    if (!manager) return [];
+    return manager.taskAgents ?? (manager.taskRunner
+      ? [{ runner: manager.taskRunner, agentProfile: grantAccount.profileId }]
+      : null);
+  });
   const contextProjects = async () => {
     const selector = capabilities().singleProject
       ? { projectId: await resolveBootProject() }
@@ -5577,13 +5584,9 @@ export function createApp(deps: ServerDeps) {
         if (!workflow) return c.json({ error: `unknown workflow: ${parsed.data.workflow}` }, 404);
       }
       if (parsed.data.secrets?.length) {
-        const lists = await Promise.all([
-          secretStore.list({ kind: 'workspace' }),
-          secretStore.list({ kind: 'project', projectId, root: repoRoot }),
-        ]);
-        const available = withoutAgentLogins(Object.fromEntries(lists.flatMap(({ secrets }) =>
-          secrets.filter((secret) => secret.audiences.includes('agents')).map(({ name }) => [name, '']),
-        )));
+        const available = await secretStore.resolveAgentGrants(
+          { projectId, root: repoRoot }, parsed.data.secrets,
+        ).catch(() => ({}));
         if (parsed.data.secrets.some((name) => !Object.hasOwn(available, name))) {
           return c.json({ error: 'Requested secrets must be stored for this project or workspace and available to agents. See the secrets list.' }, 400);
         }

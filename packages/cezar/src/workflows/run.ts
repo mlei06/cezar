@@ -168,6 +168,7 @@ import {
   eligibleFallbackCandidates,
   fallbackConsentCurrent,
   managerFallbackPolicy,
+  managerSecretAccountAllowed,
   getAgentFallbackPolicySync,
   loadFallbackAccounts,
   type AgentFallbackPolicy,
@@ -2061,8 +2062,9 @@ export class RunManager {
       ? options.workflowAgent.agentProfile
       : backend === (run?.runner ?? 'claude') ? run?.agentProfile : undefined);
     const resolved = await resolveProfileEnvForRoot(this.repoRoot, backend, profileId);
-    if ((options.workflowAgent?.replaced ?? (run?.agentSwitch && backend === run.runner))
-      && profileId !== undefined && profileId !== resolved.profile.id) {
+    const accountPinned = options.workflowAgent?.replaced ?? (run?.agentSwitch && backend === run.runner);
+    const managedGrant = run?.startedByManager && run.secretNames?.length;
+    if ((accountPinned || managedGrant) && profileId !== undefined && profileId !== resolved.profile.id) {
       throw new AgentAccountUnavailableError(`The selected ${backend} account no longer exists (${profileId}). Switch the task to an available account.`);
     }
     const bound = run?.deferredBinding?.accounts.find(a => a.runner === backend);
@@ -2176,7 +2178,7 @@ export class RunManager {
     } : undefined;
     const baseEnv = { ...this.agentEnv(runId, options.generateFollowups), ...resolved.env, ...trackerEnv };
     return {
-      env: { ...await this.agentVaultEnv(runId, options.secretNames), ...baseEnv },
+      env: { ...await this.agentVaultEnv(runId, options.secretNames, backend, resolved.profile.id), ...baseEnv },
       baseEnv,
       ...(trackerContext ? { trackerContext } : {}),
       profileId: resolved.profile.id,
@@ -2185,27 +2187,39 @@ export class RunManager {
     };
   }
 
-  private async agentVaultEnv(runId: string, secretNames: WorkflowStepDef['secrets']): Promise<Record<string, string>> {
-    // Secrets the user shared with agents (`agents` audience), as environment variables. A fork's
-    // untrusted head gets none, as its checks do. Registered for redaction like a check's.
-    let agentSecrets: Record<string, string> = this.store.getRun(runId)?.untrustedHead === true || secretNames?.length === 0
-      ? {}
-      : withoutAgentLogins((await this.secrets.resolve(this.projectId ? { projectId: this.projectId, root: this.repoRoot } : undefined, 'agents').catch(() => ({ values: {} as Record<string, string> }))).values);
-    if (secretNames?.length) {
-      const names = new Set(secretNames);
-      agentSecrets = Object.fromEntries(Object.entries(agentSecrets).filter(([name]) => names.has(name)));
+  private async agentVaultEnv(
+    runId: string, secretNames: WorkflowStepDef['secrets'], backend: RunnerId, profileId: string,
+  ): Promise<Record<string, string>> {
+    const run = this.store.getRun(runId);
+    // Keep the existing vault policy for workflow-only bindings and untrusted heads.
+    if (run?.untrustedHead || secretNames?.length === 0 || run?.secretNames?.length === 0) return {};
+    const project = this.projectId ? { projectId: this.projectId, root: this.repoRoot } : undefined;
+    let agentSecrets: Record<string, string>;
+    if (run?.secretNames !== undefined) {
+      if (run.startedByManager && !await managerSecretAccountAllowed(
+        run.startedByManager.id, { provider: backend, profileId }, this.repoRoot,
+      )) {
+        throw new AgentAccountUnavailableError(`The manager's account selection does not allow explicit secrets on ${backend} account ${profileId}.`);
+      }
+      agentSecrets = await this.secrets.resolveAgentGrants(project, run.secretNames).catch(() => ({}));
+    } else {
+      agentSecrets = withoutAgentLogins((await this.secrets.resolve(project, 'agents').catch(() => ({ values: {} }))).values);
+      if (secretNames?.length) {
+        const names = new Set(secretNames);
+        agentSecrets = Object.fromEntries(Object.entries(agentSecrets).filter(([name]) => names.has(name)));
+      }
     }
     // Keep the legacy Azure CLI alias for unrestricted steps; restricted steps use the listed names.
-    if (secretNames === undefined && agentSecrets.AZURE_DEVOPS_PAT && !agentSecrets.AZURE_DEVOPS_EXT_PAT) agentSecrets.AZURE_DEVOPS_EXT_PAT = agentSecrets.AZURE_DEVOPS_PAT;
+    if (run?.secretNames === undefined && secretNames === undefined && agentSecrets.AZURE_DEVOPS_PAT && !agentSecrets.AZURE_DEVOPS_EXT_PAT) agentSecrets.AZURE_DEVOPS_EXT_PAT = agentSecrets.AZURE_DEVOPS_PAT;
     this.store.registerRunSecrets(runId, Object.values(agentSecrets).filter((value) => value.length >= MIN_SECRET_LEN));
     return agentSecrets;
   }
 
   private async freshContinuationProfile(
-    runId: string, run: RunRecord | undefined, profile: Awaited<ReturnType<RunManager['agentEnvForStep']>>,
+    runId: string, run: RunRecord | undefined, backend: RunnerId, profile: Awaited<ReturnType<RunManager['agentEnvForStep']>>,
   ) {
     const names = continuationSecretNames(run);
-    const env = { ...await this.agentVaultEnv(runId, names), ...profile.baseEnv };
+    const env = { ...await this.agentVaultEnv(runId, names, backend, profile.profileId), ...profile.baseEnv };
     return { names, profile: { ...profile, env } };
   }
 
@@ -6967,7 +6981,7 @@ export class RunManager {
           this.attachmentsDir(runId),
         );
         await trackFallbackOutcome(async () => {
-          const { profile, names } = await this.freshContinuationProfile(runId, record, continueProfile);
+          const { profile, names } = await this.freshContinuationProfile(runId, record, continueBackend, continueProfile);
           if (state.cancelled || this.active.get(runId) !== state) throw new Error('cancelled');
           session = launch(freshId, false, context, profile, names);
           for (const content of replay) session.sendMessage(content);
@@ -9592,7 +9606,7 @@ export class RunManager {
         emit({ type: 'note', stepId: step.id, message: MISSING_SESSION_NOTE });
         const context = freshContinuationContext(record, this.store.readEvents(runId), this.attachmentsDir(runId));
         result = await trackFallbackOutcome(async () => {
-          const { profile, names } = await this.freshContinuationProfile(runId, record, stepProfile);
+          const { profile, names } = await this.freshContinuationProfile(runId, record, stepBackend, stepProfile);
           if (state.cancelled || this.active.get(runId) !== state) throw new Error('cancelled');
           session = attach(launch(freshId, false, `${context}\n\n---\n\n## New user instruction\n${userPrompt}`, profile, names), false);
           for (const content of replay) session.sendMessage(content);
