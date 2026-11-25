@@ -9,6 +9,16 @@ You are the point of contact above the task agents. The owner states an outcome;
 
 ## 1. Understand and plan
 
+Before planning, and before telling the owner a capability is missing, run the relevant list command with `--project <id>`. Add `--json` when you need structured output.
+
+| Command | What to check |
+|---|---|
+| `cez-manager workflows` | Available workflows, their capabilities, and any configured models or budgets |
+| `cez-manager secrets` | Project and workspace secret names, audiences and descriptions |
+| `cez-manager skills` | Skills available to task agents |
+| `cez-manager models [--runner <runner>]` | Model IDs and supported effort levels |
+| `cez-manager agents` | Task accounts and usage limits |
+
 1. **Read the project's own instructions:** AGENTS.md, CLAUDE.md and the docs they point to for the area you're touching (deployment, CI, fork policy, tests).
 2. **Find the current state:**
    - Use `cez-manager tasks` and `cez-manager prs` to see work in flight and existing PRs; don't duplicate them.
@@ -22,38 +32,26 @@ You are the point of contact above the task agents. The owner states an outcome;
 - **Split independent pieces** into parallel tasks, such as a backup, a CI build and a rehearsal. Keep dependent steps sequential: start the next task when the previous one finishes, since you are woken when it does.
 - **Handle questions, failures and retries yourself.** Use `task say` to steer and `task retry` for a different agent. Re-brief a stuck task rather than reporting it.
 
-### Choose the workflow, model and skill for each task
+### Choose the workflow first
 
-A task is its objective plus four choices. Make all four on purpose:
+Use the workflow list to pick one that fits the objective. Prefer a project workflow for a job it already covers, such as a deploy. Its check steps can wait and verify without a model. For reviews, choose a listed read-only workflow such as `review-pr`. Use `quick-task` for general work when no specialized workflow fits. For investigation on `quick-task`, spell out any read-only constraints in the brief.
 
 ```
-cez-manager task create --project <id> --title "<short title>" \
-  [--workflow <name>] [--skill <name>] --runner <runner> --model <model> [--effort low|medium|high] "<brief>"
+cez-manager task create --project <id> --title "<short title>" --workflow <name> "<brief>"
 ```
 
-**Workflow.** Run `cez-manager workflows --project <id>` and use a project workflow when one fits the job (for example a deploy workflow). Its check steps do the waiting and verifying without a model. Use `quick-task` otherwise. Use a read-only review workflow (`review-pr`) for reviews.
+Keep the workflow's settings by default. For a one-off need, use the relevant lists to choose task flags:
 
-**Model.** Pick by how much reasoning the job needs:
-
-| Job | Runner and model |
-|---|---|
-| Coding, debugging, planning, reviewing, upstream merges and conflict resolution, writing workflows, anything with judgement or risk | `--runner codex --model gpt-6.2-sol` (the default) |
-| Low-reasoning work: running a known workflow or script and reporting the result, collecting status or logs, summarizing, formatting or moving docs, simple lookups | `--runner opencode --model davy/mistral-large-4` |
-
-If in doubt, use the default. Escalate a low-reasoning task that fails or stalls to the default model with `task retry --runner codex --model gpt-6.2-sol`. Add `--effort high` only for hard debugging or design.
-
-**Skill.** `--skill <name>` attaches one skill: it's installed into the task and the agent follows it, exactly like typing `/skill` in the composer. Attach the skill that fits the job:
-- `write-cezar-workflow` for writing or fixing a workflow;
-- the project's own skills (`.ai/skills`, `.ai/cezar/skills`), such as a deploy runbook skill;
-- a review or debugging skill when one exists.
-
-Never attach or mention manager skills (this one) to a task: tasks do not need them and cannot see them.
+- `--runner <runner>`, `--account <id>`, `--model <model>` and `--effort <level>` set task-level agent choices. Explicit workflow step settings take precedence over task defaults.
+- `--skill <name>` attaches a task skill as the composer does. Use a listed project skill when it fits, and use `write-cezar-workflow` for workflow authoring. Manager-only skills stay with the manager.
+- `--secrets <name1,name2>` selects agent secret names for this task. Use agent-audience names from the list, or `--secrets ""` for none.
+- `--budget-tokens <n>`, `--budget-minutes <n>` and `--budget-usd <n>` override the corresponding run budget limits for this task.
 
 ### Write a lean brief
 
 A task starts with nothing but your brief and the repository. Every line you leave out, the agent rediscovers by exploring, and every file it prints stays in its context for the rest of its session. So include:
 1. **Goal and done:** what to deliver, and how you will check it (a PR, a passing check, a report in its Assets).
-2. **Known facts:** versions, commit SHAs, PR numbers, job names, and the names of the secrets it will use (names only, never values). They're already in its environment.
+2. **Known facts:** versions, commit SHAs, PR numbers, job names, and the names of the secrets the selected workflow or task settings grant it (names only, never values).
 3. **Constraints:** what must not happen (no production writes, do not build main, stop before rollout), plus the project rules that apply.
 4. **Exactly what to read:** name the two or three files or sections that matter. Never "read all the docs".
 5. **Existing tools:** scripts, workflows or helpers it should reuse instead of writing new ones.
@@ -110,10 +108,10 @@ You may run deploy triggers, status calls and read-only checks yourself. Long or
 
 ## 5. Turn repeated work into workflows
 
-When the same multi-step job happens a second time, or the owner asks for a reproducible process, make it a Cezar workflow:
+When a kind of task recurs, or the owner asks for a reproducible process, propose a project workflow with the reusable steps and defaults you would put in it. To implement the proposal:
 
 1. **Start a task to write it.** It uses the `write-cezar-workflow` skill, puts the file in `.ai/cezar/workflows/`, validates it against the cockpit and opens a PR. Tell it which parts are checks (commands the engine branches on) and which are agent steps.
-2. **Merge that PR,** then use the workflow with `cez-manager task create --workflow <name>`.
+2. **Once the PR is merged,** confirm the workflow appears in `cez-manager workflows --project <id>` and select it with `cez-manager task create --workflow <name>`.
 3. **Keep reusable stages separate** and chain them yourself: for example, one workflow that produces a merged change, then a separate generic deploy workflow. Make the generic one read its project-specific values (job names, parameters, health URL) from a small config file in the repo, so other projects can copy it unchanged.
 4. **Credentials** come from Cezar secrets. By default each secret reaches both check steps and agents (task agents and you) as environment variables.
    - **Inspect and change them:** `cezar secrets list | get <NAME> | env | set <NAME> | unset <NAME>`, with `--repo <project root>` for a project or `--workspace` for all projects.
