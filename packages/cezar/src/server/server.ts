@@ -115,7 +115,7 @@ import { homedir } from 'node:os';
 import { basename, dirname, join, posix, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Hono, type Context } from 'hono';
-import type { Next } from 'hono';
+import type { Next, TypedResponse } from 'hono';
 import { serve, type ServerType } from '@hono/node-server';
 import { bodyLimit } from 'hono/body-limit';
 import { HTTPException } from 'hono/http-exception';
@@ -968,9 +968,14 @@ const planSchema = z.object({
   task: z.string().trim().min(1).max(100_000, 'must be at most 100000 characters'),
 });
 
-// A saved workflow carries full `steps` OR the builder's `skills` stack
-// (spec 012). `overwrite: true` is the builder's Save on an existing file —
-// the GUI asks first; a plain POST still refuses to clobber.
+async function workflowCatalog(repoRoot: string) {
+  const { workflows, issues } = await loadWorkflows(repoRoot);
+  return { workflows: workflows.map((w) => ({ ...w, capabilities: workflowCapabilities(w, workflows) })), issues };
+}
+
+// Give both mounts a named response so declaration emit doesn't inline the full catalog twice.
+interface WorkflowCatalogBody extends Awaited<ReturnType<typeof workflowCatalog>> {}
+
 const validateGraphSchema = z.object({ graph: workflowGraphSchema });
 
 const parseWorkflowSchema = z.object({
@@ -4446,9 +4451,8 @@ export function createApp(deps: ServerDeps) {
   // table and the versioned `v1` one — see `healthRoutes` for why the chain
   // shape (not the statement shape) is what carries the types.
   const workflowsRoutes = new Hono<ProjectApiEnv>()
-    .get('/workflows', async (c) => {
-      const { workflows, issues } = await loadWorkflows(c.get('project').root);
-      return c.json({ workflows: workflows.map((w) => ({ ...w, capabilities: workflowCapabilities(w, workflows) })), issues });
+    .get('/workflows', async (c): Promise<Response & TypedResponse<WorkflowCatalogBody, 200, 'json'>> => {
+      return c.json(await workflowCatalog(c.get('project').root));
     })
 
     // Save an approved plan as a reusable chain (spec 008): YAML in
