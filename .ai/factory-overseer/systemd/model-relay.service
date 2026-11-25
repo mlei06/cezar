@@ -1,0 +1,10 @@
+[Unit]
+Description=Factory overseer: model-relay (settings in ~/.config/factory-overseer.json)
+
+[Service]
+ExecStart=/usr/bin/python3 %h/dev/cezar/.ai/factory-overseer/model-relay.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

@@ -49,8 +49,12 @@ const FILE_VERSION = 1;
 const KEY_FILE = '.key';
 const DEFAULT_AUDIENCES: readonly SecretAudience[] = ['checks', 'agents'];
 
+function descriptionContainsOwnValue(description: string | undefined, value: string): boolean {
+  return Boolean(value && description?.includes(value));
+}
+
 function refuseOwnValue(description: string | undefined, value: string): void {
-  if (description && value && description.includes(Buffer.from(value, 'utf8').toString('utf8'))) {
+  if (descriptionContainsOwnValue(description, value)) {
     throw new SecretsError('A description must not contain its own secret value.');
   }
 }
@@ -258,7 +262,7 @@ export class SecretStore {
       const now = new Date().toISOString();
       const previous = file.secrets[name];
       const nextDescription = description ?? previous?.description;
-      refuseOwnValue(nextDescription, value);
+      refuseOwnValue(nextDescription, Buffer.from(value, 'utf8').toString('utf8'));
       file.secrets[name] = {
         audiences: admitted,
         ...(nextDescription ? { description: nextDescription } : {}),
@@ -342,12 +346,15 @@ export class SecretStore {
     };
     const values: Record<string, string> = {};
     const descriptions: ResolvedSecrets['descriptions'] = {};
+    const descriptionFor = ({ description, value }: SecretsRead['values'][string]) =>
+      audience === 'agents' && descriptionContainsOwnValue(description, value) ? undefined : description;
+
     if (!bindings) {
       for (const source of sources) {
         for (const [name, entry] of Object.entries(source.read.values)) {
           if (!entry.audiences.includes(audience)) continue;
           values[name] = entry.value;
-          descriptions[name] = entry.description;
+          descriptions[name] = descriptionFor(entry);
         }
       }
       return { values, descriptions, notes };
@@ -365,7 +372,7 @@ export class SecretStore {
         continue;
       }
       values[as] = entry.value;
-      descriptions[as] = entry.description;
+      descriptions[as] = descriptionFor(entry);
     }
     return { values, descriptions, notes };
   }

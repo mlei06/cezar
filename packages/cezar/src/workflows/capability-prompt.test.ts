@@ -1,20 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import { capabilityPrompt } from './capability-prompt.ts';
 
-const input = { workflow: 'deploy', runner: 'opencode', model: 'davy/mistral-large-4', skill: 'jenkins-deploy' };
+const input = { workflow: 'deploy', runner: 'opencode', model: 'fixture-provider/fixture-model', skill: 'fixture-deploy' };
 
 describe('task capability block', () => {
   it('keeps the effective model, budget, attached skill and other workflows', () => {
     expect(capabilityPrompt({
       ...input, budget: { tokens: 600_000, minutes: 60 },
-      secrets: [{ name: 'JENKINS_URL', description: 'Jenkins API' }],
+      secrets: [{ name: 'FIXTURE_URL', description: 'Fixture API' }],
       workflows: ['plan', 'deploy', 'operate'],
     })).toBe([
-      'Workflow: deploy (opencode, davy/mistral-large-4); budget 600000 tokens, 60 min active',
+      'Workflow: deploy (opencode, fixture-provider/fixture-model); budget 600000 tokens, 60 min active',
       'Secrets in your environment (values hidden; never print them):',
-      '  JENKINS_URL: Jenkins API',
+      '  FIXTURE_URL: Fixture API',
       'Other workflows in this project: operate, plan',
-      'Attached skill: jenkins-deploy (scripts in its folder)',
+      'Attached skill: fixture-deploy (scripts in its folder)',
       'Omitted: 0 workflow names, 0 secret descriptions.',
     ].join('\n'));
   });

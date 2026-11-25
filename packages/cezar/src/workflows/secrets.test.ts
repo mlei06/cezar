@@ -290,6 +290,63 @@ describe('project and workspace secrets in check steps', () => {
     await settle(record.id);
   }, 30_000);
 
+  it('launches Claude with a NUL in an existing vault description', async () => {
+    const description = 'Operator\0metadata';
+    await secrets.set(scope, 'FIXTURE_KEY', 'synthetic-nul-fixture-value', ['agents'], description);
+    const record = manager.startRun({
+      name: 'nul-fixture',
+      source: 'file',
+      steps: [{ id: 'work', prompt: '{{task}}', secrets: ['FIXTURE_KEY'] }, { id: 'verify', command: 'true' }],
+    }, { task: 'mock:done inspect capabilities', runner: 'claude', worktree: false });
+    await settle(record.id);
+
+    expect(store.getRun(record.id)?.status).toMatch(/^(done|review)$/);
+    const [prompt] = capturedPrompts();
+    expect(prompt).toContain('  FIXTURE_KEY: Operator\\u0000metadata');
+    expect(prompt).not.toContain('\0');
+    store.flush();
+    const saved = RunStore.open(join(repoRoot, '.ai/cezar')).getRun(record.id)?.steps[0]?.capabilityPrompt;
+    expect(saved).toContain(`  FIXTURE_KEY: ${description}`);
+    expect((await secrets.list(scope)).secrets).toMatchObject([{ name: 'FIXTURE_KEY', description }]);
+  }, 30_000);
+
+  it('omits a legacy self-referential description while keeping its grant and vault data', async () => {
+    const value = 'synthetic-legacy-fixture-value';
+    const description = `Legacy copied value: ${value}`;
+    process.env.CEZ_REDACT_SECRETS = '0';
+    await secrets.set(scope, 'LEGACY_KEY', value, ['agents']);
+    const path = join(process.env.CEZ_HOME!, 'secrets', `${project}.json`);
+    const vault = JSON.parse(readFileSync(path, 'utf8'));
+    vault.secrets.LEGACY_KEY.description = description;
+    const original = JSON.stringify(vault);
+    writeFileSync(path, original);
+
+    const grants: (string | undefined)[] = [];
+    const resolveEnv = manager['agentEnvForStep'].bind(manager);
+    manager['agentEnvForStep'] = async (...args) => {
+      const profile = await resolveEnv(...args);
+      grants.push(profile.env.LEGACY_KEY);
+      return profile;
+    };
+    const record = manager.startRun({
+      name: 'legacy-fixture',
+      source: 'file',
+      steps: [{ id: 'work', prompt: '{{task}}', secrets: ['LEGACY_KEY'] }, { id: 'verify', command: 'true' }],
+    }, { task: 'mock:done inspect capabilities', runner: 'claude', worktree: false });
+    await settle(record.id);
+
+    expect(store.getRun(record.id)?.status).toMatch(/^(done|review)$/);
+    expect(grants).toEqual([value]);
+    const [prompt] = capturedPrompts();
+    expect(prompt).toContain('  LEGACY_KEY\n');
+    expect(prompt).not.toContain(value);
+    store.flush();
+    const saved = RunStore.open(join(repoRoot, '.ai/cezar')).getRun(record.id)?.steps[0]?.capabilityPrompt;
+    expect(saved).toContain('  LEGACY_KEY\n');
+    expect(saved).not.toContain(value);
+    expect(readFileSync(path, 'utf8')).toBe(original);
+  }, 30_000);
+
   it('refreshes actual OpenCode 1.x resume prompts after a vault grant is revoked', async () => {
     process.env.CEZ_OPENCODE_BIN = fileURLToPath(new URL('../core/__fixtures__/opencode/mock-opencode-serve.mjs', import.meta.url));
     const requestsLog = join(repoRoot, 'requests.ndjson');

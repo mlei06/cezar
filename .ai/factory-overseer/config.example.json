@@ -1,0 +1,9 @@
+{
+  "cockpit": "http://127.0.0.1:4321",
+  "dataDir": "~/dev/notes/factory-overseer",
+  "repo": "~/dev/cezar",
+  "provider": { "opencodeConfig": "~/.config/opencode/opencode.json", "name": "<opencode provider id>", "model": "<judge model id>" },
+  "endpoint": { "host": "<model endpoint host>", "port": 5000 },
+  "caBundle": "<path to the CA bundle that verifies the endpoint>",
+  "relayPort": 5001
+}
