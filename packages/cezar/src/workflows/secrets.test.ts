@@ -1,6 +1,6 @@
 import { execFile, type SpawnOptions } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -44,6 +44,7 @@ describe('project and workspace secrets in check steps', () => {
   let manager: RunManager;
   let secrets: SecretStore;
   let stdinLog: string;
+  let argsLog: string;
   /** Per test, so each case starts with no store of its own — `CEZ_HOME` is one sandbox for the
    *  whole vitest worker, and a shared id would let one case read the previous one's file. */
   let project: string;
@@ -55,10 +56,12 @@ describe('project and workspace secrets in check steps', () => {
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-secrets-'));
     project = `secrets-${randomUUID()}`;
     scope = { kind: 'project', projectId: project, root: repoRoot };
-    for (const key of ['CEZ_DRY_RUN', 'CEZ_MOCK_STDIN_FILE']) savedEnv[key] = process.env[key];
+    for (const key of ['CEZ_DRY_RUN', 'CEZ_MOCK_STDIN_FILE', 'CEZ_MOCK_ARGS_FILE']) savedEnv[key] = process.env[key];
     process.env.CEZ_DRY_RUN = '1';
     stdinLog = join(repoRoot, '.mock-stdin.ndjson');
     process.env.CEZ_MOCK_STDIN_FILE = stdinLog;
+    argsLog = join(repoRoot, '.mock-args.ndjson');
+    process.env.CEZ_MOCK_ARGS_FILE = argsLog;
     await run('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
     writeFileSync(join(repoRoot, 'a.txt'), 'one\n');
     await run('git', ['add', '-A'], { cwd: repoRoot });
@@ -211,12 +214,66 @@ describe('project and workspace secrets in check steps', () => {
 
     expect(store.getRun(record.id)?.status).toBe('done');
     expect(launches).toEqual(['fixture-value', undefined]);
+    const steps = store.getRun(record.id)?.steps;
+    expect(steps?.[0]?.capabilityPrompt).toContain('  SHARED_KEY');
+    expect(steps?.[1]?.capabilityPrompt).toContain('Workflow: scoped');
+    expect(steps?.[1]?.capabilityPrompt).not.toContain('Secrets in your environment');
     store.flush();
     expect(RunStore.open(join(repoRoot, '.ai/cezar')).getRun(record.id)?.workflowDef?.budget).toEqual(budget);
 
     expect(manager.continueRun(record.id, { text: 'mock:done follow up' })).toEqual({ ok: true });
     await vi.waitFor(() => expect(launches).toHaveLength(3), { timeout: 10_000 });
     expect(launches[2]).toBeUndefined();
+    await settle(record.id);
+  }, 30_000);
+
+  it('composes and snapshots effective capabilities on start and Continue', async () => {
+    await secrets.set(workspace, 'SHARED_KEY', 'workspace-fixture-value', ['agents'], 'Workspace description');
+    await secrets.set(scope, 'SHARED_KEY', 'project-fixture-value', ['agents'], 'Project description');
+    await secrets.set(scope, 'CHECK_ONLY', 'check-fixture-value', ['checks']);
+    await secrets.set(scope, 'UNLISTED', 'unlisted-fixture-value', ['agents']);
+    await secrets.set(scope, 'OPENAI_API_KEY', 'login-fixture-value', ['agents']);
+    mkdirSync(join(repoRoot, '.ai/skills/fixture-skill'), { recursive: true });
+    writeFileSync(join(repoRoot, '.ai/skills/fixture-skill/SKILL.md'), [
+      '---', 'name: fixture-skill', 'description: A fixture skill', '---', 'Fixture instructions.',
+    ].join('\n'));
+
+    const workflow: WorkflowDef = {
+      name: 'capability-fixture',
+      source: 'file',
+      budget: { tokens: 300_000, minutes: 30 },
+      steps: [
+        { id: 'work', prompt: '{{task}}', skill: 'fixture-skill', secrets: ['SHARED_KEY', 'CHECK_ONLY', 'OPENAI_API_KEY', 'MISSING'] },
+        { id: 'verify', command: 'true' },
+      ],
+    };
+    const instructions = 'Project instructions for capability fixture';
+    const record = manager.startRun(workflow, { task: 'mock:done go', worktree: false, systemPrompt: instructions });
+    await settle(record.id);
+
+    const capturedPrompts = () => readFileSync(argsLog, 'utf8').trim().split('\n')
+      .map((line) => JSON.parse(line) as string[])
+      .filter((argv) => argv.includes('--append-system-prompt'))
+      .map((argv) => argv[argv.indexOf('--append-system-prompt') + 1]!);
+    const capabilityBlock = (prompt: string) => prompt.split('\n\n---\n\n').find((part) => part.startsWith('Workflow: capability-fixture'));
+    const opening = capturedPrompts()[0]!;
+    const block = capabilityBlock(opening);
+    expect(block).toBeDefined();
+    expect(opening).toContain(`${instructions}\n\n---\n\n${block}\n\n---\n\n`);
+    expect(block?.split('\n').filter((line) => line.startsWith('  '))).toEqual(['  SHARED_KEY: Project description']);
+    expect(block).toContain('Workflow: capability-fixture (claude); budget 300000 tokens, 30 min active');
+    expect(block).toContain('Other workflows in this project: ');
+    expect(block).toContain('quick-task');
+    expect(block).toContain('Attached skill: fixture-skill');
+    expect(opening).not.toContain('fixture-value');
+    store.flush();
+    expect(RunStore.open(join(repoRoot, '.ai/cezar')).getRun(record.id)?.steps[0]?.capabilityPrompt).toBe(block);
+
+    await secrets.describe(scope, 'SHARED_KEY', 'Updated project description');
+    expect(manager.continueRun(record.id, { text: 'mock:done continue' })).toEqual({ ok: true });
+    await vi.waitFor(() => {
+      expect(capturedPrompts().map(capabilityBlock)).toContain(block?.replace('Project description', 'Updated project description'));
+    }, { timeout: 10_000 });
     await settle(record.id);
   }, 30_000);
 

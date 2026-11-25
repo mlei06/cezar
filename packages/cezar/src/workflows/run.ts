@@ -108,6 +108,7 @@ import { baseDivergence, createOrSwitchBranch } from '../server/git-changes.ts';
 import { isReadOnlyWorkflow, readOnlyWorkflowRefusal } from './capabilities.ts';
 import { getHeadCommit, getRepoInfo } from '../server/git.ts';
 import { loadWorkflows, newerCatalogWorkflow } from './load.ts';
+import { capabilityPrompt } from './capability-prompt.ts';
 import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/store.ts';
 import { switchedWorkflowAgent, taskAgentSelection, workflowAgentSwitch } from '../runs/agent-selection.ts';
 import { artifactsDir, authParkForAccount, isIdleParked } from '../runs/store.ts';
@@ -2048,7 +2049,7 @@ export class RunManager {
     runId: string,
     backend: RunnerId,
     options: { generateFollowups?: boolean; recordedProfileId?: string; namingOnly?: boolean; secretNames?: WorkflowStepDef['secrets']; workflowAgent?: { agentProfile?: string; replaced: boolean } } = {},
-  ): Promise<{ env: Record<string, string>; baseEnv: Record<string, string>; trackerContext?: string; profileId: string; onUsageWindows?: (observation: UsageWindowsObservation) => void; planUsageAccount?: PlanUsageAccountRef }> {
+  ): Promise<{ env: Record<string, string>; baseEnv: Record<string, string>; secrets: Awaited<ReturnType<RunManager['agentVaultEnv']>>['secrets']; trackerContext?: string; profileId: string; onUsageWindows?: (observation: UsageWindowsObservation) => void; planUsageAccount?: PlanUsageAccountRef }> {
     const run = this.store.getRun(runId);
     const owner = this.active.get(runId);
     const ownsTrackerContext = () => this.active.get(runId) === owner
@@ -2172,8 +2173,10 @@ export class RunManager {
       }
     } : undefined;
     const baseEnv = { ...this.agentEnv(runId, options.generateFollowups), ...resolved.env, ...trackerEnv };
+    const { values, secrets } = await this.agentVaultEnv(runId, options.secretNames, baseEnv);
     return {
-      env: { ...await this.agentVaultEnv(runId, options.secretNames), ...baseEnv },
+      env: { ...values, ...baseEnv },
+      secrets,
       baseEnv,
       ...(trackerContext ? { trackerContext } : {}),
       profileId: resolved.profile.id,
@@ -2182,28 +2185,59 @@ export class RunManager {
     };
   }
 
-  private async agentVaultEnv(runId: string, secretNames: WorkflowStepDef['secrets']): Promise<Record<string, string>> {
-    // Secrets the user shared with agents (`agents` audience), as environment variables. A fork's
-    // untrusted head gets none, as its checks do. Registered for redaction like a check's.
-    let agentSecrets: Record<string, string> = this.store.getRun(runId)?.untrustedHead === true || secretNames?.length === 0
-      ? {}
-      : withoutAgentLogins((await this.secrets.resolve(this.projectId ? { projectId: this.projectId, root: this.repoRoot } : undefined, 'agents').catch(() => ({ values: {} as Record<string, string> }))).values);
+  private async agentVaultEnv(runId: string, secretNames: WorkflowStepDef['secrets'], baseEnv: Record<string, string>) {
+    // Resolve values and prompt metadata together so a project override or a failed
+    // decryption affects both in exactly the same way.
+    const resolved = this.store.getRun(runId)?.untrustedHead === true || secretNames?.length === 0
+      ? undefined
+      : await this.secrets.resolve(this.projectId ? { projectId: this.projectId, root: this.repoRoot } : undefined, 'agents').catch(() => undefined);
+    let values = withoutAgentLogins(resolved?.values ?? {});
     if (secretNames?.length) {
       const names = new Set(secretNames);
-      agentSecrets = Object.fromEntries(Object.entries(agentSecrets).filter(([name]) => names.has(name)));
+      values = Object.fromEntries(Object.entries(values).filter(([name]) => names.has(name)));
     }
     // Keep the legacy Azure CLI alias for unrestricted steps; restricted steps use the listed names.
-    if (secretNames === undefined && agentSecrets.AZURE_DEVOPS_PAT && !agentSecrets.AZURE_DEVOPS_EXT_PAT) agentSecrets.AZURE_DEVOPS_EXT_PAT = agentSecrets.AZURE_DEVOPS_PAT;
-    this.store.registerRunSecrets(runId, Object.values(agentSecrets).filter((value) => value.length >= MIN_SECRET_LEN));
-    return agentSecrets;
+    const azureAlias = secretNames === undefined && values.AZURE_DEVOPS_PAT && !values.AZURE_DEVOPS_EXT_PAT;
+    if (azureAlias) values.AZURE_DEVOPS_EXT_PAT = values.AZURE_DEVOPS_PAT!;
+    this.store.registerRunSecrets(runId, Object.values(values).filter((value) => value.length >= MIN_SECRET_LEN));
+    const secrets = Object.keys(values).filter((name) => !Object.hasOwn(baseEnv, name)).map((name) => ({
+      name,
+      description: resolved?.descriptions?.[azureAlias && name === 'AZURE_DEVOPS_EXT_PAT' ? 'AZURE_DEVOPS_PAT' : name],
+    }));
+    return { values, secrets };
   }
 
   private async freshContinuationProfile(
     runId: string, run: RunRecord | undefined, profile: Awaited<ReturnType<RunManager['agentEnvForStep']>>,
   ) {
     const names = continuationSecretNames(run);
-    const env = { ...await this.agentVaultEnv(runId, names), ...profile.baseEnv };
-    return { names, profile: { ...profile, env } };
+    const { values, secrets } = await this.agentVaultEnv(runId, names, profile.baseEnv);
+    return { names, profile: { ...profile, env: { ...values, ...profile.baseEnv }, secrets } };
+  }
+
+  private async taskCapabilityPrompt(
+    runId: string, stepId: string, runner: RunnerId, model: string | undefined, skill: string | undefined,
+    envOverrides: Record<string, string> | undefined,
+  ) {
+    const workflows = await loadWorkflows(this.repoRoot).then(
+      ({ workflows }) => workflows.map(({ name }) => name),
+      () => [],
+    );
+    const run = this.store.getRun(runId);
+    return (secrets: Awaited<ReturnType<RunManager['agentVaultEnv']>>['secrets']) => {
+      const prompt = capabilityPrompt({
+        workflow: run?.workflow ?? 'task',
+        runner,
+        model,
+        budget: run?.workflowDef?.budget,
+        budgetUsd: run?.dispatch?.budgetUsd,
+        secrets: secrets.filter(({ name }) => !envOverrides || !Object.hasOwn(envOverrides, name)),
+        workflows,
+        skill,
+      });
+      this.store.updateStep(runId, stepId, { capabilityPrompt: prompt });
+      return prompt;
+    };
   }
 
   startRun(
@@ -6840,7 +6874,14 @@ export class RunManager {
     // through `deliverMessage`, so it needs the SAME delivery-only `/skill` rewrite the
     // live path applies (#811). Delivery-only: the `user-message` event above already
     // persisted the user's original text, and the transcript must keep showing that.
-    const continueSkills = await this.provisionTaskSkills(state, { slash: leadingSlashSkillName(prompt), text: prompt });
+    const attachedSkill = toolsStep?.skill;
+    const continueSkills = await this.provisionTaskSkills(state, { stepSkill: attachedSkill, slash: leadingSlashSkillName(prompt), text: prompt });
+    const envOverrides = continuationTools.enforceReadOnly ? readOnlyEnv() : undefined;
+    const capabilities = await this.taskCapabilityPrompt(
+      runId, stepId, continueBackend, continueModel,
+      state.skills?.some((skill) => skill.name === attachedSkill && !skill.missingShared) ? attachedSkill : undefined,
+      envOverrides,
+    );
     // Preparation awaits can outlive consent or this state's ownership. Revalidate after
     // the last await, before consuming inbox messages or opening a provider session.
     if (this.disposed || state.cancelled || this.active.get(runId) !== state) {
@@ -6896,6 +6937,7 @@ export class RunManager {
             dispatchPromptPart(state.dispatchPrompt, record?.systemPrompt),
             state.automationsPrompt,
             record?.systemPrompt,
+            capabilities(profile.secrets),
             artifactsPromptPart(artifactsDir(this.dataDir, runId)),
             generateFollowups ? HANDOFF_INSTRUCTIONS : HANDOFF_ONLY_INSTRUCTIONS,
           ),
@@ -6911,7 +6953,7 @@ export class RunManager {
             state.grantedAttachmentLibrary,
             profile.env,
           ),
-          env: continuationTools.enforceReadOnly ? { ...profile.env, ...readOnlyEnv() } : profile.env,
+          env: envOverrides ? { ...profile.env, ...envOverrides } : profile.env,
           onUsageWindows: continueProfile.onUsageWindows,
           // A private server's tools are writes nothing here can vouch for.
           mcpServers: continuationTools.enforceReadOnly ? [] : continueMcp,
@@ -9023,6 +9065,7 @@ export class RunManager {
   ): Promise<string | null> {
     const resumeStep = graphHooks?.usageLimitResume;
     let systemPrompt: string | undefined;
+    let attachedSkill: string | undefined;
     // An attachment-only task (telemetry 18c930de) — the note stands in for the missing text, so a
     // step template (`Review: {{task}}`) still reads as a sentence.
     const taskText = input.task.trim() === '' && attachments.length ? ATTACHMENT_ONLY_TASK : input.task;
@@ -9047,6 +9090,7 @@ export class RunManager {
         // numeric task such as "432" still gives the model enough context to
         // describe the work — and therefore derive a useful title (#432).
         systemPrompt = skillSystemPrompt(skill, { runner: step.runner ?? taskBackend, args: taskText });
+        if (!skill.missingShared) attachedSkill = skill.name;
       } else if (!missingShared.includes(step.skill)) {
         emit({
           type: 'note',
@@ -9471,6 +9515,10 @@ export class RunManager {
     }
     const stepTools = resolveAgentStepTools(state, step, graphHooks?.savedTools);
     this.store.updateStep(runId, step.id, { toolPolicy: stepTools });
+    const envOverrides = stepTools.enforceReadOnly ? readOnlyEnv() : undefined;
+    const capabilities = await this.taskCapabilityPrompt(
+      runId, step.id, stepBackend, backendModel, attachedSkill, envOverrides,
+    );
     const stepPrivateMcp = !stepDef || !isReadOnlyWorkflow(stepDef);
     const runner = createRunner(stepBackend);
     const stepMcp = stepPrivateMcp ? await this.privateMcpForLaunch(stepBackend, onEvent) : [];
@@ -9496,6 +9544,7 @@ export class RunManager {
             dispatchPromptPart(state.dispatchPrompt, extraSystemPrompt),
             state.automationsPrompt,
             extraSystemPrompt,
+            capabilities(profile.secrets),
             artifactsPromptPart(artifactsDir(this.dataDir, runId)),
             followupsEnabled() && input.generateFollowups !== false
               ? HANDOFF_INSTRUCTIONS
@@ -9512,7 +9561,7 @@ export class RunManager {
             state.grantedAttachmentLibrary,
             profile.env,
           ),
-          env: stepTools.enforceReadOnly ? { ...profile.env, ...readOnlyEnv() } : profile.env,
+          env: envOverrides ? { ...profile.env, ...envOverrides } : profile.env,
           onUsageWindows: stepProfile.onUsageWindows,
           mcpServers: stepTools.enforceReadOnly ? [] : stepMcp,
           model: backendModel,

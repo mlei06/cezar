@@ -176,6 +176,8 @@ export const stepStateSchema = z.object({
   profileId: z.string().optional(),
   toolPolicy: stepToolPolicySchema.optional(),
   sessionSecretPolicy: sessionSecretPolicySchema.optional(),
+  /** Capability section sent at the latest launch of this step. Rebuilt when launching again. */
+  capabilityPrompt: z.string().optional(),
   /** Canonical provider/model identity resolved for this step; absent for auto-model steps and
    *  records written before per-step attribution existed. */
   modelIdentity: z.string().optional(),

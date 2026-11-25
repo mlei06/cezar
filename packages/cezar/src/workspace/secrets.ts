@@ -88,13 +88,14 @@ type SecretFile = z.infer<typeof secretFileSchema>;
  * to inspect and compare. The caller turns this into one note on the run.
  */
 export interface SecretsRead {
-  values: Record<string, { value: string; audiences: SecretAudience[] }>;
+  values: Record<string, { value: string; audiences: SecretAudience[]; description?: string }>;
   skipped?: string;
 }
 
 /** What a consumer gets back: the variables it may see, and what it should tell the user. */
 export interface ResolvedSecrets {
   values: Record<string, string>;
+  descriptions: Record<string, string | undefined>;
   /** One line each: a skipped store, a bound name that is not stored, a name the audience may not read. */
   notes: string[];
 }
@@ -312,13 +313,16 @@ export class SecretStore {
       return undefined;
     };
     const values: Record<string, string> = {};
+    const descriptions: ResolvedSecrets['descriptions'] = {};
     if (!bindings) {
       for (const source of sources) {
         for (const [name, entry] of Object.entries(source.read.values)) {
-          if (entry.audiences.includes(audience)) values[name] = entry.value;
+          if (!entry.audiences.includes(audience)) continue;
+          values[name] = entry.value;
+          descriptions[name] = entry.description;
         }
       }
-      return { values, notes };
+      return { values, descriptions, notes };
     }
     for (const binding of bindings) {
       const name = typeof binding === 'string' ? binding : binding.name;
@@ -333,8 +337,9 @@ export class SecretStore {
         continue;
       }
       values[as] = entry.value;
+      descriptions[as] = entry.description;
     }
-    return { values, notes };
+    return { values, descriptions, notes };
   }
 
   private file(id: string): string {
