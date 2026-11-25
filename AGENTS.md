@@ -37,6 +37,11 @@ Practical rules:
   - Old cezar versions are pruned to the running version plus 2.
   - `worktreeIdleDays`/`resources.worktreeIdleDaysDefault`, `archivedTaskDeleteDays`/`resources.archivedTaskDeleteDaysDefault` and `versionRetention` set to 0 turn each off.
   - The archived-task deletion changes what archive means, from "hidden and kept" to "deleted after 90 days". It is listed here because it removes user data unattended. The opt-in version is a default of 0 in `DEFAULT_ARCHIVED_TASK_DELETE_DAYS`.
+- Owner-approved exceptions (2026-11-25, this fork only; spec `.ai/specs/2026-11-25-self-improving-factory.md`):
+  - **Autonomous managers by default** (`CEZ_MANAGER_AUTONOMOUS_DEFAULT=0` to opt out): a new manager's merges, automation enables and jobs run without an approval card, and its chat turns get the full toolset. Watch turns stay fenced.
+  - **A manager per project** (`CEZ_AUTO_PROJECT_MANAGERS=0`): created once per registered project; never for temp-folder or worktree projects; an unused one is removed with its project.
+  - **Secrets reach agents by default**: a new secret's audiences default to `checks,agents`, and agent login names (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, …) are never handed to agents.
+  - **Scoring and self-improvement** (`CEZ_SCORING=0`, `CEZ_SELF_IMPROVEMENT=0`): finished tasks are judged by the configured judge, a self-hosted model by default, and an automation starts improvement runs when a queue fills. These spend model time unattended, which is why they're recorded here.
 - A missing dependency, an absent peer, a read-only home: degrade to a smaller working cockpit, never fail the boot.
 - Prefer a proxy-free, daemon-free mechanism when one exists — and when it doesn't, keep the mechanism invisible: no process to manage, no port to remember, no file to edit.
 - Never trade a working default for a knob.

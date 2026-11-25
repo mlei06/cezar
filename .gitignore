@@ -7,8 +7,13 @@ dist/
 # package by packages/cezar/scripts/sync-readme.mjs. Never edit the copy.
 /packages/cezar/README.md
 
-# cezar runtime state in this repo (runs, worktrees, launch-key)
-.ai/cezar/
+# cezar runtime state in this repo (runs, worktrees, launch-key); the harness project's own
+# factory files (workflows, scorers, benchmarks, the HARNESS marker) are committed
+.ai/cezar/*
+!.ai/cezar/workflows/
+!.ai/cezar/scorers/
+!.ai/cezar/benchmarks/
+!.ai/cezar/HARNESS
 
 # locally installed agent skills (per-machine installs, not repo content)
 .agents/
