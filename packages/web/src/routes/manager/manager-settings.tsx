@@ -1,4 +1,4 @@
-import { BellIcon, BotIcon, BrainIcon, ClockIcon, MessageSquareTextIcon, OctagonXIcon, PlugIcon, PlusIcon, RefreshCwIcon, ReplyIcon, SettingsIcon, TerminalIcon, Trash2Icon, UserRoundIcon } from 'lucide-react'
+import { BellIcon, BotIcon, BrainIcon, ClockIcon, MessageSquareTextIcon, OctagonXIcon, PlugIcon, PlusIcon, RefreshCwIcon, ReplyIcon, SettingsIcon, TerminalIcon, Trash2Icon, UserRoundIcon, ZapIcon } from 'lucide-react'
 import { useCallback, useImperativeHandle, useRef, useState, type ReactNode, type Ref } from 'react'
 
 import { checkManager, useDeleteManager, useUpdateManager } from '@/api/managers'
@@ -428,6 +428,15 @@ export function ManagerSettings({ manager, onPatch, ref }: { manager: ManagerSum
               aria-label="Cancel or switch any task"
               checked={manager.cancelAnyTask === true}
               onCheckedChange={(cancelAnyTask) => update.mutate({ cancelAnyTask })}
+            />
+          </label>
+          <label className="flex min-h-8 w-full items-center gap-1.5 px-1.5 text-sm text-muted-foreground pointer-coarse:min-h-11">
+            <ZapIcon aria-hidden="true" className="size-3.5 shrink-0" />
+            <span className="flex-1" title="Merges, automation enables and jobs run without an approval card, and chat turns get your full toolset: any shell command, file edits anywhere, no permission prompts. Scheduled checks stay read-only.">Act without asking</span>
+            <Switch
+              aria-label="Act without asking"
+              checked={manager.autonomous === true}
+              onCheckedChange={(autonomous) => update.mutate({ autonomous })}
             />
           </label>
           <Separator className="my-1.5" />

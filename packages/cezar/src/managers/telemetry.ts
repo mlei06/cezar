@@ -66,6 +66,7 @@ const FIELD_OF: Record<Exclude<keyof UpdateManagerInput, 'quickPrompts' | 'clear
   access: 'projects',
   projectAccess: 'projects',
   cancelAnyTask: 'projects',
+  autonomous: 'projects',
   // What the manager may reach, like its project access.
   bashAllow: 'projects',
   jobs: 'jobs',

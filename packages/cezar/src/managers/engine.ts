@@ -380,6 +380,8 @@ const TAIL_BYTES = 256 * 1024;
 const PREVIEW_LIMIT = 120;
 
 export const MANAGER_ALLOWED_TOOLS = ['Read', 'Grep', 'Glob', 'Bash'];
+/** An autonomous manager's chat turns: what the user's own coding agent has. */
+export const MANAGER_FULL_TOOLS = ['Read', 'Edit', 'Write', 'Grep', 'Glob', 'Bash', 'WebFetch', 'WebSearch', 'Skill', 'TodoWrite', 'NotebookEdit'];
 /** Claude's wildcard spelling: `cez-manager` alone or with arguments, nothing else. */
 export const MANAGER_SANDBOX_EXCLUDED = ['cez-manager *'] as const;
 /** Claude's absolute-path rule spelling: `//abs/path`, a Windows drive as `//c/…`. */
@@ -915,6 +917,7 @@ export class ManagerEngine {
       ...(input.effort !== undefined ? { effort: input.effort } : {}),
       ...(input.agentProfile !== undefined ? { agentProfile: input.agentProfile } : {}),
       ...(input.connectors !== undefined ? { connectors: input.connectors } : {}),
+      ...(input.autonomous ? { autonomous: true } : {}),
       cronMinutes: input.cronMinutes ?? MANAGER_DEFAULT_CRON_MINUTES,
       jobs: [],
       createdAt: at,
@@ -974,6 +977,7 @@ export class ManagerEngine {
       ...(input.confirm !== undefined ? { confirm: input.confirm } : {}),
       ...(quickPrompts?.length ? { quickPrompts } : {}),
       ...(input.cancelAnyTask !== undefined ? { cancelAnyTask: input.cancelAnyTask } : {}),
+      ...(input.autonomous !== undefined ? { autonomous: input.autonomous } : {}),
       ...(bashAllow?.length ? { bashAllow } : {}),
       ...(input.jobs
         ? {
@@ -2282,7 +2286,9 @@ export class ManagerEngine {
     // An unattended watch reads untrusted PR text; where `bashAllowlist` is no fence, the backend's
     // own read-only mode is. The snapshot is already in the prompt.
     const readOnlyWatch = turn.kind === 'watch' && !ALLOWLIST_FENCED.has(runner) && canEnforceReadOnly(runner);
-    const bashHook = runner === 'claude' ? managerBashHookCommand() : undefined;
+    // Autonomous chat, job and follow-up turns get the user's own toolset; a watch stays fenced.
+    const full = manager.autonomous === true && turn.kind !== 'watch';
+    const bashHook = runner === 'claude' && !full ? managerBashHookCommand() : undefined;
     // Read per turn, so a revoke applies from the next one; a watch reads untrusted text and gets none.
     const connectorTurn = runner === 'claude' && turn.kind !== 'watch';
     // A new chat session hears what it would otherwise have remembered; a watch or job is self-contained.
@@ -2300,13 +2306,16 @@ export class ManagerEngine {
         // Only where the turn can Write the file it would pass.
         {
           textInFiles: runner === 'claude' && writable !== undefined,
+          full,
           memory: renderMemory(this.memoryFor(id, (profile.env as Record<string, string | undefined>).CLAUDE_CONFIG_DIR ?? process.env.CLAUDE_CONFIG_DIR).entries),
         },
       ),
       userPrompt: resumeId ? prompt : freshPrompt,
       cwd: store.workdir(id),
-      allowedTools: [...MANAGER_ALLOWED_TOOLS, ...(writable ? managerWriteRules(writable) : []), ...connectorRules],
-      bashAllowlist: [...MANAGER_BASH_ALLOWLIST, ...(manager.bashAllow ?? [])],
+      allowedTools: full
+        ? [...MANAGER_FULL_TOOLS, ...connectorRules]
+        : [...MANAGER_ALLOWED_TOOLS, ...(writable ? managerWriteRules(writable) : []), ...connectorRules],
+      ...(full ? { bypassPermissions: true } : { bashAllowlist: [...MANAGER_BASH_ALLOWLIST, ...(manager.bashAllow ?? [])] }),
       ...(bashHook ? { bashHookCommand: bashHook } : {}),
       // The user's Bash sandbox blocks the loopback cockpit `cez-manager` talks to; the hook still vets it.
       ...(runner === 'claude' ? { sandboxExcludedCommands: [...MANAGER_SANDBOX_EXCLUDED] } : {}),
@@ -2336,7 +2345,7 @@ export class ManagerEngine {
       ...(manager.effort && runnerSupportsReasoningEffort(runner) ? { reasoningEffort: manager.effort } : {}),
     };
     // Claude's Bash inherits the cockpit's env plus the turn's; the broker runs Codex's commands in the same.
-    if (runner === 'codex') base.brokeredShell = codexManagerShell(manager.bashAllow, { ...process.env, ...base.env });
+    if (runner === 'codex' && !full) base.brokeredShell = codexManagerShell(manager.bashAllow, { ...process.env, ...base.env });
     // A retry is the same user turn: it counts once, measured from the session as it stood before.
     const origin: TurnOrigin = { startedAt: this.now(), ...(resumeId && state.sessions[turn.kind] ? { prior: state.sessions[turn.kind]! } : {}) };
     const first = await this.session(id, base, sessionKey, runner, resumeId, turn, onProgress, origin);
@@ -3274,7 +3283,7 @@ export class ManagerEngine {
     return { ...action, name: automation.name.slice(0, 1000), revision: automation.revision, summary: clipSummary(JSON.stringify(definition)) };
   }
 
-  async propose(id: string, input: ManagerProposeActionInput): Promise<{ actionId: string; status: ManagerActionStatus; replaced?: string[]; alsoWaitingIn?: string[] } | ManagerRefusal> {
+  async propose(id: string, input: ManagerProposeActionInput): Promise<{ actionId: string; status: ManagerActionStatus; replaced?: string[]; alsoWaitingIn?: string[]; result?: string } | ManagerRefusal> {
     const scope = await this.toolScope(id, actionProject(input.action), true);
     if ('error' in scope) return scope;
     const refused = accessRefusal(scope.manager, input.action);
@@ -3313,6 +3322,14 @@ export class ManagerEngine {
     if (action.type === 'merge-pr') this.managerActed(id, { prs: [{ projectId: action.projectId, number: action.number }] }, `you proposed merging #${action.number} since`);
     this.deps.telemetry?.track('manager_action_proposed', managerActionLabel(action));
     this.emitChange(id);
+    // Autonomous: the card is the record, not a question — it runs now, as an approval would.
+    if (scope.manager.autonomous === true) {
+      const decided = await this.decide(id, message.id, 'approve');
+      const settled = this.deps.store.message(id, message.id);
+      const status = settled?.kind === 'action' ? settled.status : 'failed';
+      const result = settled?.kind === 'action' ? settled.result : 'error' in decided ? decided.error : undefined;
+      return { actionId: message.id, status, ...(result ? { result } : {}), ...(replaced.length ? { replaced } : {}) };
+    }
     // An approval always waits on the user, so it never needs the agent's judgement.
     this.alert(id, message, `Needs your approval: ${describeAction(action)}`, 'approval');
     return { actionId: message.id, status: 'pending', ...(replaced.length ? { replaced } : {}), ...(alsoWaitingIn.length ? { alsoWaitingIn } : {}) };

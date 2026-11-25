@@ -227,6 +227,10 @@ export const managerSchema = z.object({
   quickPrompts: z.array(managerQuickPromptSchema).max(MANAGER_QUICK_PROMPTS_MAX).optional(),
   /** `task cancel` and `task switch` may act on other tasks in connected write projects. Absent = own only. */
   cancelAnyTask: z.boolean().optional(),
+  /** Autonomous mode: its merges, automation enables, jobs and connector calls run at once instead of
+   *  waiting on an approval card, and its chat turns get the full toolset (no Bash policy, Edit and
+   *  Write anywhere, permission prompts skipped on Claude). Scheduled checks stay read-only. Absent = off. */
+  autonomous: z.boolean().optional(),
   /** Read-only `gh` patterns the user allowed beyond the built-in policy. Absent = none. */
   bashAllow: z.array(managerBashPatternSchema).max(MANAGER_BASH_ALLOW_MAX).optional(),
   jobs: z.array(managerJobSchema).max(32),
@@ -291,6 +295,7 @@ export const createManagerInputSchema = z.object({
   avatar: z.number().int().min(0).max(63).optional(),
   mascot: managerMascotSchema.optional(),
   connectors: managerConnectorsSchema.optional(),
+  autonomous: z.boolean().optional(),
 });
 export type CreateManagerInput = z.infer<typeof createManagerInputSchema>;
 
@@ -320,6 +325,7 @@ export const updateManagerInputSchema = z.object({
   /** Replaces the whole list; `[]` removes every chip. */
   quickPrompts: z.array(managerQuickPromptSchema).max(MANAGER_QUICK_PROMPTS_MAX).optional(),
   cancelAnyTask: z.boolean().optional(),
+  autonomous: z.boolean().optional(),
   /** Replaces the whole list; `[]` removes every pattern. */
   bashAllow: z.array(managerBashPatternSchema).max(MANAGER_BASH_ALLOW_MAX).optional(),
   /** Forget the refused-command log. */
@@ -839,6 +845,8 @@ export const managerProposeActionResponseSchema = z.object({
   replaced: z.array(z.string()).optional(),
   /** Other managers whose chats already wait on a card for the same PR or automation. */
   alsoWaitingIn: z.array(z.string()).optional(),
+  /** An autonomous manager's action ran at once: what it did, or why it failed. */
+  result: z.string().optional(),
 });
 
 export const managerTaskDetailQuerySchema = z.object({

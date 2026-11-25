@@ -2637,6 +2637,28 @@ describe('ManagerEngine', () => {
       expect(backend.specs).toHaveLength(1);
     });
 
+    it('gives an autonomous manager the full toolset in chat, and keeps its watch fenced', async () => {
+      const engine = makeEngine();
+      const id = await create(engine);
+      await engine.update(id, { autonomous: true });
+      engine.send(id, 'hi');
+      await settled(engine);
+      engine.check(id);
+      await settled(engine);
+      const [chat, watch] = backend.specs;
+      expect(chat?.allowedTools).toEqual(expect.arrayContaining(['Bash', 'Edit', 'Write', 'WebFetch', 'Skill']));
+      expect(chat?.bypassPermissions).toBe(true);
+      expect(chat?.bashAllowlist).toBeUndefined();
+      expect(chat?.bashHookCommand).toBeUndefined();
+      expect(chat?.systemPrompt).toContain('AUTONOMOUS mode');
+      expect(chat?.systemPrompt).toContain('MERGES now');
+      expect(chat?.systemPrompt).not.toContain('only happens when the user approves the card');
+      expect(buildClaudeArgs(chat!, {})).toEqual(expect.arrayContaining(['--permission-mode', 'bypassPermissions']));
+      expect(watch?.allowedTools).toEqual(['Read', 'Grep', 'Glob', 'Bash']);
+      expect(watch?.bypassPermissions).toBeUndefined();
+      expect(watch?.bashAllowlist).toContain('cez-manager');
+    });
+
     it('skips a disabled job', async () => {
       let now = Date.parse('2026-10-31T12:00:00.000Z');
       const engine = makeEngine({ now: () => now });
@@ -2915,6 +2937,21 @@ describe('ManagerEngine', () => {
 
       backend.open[0]?.finish();
       await settled(engine);
+    });
+
+    it('an autonomous manager merges at once: the card is the record, already done', async () => {
+      const engine = makeEngine();
+      const id = await create(engine);
+      await engine.update(id, { autonomous: true });
+      const proposed = await engine.propose(id, { action: merge, reason: 'green' });
+      expect(proposed).toMatchObject({ status: 'done', result: 'Merged #7' });
+      expect(requests.find((request) => request.path.endsWith('/merge'))).toMatchObject({ path: '/api/v1/p/alpha/github/prs/7/merge', method: 'POST' });
+      expect(actions(id)[0]).toMatchObject({ status: 'done', result: 'Merged #7' });
+      expect((await engine.summary(id))?.pendingActions).toBe(0);
+      // Turned off again, the next merge waits on the user.
+      await engine.update(id, { autonomous: false });
+      const next = await engine.propose(id, { action: { ...merge, number: 8 } });
+      expect(next).toMatchObject({ status: 'pending' });
     });
 
     it('proposing performs nothing; only the decision reaches the merge route', async () => {
