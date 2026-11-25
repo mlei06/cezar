@@ -8,8 +8,10 @@ A first end-to-end test (an autonomous manager on Codex gpt-6.2-sol, asked only 
 
 This spec adds three things:
 1. **Agents know what they have.** Separate list commands for managers (secrets, workflows, skills, models, agents). An optional `--secrets` flag on task create, and the task's secret names written into its prompt. A rule that the manager checks its configuration first.
-2. **Lean tasks.** Default working rules for every task, a brief template, and a per-task budget that wakes the manager when crossed.
-3. **A feedback loop.** Every finished task gets an automatic evaluation by a cheap model that reads its whole transcript plus measured metrics. It gives a pass/fail verdict, a diagnosis and a root-cause category, and it shows as columns on the task row. The weekly audit reads those columns instead of transcripts.
+2. **Lean tasks.** A brief template in the manager skill, and a per-task budget that wakes the manager when crossed.
+3. **A feedback loop.** Every finished task gets an automatic evaluation by a cheap model that reads its whole transcript plus measured metrics. It gives a pass/fail verdict, a diagnosis and a root-cause category, and it shows as columns on the task row. Weekly audits read those columns instead of transcripts, and each fix lands where its cause lives:
+   - in the project's own repository (docs, AGENTS.md, skills, workflows, structure), fixed by that project's manager;
+   - in the harness, fixed by a manager for the Cezar fork itself, which ships through a release it can roll back.
 
 ## Evidence (open-webui, 2026-11-25)
 
@@ -26,8 +28,9 @@ This spec adds three things:
 In scope:
 - the manager's list commands;
 - task secrets and the capability block in task prompts;
-- task working rules and budgets;
+- task budgets;
 - per-task evaluation (metrics, transcript, evaluator, storage, columns, API);
+- routing fixes to the project or the harness, the two weekly audits, and the harness project with its release process;
 - the weekly audit job;
 - manager guidance.
 
@@ -90,22 +93,11 @@ A secret gains an optional `description` field (at most 200 characters, never se
 
 Without descriptions, names alone already beat the status quo. With them, an agent knows what `JENKINS_VM_PASSWORD` is for without guessing.
 
-### D4. Working rules for every task
-
-A short fixed section goes into every task's system prompt (all runners):
-- Search (`rg`, line ranges) before reading; never print a whole long file.
-- Wait for long jobs (builds, deploys, copies) inside one shell command, with a loop and a timeout. Never check back turn after turn.
-- Reuse the workflows and skills (and the scripts inside them) listed in the capability block before writing new ones.
-- Stay inside the brief, and report scope you think is missing instead of doing it.
-- Manager skills are not for tasks.
-
-`manage-project` already carries the matching brief template: goal and done, known facts, constraints, exact files to read, existing tools, and scope.
-
-### D5. A budget per task that wakes the manager
+### D4. A budget per task that wakes the manager
 
 A run may carry `budget: { tokens?: number, minutes?: number }`.
 - **Where it comes from:** `--budget-tokens` and `--budget-minutes` on `task create`, else the project's `taskBudget` in `.ai/cezar/config.json`, else defaults of 3M input tokens and 30 minutes of active time. Time spent queued or parked doesn't count.
-- **When it's crossed:** the run records `budgetExceeded` with the metric. The task keeps running; this is not a kill. A run with a manager wakes it with a follow-up event carrying the D6 metrics so far (tokens, calls, largest outputs).
+- **When it's crossed:** the run records `budgetExceeded` with the metric. The task keeps running; this is not a kill. A run with a manager wakes it with a follow-up event carrying the D5 metrics so far (tokens, calls, largest outputs).
 - **The manager's choices:**
   - let it continue, raising the budget with `task budget <run> …`;
   - steer it with `task say`;
@@ -114,7 +106,7 @@ A run may carry `budget: { tokens?: number, minutes?: number }`.
 - **Without a manager:** the task row shows an amber budget marker.
 - **Repeats:** after the first crossing, the next alert comes at 2× the budget, so a task that legitimately runs long doesn't nag.
 
-### D6. Task metrics, and the transcript the evaluator reads
+### D5. Task metrics, and the transcript the evaluator reads
 
 When a run reaches a terminal state, cezar computes `runs/<id>.metrics.json` from the event log. No model is involved. These are only the hard numbers a transcript doesn't state (durations, tokens, context per call); spotting patterns such as polling or re-patching is left to the evaluator, which reads the transcript. It holds:
 
@@ -130,7 +122,7 @@ When a run reaches a terminal state, cezar computes `runs/<id>.metrics.json` fro
 
 When a transcript is longer than the evaluator's context window, cezar shortens only the largest tool outputs, keeping each one's head and tail and noting how much was cut, until it fits. It never drops calls or messages. The metrics header always stays whole, since it carries the efficiency evidence (tool time against model time, context per call) that a transcript doesn't show.
 
-### D7. Per-task evaluation: a separate automatic job, not the manager
+### D6. Per-task evaluation: a separate automatic job, not the manager
 
 **Decision:** a separate evaluator runs automatically after every terminal task. The manager doesn't do it. Reasons:
 - **Consistency:** every task is judged by the same rubric and model, including tasks a user or automation started. The manager only knows its own tasks.
@@ -142,7 +134,7 @@ The manager still reads the result. The verdict and root cause ride on the task'
 
 **How it runs:**
 - **Model:** an internal, tool-less model call, not a cezar task, so evaluations never create runs, worktrees or more evaluations. The runner and model come from workspace settings `evaluation.runner` and `evaluation.model`. The default here is `opencode` + `davy/mistral-large-4`, which is self-hosted, so transcripts stay on the machine and the company network.
-- **Prompt:** the rubric below, the metrics and the full transcript (D6). The answer is JSON validated by a zod schema, retried once on invalid output, else stored as `evaluation.error`.
+- **Prompt:** the rubric below, the metrics and the full transcript (D5). The answer is JSON validated by a zod schema, retried once on invalid output, else stored as `evaluation.error`.
 - **Skips:** runs under 60 seconds of active time with fewer than 5 tool calls (they're recorded as `skipped`), cancelled-before-start runs, and dry runs.
 - **Re-running:** `cez evaluate <run>` re-runs one evaluation, for example after changing the rubric.
 
@@ -181,7 +173,7 @@ The manager still reads the result. The verdict and root cause ride on the task'
 
 `pass` means the brief's done criteria were met; `partial` that some were; `fail` that none were, or the outcome was wrong. Efficiency is judged against the task's size, using the metrics and the transcript.
 
-### D8. Task row columns and API
+### D7. Task row columns and API
 
 - **Columns** on the Tasks table (hidden by default, toggled in the column menu): Verdict, Efficiency, Root cause (the first category, plus a count), Tokens, Active time and Model.
 - **Detail:** the task detail gets an Evaluation panel showing the summary, root causes with evidence and fixes, and the metrics.
@@ -190,18 +182,69 @@ The manager still reads the result. The verdict and root cause ride on the task'
   - `GET /p/:id/runs/:run/evaluation` returns one evaluation;
   - `GET /workspace/evaluations?since=7d&groupBy=category` returns aggregates for the audit.
 
-### D9. The weekly audit reads the columns
+### D8. Fixes land where the root cause lives: project repo or harness
 
-A manager job (`job add --every 10080`) installed by default on automatic managers, run on the low-reasoning model per `manage-project`'s routing table:
-1. **Read the aggregates:** `GET /workspace/evaluations?since=7d`. That gives verdict rates, tokens and time per verdict, and the top root causes by count and cost.
-2. **Pick the top three fixable causes,** grouped by `target`.
-3. **Act on each:**
-   - **Project targets** (`agents-md`, `repo-tooling`, `workflow`): start a task with the right skill to fix it and open a PR.
-   - **`manager-skill`:** propose an edit to `~/.cezar/manager-skills/`.
-   - **`cezar`:** write a short issue note to the owner.
-4. **Report:** one message with the week's numbers and what it changed.
+A root cause lives in one of two places, and each has an owner that can change it through ordinary tasks and pull requests.
 
-The audit never reads transcripts. When a cause needs more evidence, it opens that run's evaluation and metrics.
+**The project's factory, in the project's repository.** This is "factory as code": everything that shapes how agents work on one project is committed in that repo, where its tasks can change it.
+
+| Fix | Where it lands |
+|---|---|
+| Docs cleanup, a shorter required reading path | the repo's docs |
+| Project facts and rules | `AGENTS.md` |
+| A repeatable procedure, with its scripts | `.ai/skills/<name>/` (scripts in `scripts/`) |
+| A routine job that shouldn't need a model | `.ai/cezar/workflows/` |
+| Structure that confuses agents: refactors, file splits, test entry points | the code itself |
+| Task defaults (budget, models) | `.ai/cezar/config.json` |
+
+**The harness, in the Cezar fork's repository.** These fixes change how every project's agents work:
+- the engine and runners;
+- tool grants and hooks;
+- system prompts and the capability block;
+- manager skills (`manager-skills/`);
+- the evaluator.
+
+**Routing.** The evaluator's `target` (D6) decides where a fix goes:
+
+| `target` | Owner | Repository |
+|---|---|---|
+| `agents-md`, `repo-tooling`, `workflow`, `brief` | that project's manager | the project |
+| `cezar`, `manager-skill` | the harness manager (D9) | the Cezar fork |
+| `infra` | the owner, via the project manager | outside both: credentials, CI configuration |
+
+**Cross-project promotion.** When the same project-level cause shows up in two or more projects within the audit window, it's a harness problem in disguise. The harness manager fixes it once:
+- a better default;
+- a global skill;
+- a check that warns when a repo lacks something.
+
+That replaces patching each repo. For example, "the required reading is over 30k characters" in several repos suggests a skill or check for lean `AGENTS.md`, not five documentation PRs.
+
+**The audit runs at two levels.** Both are weekly manager jobs that read only evaluation fields (D7), on the low-reasoning model:
+1. **Project audit,** run by each project manager over its own project's evaluations. It picks the top project-level causes, then starts a task per fix with the right skill attached (docs cleanup, AGENTS.md, a new skill or workflow, a refactor). Each opens a PR in the project. Larger refactors are proposed to the owner first, since they touch product code.
+2. **Harness audit,** run by the harness manager over every project's evaluations. It takes the harness-targeted causes and the cross-project repeats, and turns them into tasks in the Cezar fork.
+
+Each audit posts one message with the week's numbers, its changes, and the change against the previous week for the causes it fixed earlier (D9).
+
+### D9. The harness maintains itself: a project for the Cezar fork
+
+The fork (`~/dev/cezar`, remote `mlei06/cezar`) is registered as a Cezar project like any other, with its own manager: the harness manager. Its tasks diagnose and change the harness's own code, prompts, skills and hooks, through branches, tests and PRs, like any project.
+
+Changing the program that is running needs three guarantees.
+
+1. **The running harness is a release, not the working tree.** The cockpit service runs from a release built from a merged commit, for example `~/.cezar/harness/releases/<sha>/` behind a `current` symlink, never from `~/dev/cezar` directly. Today the service runs straight from `~/dev/cezar/packages/cezar/dist`, so merging or building there changes the live harness mid-task. That has to change before the harness manager is allowed to merge.
+2. **Deploying the harness is a workflow,** `harness-release`, and it's mostly check steps:
+   1. full typecheck, tests and build on the merged commit;
+   2. install it as a new release;
+   3. wait until no task is running and no manager turn is active;
+   4. switch `current` and restart;
+   5. check `/api/v1/health` and run one dry-run task;
+   6. on failure, switch back to the previous release and restart.
+3. **Attribution.** Every evaluation records the harness release it ran under (`harnessVersion`). The harness audit compares a cause's rate and cost before and after the release that targeted it, and reverts a change that made things worse.
+
+**Limits:**
+- **The grader:** changes to the evaluator, its rubric or its model need the owner's approval, because a factory that grades itself can learn to pass its own test.
+- **Upstream:** each harness PR is labelled fork-only or upstreamable, so generic improvements can also go to open-mercato/cezar.
+- **Overrides:** `~/.cezar/manager-skills/` stays for local experiments that shadow the fork's skills. A change that works there is moved into the fork by PR.
 
 ## Modules
 
@@ -211,23 +254,25 @@ The audit never reads transcripts. When a cause needs more evidence, it opens th
 | `managers/engine.ts` | routes for the list commands; grantedSecrets and budget on createTask; budget follow-up events; evaluation summary on status cards |
 | `contract/src/managers.ts`, `runs.ts`, `secrets.ts` | `grantedSecrets`, `budget`, `budgetExceeded`, `evaluation` on RunRecord; secret `description` |
 | `workspace/secrets.ts`, `secrets-cli.ts`, Settings | `description` |
-| `workflows/run.ts` | the capability block and working rules in the system prompt; grantedSecrets narrowing; budget accounting from token-usage events; a metrics-and-evaluate hook on terminal status |
+| `workflows/run.ts` | the capability block in the system prompt; grantedSecrets narrowing; budget accounting from token-usage events; a metrics-and-evaluate hook on terminal status |
 | `evaluation/metrics.ts` (new) | metrics from the event log; transcript rendering, shortened to fit a context window |
 | `evaluation/evaluate.ts` (new) | the tool-less model call, rubric, zod schema, storage and re-run |
 | `server/server.ts` | evaluation routes and aggregates |
 | web Tasks table and detail | columns and the Evaluation panel |
-| `manager-skills/manage-project` | check-first with the list commands; budgets; audit steps |
+| `manager-skills/manage-project` | check-first with the list commands; budgets; project-audit steps |
+| `manager-skills/manage-harness` (new) | the harness manager's playbook: harness audit, cross-project promotion, `harness-release`, attribution |
+| harness release layout + `harness-release` workflow (new, in the fork's `.ai/cezar/workflows/`) | build, test, install, drain, switch, health-check, roll back |
 
 ## Phases
 
 1. **Know what you have:**
-   - D1 list commands, D2 the capability block and optional `--secrets`, D3 descriptions;
-   - D4 working rules.
+   - D1 list commands, D2 the capability block and optional `--secrets`, D3 descriptions.
    
    Smallest change, biggest effect on the observed failures.
-2. **Budgets:** D5, with the D6 metrics computed live.
-3. **Evaluation:** D6 metrics and transcript, D7 evaluator, D8 columns and API.
-4. **Audit:** D9, plus evaluating manager turns the same way.
+2. **Budgets:** D4, with the D5 metrics computed live.
+3. **Evaluation:** D5 metrics and transcript, D6 evaluator, D7 columns and API.
+4. **Audit:** D8 project and harness audits.
+5. **Self-maintenance:** D9. Release-based service install and `harness-release` first, then register the fork as a project with its harness manager. Evaluating manager turns the same way comes last.
 
 ## Tests and acceptance
 
@@ -238,11 +283,12 @@ The audit never reads transcripts. When a cause needs more evidence, it opens th
   - unknown or non-agent names are refused with the valid list;
   - the capability block names exactly the granted secrets;
   - redaction covers every granted value.
-- **Working rules:** present in every runner's system prompt.
 - **Budget:** crossing tokens or active minutes once emits one follow-up and records `budgetExceeded`; the next alert comes at 2×; queued and parked time don't count.
 - **Metrics, from a replayed event log of the open-webui upgrade task:** 116 model calls, about 93k average context, the 77k-character first output among the largest, and model time greater than tool time.
 - **Evaluator:** the rendered transcript keeps every call and message; an over-long transcript is shortened only in its largest outputs and fits the window; a recorded model reply validates against the schema; an invalid reply is retried once, then stored as an error; skips apply; evaluator calls never create runs.
 - **Columns:** shown from stored evaluations; the aggregates endpoint groups by category and target.
+- **Routing:** project targets reach the project manager's audit; `cezar` and `manager-skill` targets, and causes repeated across two projects, reach the harness audit.
+- **Harness release:** a failing health check after a switch restores the previous release; a switch never happens while a task or manager turn is active.
 
 **Acceptance:**
 - A rerun of "update production" on open-webui needs no round trip to the user for access.
