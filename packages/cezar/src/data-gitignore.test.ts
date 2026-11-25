@@ -53,6 +53,7 @@ describe('ensureDataGitignore', () => {
     const lines = gitignore().split('\n');
     expect(lines).toContain('my-own-scratch/');
     expect(lines).toContain('drafts/');
+    expect(lines).toContain('factory/');
     expect(lines.filter((l) => l === 'runs.json')).toHaveLength(1); // never duplicated
   });
 
