@@ -19,8 +19,8 @@ The factory is built by the factory. After a one-time bootstrap (M0), which the 
 | Milestone | Status | Notes |
 |---|---|---|
 | M0 | done 2026-11-25 | release `0.21.0+release-735fc84` live; warm-up PR #1 merged and released; judge prototype calibrated on 2 runs; observations M0-1 to M0-10 |
-| M1 | in progress | merged #2–#5, #8, #9; #6 and #7 in review; live release b29db47 has #1–#5; see the overseer state file |
-| M1.5 | not started | the manager as project lead (spec D11, D12); implementer, after M1's release |
+| M1 | live acceptance pending | live release 41a8ac9 includes the M1 PRs. Capability block follow-up in validation. The configured low-reasoning path and remaining live checks are pending. |
+| M1.5 | preparing | manager playbook and charter work in the outside session. Real project work waits for the owner to onboard another project. |
 
 ## Goal and definition of done
 
