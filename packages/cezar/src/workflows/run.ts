@@ -2048,7 +2048,7 @@ export class RunManager {
     runId: string,
     backend: RunnerId,
     options: { generateFollowups?: boolean; recordedProfileId?: string; namingOnly?: boolean; secretNames?: WorkflowStepDef['secrets']; workflowAgent?: { agentProfile?: string; replaced: boolean } } = {},
-  ): Promise<{ env: Record<string, string>; trackerContext?: string; profileId: string; onUsageWindows?: (observation: UsageWindowsObservation) => void; planUsageAccount?: PlanUsageAccountRef }> {
+  ): Promise<{ env: Record<string, string>; baseEnv: Record<string, string>; trackerContext?: string; profileId: string; onUsageWindows?: (observation: UsageWindowsObservation) => void; planUsageAccount?: PlanUsageAccountRef }> {
     const run = this.store.getRun(runId);
     const owner = this.active.get(runId);
     const ownsTrackerContext = () => this.active.get(runId) === owner
@@ -2171,25 +2171,39 @@ export class RunManager {
         attributionDisabled = true;
       }
     } : undefined;
-    // Secrets the user shared with agents (`agents` audience), as environment variables. A fork's
-    // untrusted head gets none, as its checks do. Registered for redaction like a check's.
-    let agentSecrets: Record<string, string> = this.store.getRun(runId)?.untrustedHead === true || options.secretNames?.length === 0
-      ? {}
-      : withoutAgentLogins((await this.secrets.resolve(this.projectId ? { projectId: this.projectId, root: this.repoRoot } : undefined, 'agents').catch(() => ({ values: {} as Record<string, string> }))).values);
-    if (options.secretNames?.length) {
-      const names = new Set(options.secretNames);
-      agentSecrets = Object.fromEntries(Object.entries(agentSecrets).filter(([name]) => names.has(name)));
-    }
-    // Keep the legacy Azure CLI alias for unrestricted steps; restricted steps use the listed names.
-    if (options.secretNames === undefined && agentSecrets.AZURE_DEVOPS_PAT && !agentSecrets.AZURE_DEVOPS_EXT_PAT) agentSecrets.AZURE_DEVOPS_EXT_PAT = agentSecrets.AZURE_DEVOPS_PAT;
-    this.store.registerRunSecrets(runId, Object.values(agentSecrets).filter((value) => value.length >= MIN_SECRET_LEN));
+    const baseEnv = { ...this.agentEnv(runId, options.generateFollowups), ...resolved.env, ...trackerEnv };
     return {
-      env: { ...agentSecrets, ...this.agentEnv(runId, options.generateFollowups), ...resolved.env, ...trackerEnv },
+      env: { ...await this.agentVaultEnv(runId, options.secretNames), ...baseEnv },
+      baseEnv,
       ...(trackerContext ? { trackerContext } : {}),
       profileId: resolved.profile.id,
       ...(onUsageWindows ? { onUsageWindows } : {}),
       ...(planUsageAccount ? { planUsageAccount } : {}),
     };
+  }
+
+  private async agentVaultEnv(runId: string, secretNames: WorkflowStepDef['secrets']): Promise<Record<string, string>> {
+    // Secrets the user shared with agents (`agents` audience), as environment variables. A fork's
+    // untrusted head gets none, as its checks do. Registered for redaction like a check's.
+    let agentSecrets: Record<string, string> = this.store.getRun(runId)?.untrustedHead === true || secretNames?.length === 0
+      ? {}
+      : withoutAgentLogins((await this.secrets.resolve(this.projectId ? { projectId: this.projectId, root: this.repoRoot } : undefined, 'agents').catch(() => ({ values: {} as Record<string, string> }))).values);
+    if (secretNames?.length) {
+      const names = new Set(secretNames);
+      agentSecrets = Object.fromEntries(Object.entries(agentSecrets).filter(([name]) => names.has(name)));
+    }
+    // Keep the legacy Azure CLI alias for unrestricted steps; restricted steps use the listed names.
+    if (secretNames === undefined && agentSecrets.AZURE_DEVOPS_PAT && !agentSecrets.AZURE_DEVOPS_EXT_PAT) agentSecrets.AZURE_DEVOPS_EXT_PAT = agentSecrets.AZURE_DEVOPS_PAT;
+    this.store.registerRunSecrets(runId, Object.values(agentSecrets).filter((value) => value.length >= MIN_SECRET_LEN));
+    return agentSecrets;
+  }
+
+  private async freshContinuationProfile(
+    runId: string, run: RunRecord | undefined, profile: Awaited<ReturnType<RunManager['agentEnvForStep']>>,
+  ) {
+    const names = continuationSecretNames(run);
+    const env = { ...await this.agentVaultEnv(runId, names), ...profile.baseEnv };
+    return { names, profile: { ...profile, env } };
   }
 
   startRun(
@@ -6238,22 +6252,29 @@ export class RunManager {
   }
 
   private launchWithSecretPolicy(
-    runId: string, stepId: string,
+    runId: string, state: ActiveRun, stepId: string,
     binding: Pick<StepState, 'sessionId' | 'backend' | 'profileId'>,
-    names: string[] | undefined, launch: () => AgentSession,
+    names: string[] | undefined,
+    launch: (observe: (event: AgentEvent) => void) => AgentSession,
   ): AgentSession {
-    const previous = this.store.getRun(runId)?.steps.find((step) => step.id === stepId);
-    const restore = {
-      sessionId: previous?.sessionId, backend: previous?.backend, profileId: previous?.profileId,
-      sessionSecretPolicy: previous?.sessionSecretPolicy,
+    let confirmed = false;
+    let failed = false;
+    const confirm = (sessionId = binding.sessionId) => {
+      if (failed || state.cancelled || this.active.get(runId) !== state) return;
+      confirmed = true;
+      this.store.updateStep(runId, stepId, { ...binding, sessionId, sessionSecretPolicy: { names } });
     };
-    this.store.updateStep(runId, stepId, { ...binding, sessionSecretPolicy: { names } });
-    try {
-      return launch();
-    } catch (err) {
-      this.store.updateStep(runId, stepId, restore);
-      throw err;
-    }
+    // Some runners return a handle before their asynchronous spawn has succeeded.
+    const started = launch((event) => {
+      if (event.type === 'error') failed = true;
+      if (event.type === 'session') confirm(event.sessionId);
+      if (!confirmed && (event.type === 'text' || event.type === 'tool-call' ||
+        event.type === 'tool-result' || event.type === 'image' || event.type === 'mcp-servers' ||
+        event.type === 'turn-end')) confirm();
+    });
+    // Claude uses the supplied id and some runners finish without emitting one or doing work.
+    void started.result.then(() => { if (!confirmed) confirm(); }, () => { failed = true; });
+    return started;
   }
 
   private async runContinuation(
@@ -6524,9 +6545,6 @@ export class RunManager {
         return;
       }
       if (sessionError) return;
-      if (event.type === 'session') {
-        this.store.updateStep(runId, stepId, { sessionId: event.sessionId, backend });
-      }
       if (event.type === 'token-usage') {
         this.store.updateStep(runId, stepId, { tokensUsed: event.tokensUsed });
       }
@@ -6861,11 +6879,14 @@ export class RunManager {
       : openingPrompt;
     state.grantedAttachmentLibrary = this.prepareAttachmentLibrary();
     const planUsage = this.planUsageTracker(runId, continueProfile.planUsageAccount);
-    const launch = (launchSessionId: string, resume: boolean, context: string | undefined): AgentSession => {
+    const launch = (
+      launchSessionId: string, resume: boolean, context: string | undefined,
+      profile: typeof continueProfile, names: string[] | undefined,
+    ): AgentSession => {
       const contextualOpeningPrompt = withContext(context);
-      const started = this.launchWithSecretPolicy(runId, stepId, {
-        sessionId: launchSessionId, backend: continueBackend, profileId: continueProfile.profileId,
-      }, secretNames, () => runner.startSession(
+      const started = this.launchWithSecretPolicy(runId, state, stepId, {
+        sessionId: launchSessionId, backend: continueBackend, profileId: profile.profileId,
+      }, names, (observe) => runner.startSession(
         {
           // The Continue step is a fresh agent session on the same run — the
           // run's extra system prompt (already resolved at execute time and
@@ -6888,9 +6909,9 @@ export class RunManager {
           additionalDirectories: agentDirectories(
             join(this.dataDir, 'runs'),
             state.grantedAttachmentLibrary,
-            continueProfile.env,
+            profile.env,
           ),
-          env: continuationTools.enforceReadOnly ? { ...continueProfile.env, ...readOnlyEnv() } : continueProfile.env,
+          env: continuationTools.enforceReadOnly ? { ...profile.env, ...readOnlyEnv() } : profile.env,
           onUsageWindows: continueProfile.onUsageWindows,
           // A private server's tools are writes nothing here can vouch for.
           mcpServers: continuationTools.enforceReadOnly ? [] : continueMcp,
@@ -6900,7 +6921,7 @@ export class RunManager {
           resume,
           timeoutMs: 0,
         },
-        (event) => { planUsage?.event(event); onEvent(event); },
+        (event) => { observe(event); planUsage?.event(event); onEvent(event); },
         {
           onUiEvent: (event) => {
             planUsage?.ui(event);
@@ -6918,7 +6939,7 @@ export class RunManager {
       if (started.pid !== undefined) registerRunProcess(runId, started.pid);
       return started;
     };
-    let session = launch(spawnSessionId, sessionId !== undefined, portableContext);
+    let session = launch(spawnSessionId, sessionId !== undefined, portableContext, continueProfile, secretNames);
 
     const finishedAt = () => new Date().toISOString();
     try {
@@ -6939,8 +6960,10 @@ export class RunManager {
           this.store.readEvents(runId).filter((event) => event.stepId !== stepId),
           this.attachmentsDir(runId),
         );
-        await trackFallbackOutcome(() => {
-          session = launch(freshId, false, context);
+        await trackFallbackOutcome(async () => {
+          const { profile, names } = await this.freshContinuationProfile(runId, record, continueProfile);
+          if (state.cancelled || this.active.get(runId) !== state) throw new Error('cancelled');
+          session = launch(freshId, false, context, profile, names);
           for (const content of replay) session.sendMessage(content);
           return session.result;
         }, {
@@ -9165,10 +9188,6 @@ export class RunManager {
         return;
       }
       if (sessionError) return;
-      if (event.type === 'session') {
-        // Codex/OpenCode mint their own session id — persist it so resume works.
-        this.store.updateStep(runId, step.id, { sessionId: event.sessionId, backend });
-      }
       if (event.type === 'token-usage') {
         this.store.updateStep(runId, step.id, { tokensUsed: startTokens + event.tokensUsed });
       }
@@ -9460,10 +9479,12 @@ export class RunManager {
     this.beginUsageInvocation(runId, state, step.id);
     if (state.cancelled) return 'cancelled';
     const planUsage = this.planUsageTracker(runId, stepProfile.planUsageAccount);
-    const launch = (launchSessionId: string, resume: boolean, prompt: string): AgentSession =>
-      this.launchWithSecretPolicy(runId, step.id, {
-        sessionId: launchSessionId, backend: stepBackend, profileId: stepProfile.profileId,
-      }, secretNames, () => runner.startSession(
+    const launch = (
+      launchSessionId: string, resume: boolean, prompt: string,
+      profile: typeof stepProfile, names: string[] | undefined,
+    ): AgentSession => this.launchWithSecretPolicy(runId, state, step.id, {
+        sessionId: launchSessionId, backend: stepBackend, profileId: profile.profileId,
+      }, names, (observe) => runner.startSession(
         {
           // Skill body, then the dispatch prompt (spec 2026-09-10-dispatch — how a task dispatches,
           // reports and asks), then the automations prompt (spec 2026-09-13-automations-from-prompt
@@ -9480,7 +9501,7 @@ export class RunManager {
               ? HANDOFF_INSTRUCTIONS
               : HANDOFF_ONLY_INSTRUCTIONS,
           ),
-          userPrompt: [stepProfile.trackerContext, prompt].filter(Boolean).join('\n\n'),
+          userPrompt: [profile.trackerContext, prompt].filter(Boolean).join('\n\n'),
           images,
           cwd: state.cwd,
           ...stepTools,
@@ -9489,9 +9510,9 @@ export class RunManager {
           additionalDirectories: agentDirectories(
             join(this.dataDir, 'runs'),
             state.grantedAttachmentLibrary,
-            stepProfile.env,
+            profile.env,
           ),
-          env: stepTools.enforceReadOnly ? { ...stepProfile.env, ...readOnlyEnv() } : stepProfile.env,
+          env: stepTools.enforceReadOnly ? { ...profile.env, ...readOnlyEnv() } : profile.env,
           onUsageWindows: stepProfile.onUsageWindows,
           mcpServers: stepTools.enforceReadOnly ? [] : stepMcp,
           model: backendModel,
@@ -9512,7 +9533,7 @@ export class RunManager {
           // the `askPark` branch in `execute`), never as a run stuck `waiting`.
           timeoutMs: interactive ? 0 : undefined,
         },
-        (event) => { planUsage?.event(event); onEvent(event); },
+        (event) => { observe(event); planUsage?.event(event); onEvent(event); },
         {
           // Ordinary intermediate sessions are closed explicitly at turn-end
           // instead (with the same delay the runners apply). That is what lets
@@ -9541,7 +9562,7 @@ export class RunManager {
       return started;
     };
     try {
-      session = attach(launch(sessionId, graphHooks?.resumeSessionId !== undefined, userPrompt), graphHooks?.resumeSessionId !== undefined);
+      session = attach(launch(sessionId, graphHooks?.resumeSessionId !== undefined, userPrompt, stepProfile, secretNames), graphHooks?.resumeSessionId !== undefined);
     } catch (err) {
       state.currentStepId = undefined;
       return err instanceof Error ? err.message : String(err);
@@ -9564,8 +9585,10 @@ export class RunManager {
         const freshId = randomUUID();
         emit({ type: 'note', stepId: step.id, message: MISSING_SESSION_NOTE });
         const context = freshContinuationContext(record, this.store.readEvents(runId), this.attachmentsDir(runId));
-        result = await trackFallbackOutcome(() => {
-          session = attach(launch(freshId, false, `${context}\n\n---\n\n## New user instruction\n${userPrompt}`), false);
+        result = await trackFallbackOutcome(async () => {
+          const { profile, names } = await this.freshContinuationProfile(runId, record, stepProfile);
+          if (state.cancelled || this.active.get(runId) !== state) throw new Error('cancelled');
+          session = attach(launch(freshId, false, `${context}\n\n---\n\n## New user instruction\n${userPrompt}`, profile, names), false);
           for (const content of replay) session.sendMessage(content);
           return session.result;
         }, {
