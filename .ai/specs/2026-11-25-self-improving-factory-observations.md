@@ -43,5 +43,11 @@ Blind comparisons: the overseer's verdict is written before Mistral's is read, o
 
 | Run | Scorer | Overseer | Judge | Agree on pass/fail | Agree on main target | Note |
 |---|---|---|---|---|---|---|
+| open-webui 43299e6b | outcome | delivered | delivered | yes | n/a | the transcript includes the authorized follow-up turns |
+| open-webui 43299e6b | efficiency | wasteful | some-waste (rubric v1), then wasteful (v2) | no, then yes | no: judge harness/workflow, overseer docs + brief | v2 anchors the labels; the judge prompt now defines targets |
+| open-webui 43299e6b | procedure | minor-lapse (read the manager skill) | followed | yes (both pass) | n/a | judge didn't treat reading a manager skill as a lapse; harmless now it's manager-only |
+| open-webui 43299e6b | scope | in-scope (follow-ups were authorized) | in-scope | yes | n/a | |
+
+Rubric revisions: efficiency v2 (2026-11-25), anchored labels after the 43299e6b disagreement. Judge prompt: target definitions added after the same run.
 
 Rubric revisions made from disagreements are listed under the run that prompted them.

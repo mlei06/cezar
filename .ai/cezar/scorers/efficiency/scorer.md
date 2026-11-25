@@ -16,4 +16,9 @@ Use the metrics (requests, context per call, model time against tool time, large
 - doing work outside the brief;
 - using a large model for work that needs little reasoning.
 
-Judge against the size of the job: a big migration may legitimately take many calls. Quote the calls or metrics that show the waste.
+Anchor the label to these:
+- `wasteful` when two or more of the patterns above are substantial (for example a first read over 30k characters that inflates every later call, plus repeated polling), or when the average context per request is over 100k tokens on a job that didn't need it.
+- `some-waste` when one pattern is substantial, or several are small.
+- `lean` only when nothing above is notable.
+
+Judge against the size of the job: a big migration may legitimately take many calls, but its context still shouldn't be inflated by reads it never needed. Quote the calls or metrics that show the waste.
