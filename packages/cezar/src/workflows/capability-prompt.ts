@@ -26,9 +26,8 @@ export function capabilityPrompt(input: {
   let omittedWorkflows = 0;
   let omittedDescriptions = 0;
 
-  const omissions = () => omittedWorkflows || omittedDescriptions
-    ? `Omitted: ${omittedWorkflows} workflow names, ${omittedDescriptions} secret descriptions.`
-    : undefined;
+  const omissions = () =>
+    `Omitted: ${omittedWorkflows} workflow names, ${omittedDescriptions} secret descriptions.`;
   const names = secrets.map(({ name }) => name);
   const noSecrets = 'Secrets in your environment: none.';
   const render = (compact = false) => [
@@ -37,21 +36,16 @@ export function capabilityPrompt(input: {
     secrets.length ? compact ? `  ${names.join(', ')}` : secretLines.join('\n') : undefined,
     workflows.length ? `${workflowHeading}${workflows.join(', ')}` : undefined,
     skill,
-    omissions(),
   ].filter(Boolean).join('\n');
 
-  // Account for the separators and omission line without rebuilding the block for each entry.
+  // The omission line is mandatory and excluded from the optional content budget.
   let payloadLength = render().length;
-  const overCap = () => {
-    const note = omissions();
-    return payloadLength + (note ? note.length + 1 : 0) > CAP;
-  };
-  while (overCap() && workflows.length) {
+  while (payloadLength > CAP && workflows.length) {
     const removed = workflows.pop()!;
     payloadLength -= removed.length + (workflows.length ? 2 : workflowHeading.length + 1);
     omittedWorkflows++;
   }
-  for (let index = secrets.length - 1; overCap() && index >= 0; index--) {
+  for (let index = secrets.length - 1; payloadLength > CAP && index >= 0; index--) {
     const { name, description } = secrets[index]!;
     if (!description) continue;
     const nameLine = `  ${name}`;
@@ -59,22 +53,11 @@ export function capabilityPrompt(input: {
     secretLines[index] = nameLine;
     omittedDescriptions++;
   }
-  if (!overCap()) return render();
+  if (payloadLength <= CAP) return `${render()}\n${omissions()}`;
   const compact = render(true);
-  if (compact.length <= CAP) return compact;
+  if (compact.length <= CAP || !names.length) return `${compact}\n${omissions()}`;
 
-  const note = omissions();
-  if (!names.length) {
-    const footer = [noSecrets, note].filter(Boolean).join('\n');
-    return `${header.slice(0, CAP - footer.length - 1)}\n${footer}`;
-  }
-
-  const namesLine = names.join(', ');
-  const minimal = [namesLine, note].filter(Boolean).join('\n');
-  if (minimal.length <= CAP) return minimal;
-  const tightNames = names.join(',');
-  const tight = [tightNames, note].filter(Boolean).join('\n');
-  if (tight.length <= CAP) return tight;
-  // When the names consume the entire allowance, they take priority over the note.
-  return tightNames.length <= CAP ? tightNames : tight;
+  const spacedNames = names.join(', ');
+  const namesLine = spacedNames.length <= CAP ? spacedNames : names.join(',');
+  return `${namesLine}\n${omissions()}`;
 }

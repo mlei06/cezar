@@ -297,6 +297,37 @@ describe('project and workspace secrets in check steps', () => {
     await settle(record.id);
   }, 30_000);
 
+  it.each(['outgoing vault', 'host environment'])('keeps a copied %s value out of prompts and snapshots', async (source) => {
+    const value = 'synthetic ordinary credential value';
+    const oldPassword = process.env.DATABASE_PASSWORD;
+    process.env.CEZ_REDACT_SECRETS = '0';
+    try {
+      if (source === 'host environment') process.env.DATABASE_PASSWORD = value;
+      await secrets.set(scope, 'FIXTURE_KEY',
+        source === 'outgoing vault' ? value : 'synthetic-vault-value', ['agents'], `Copied: ${value}`);
+      if (source === 'outgoing vault') {
+        await secrets.set(scope, 'FIXTURE_KEY', 'synthetic-rotated-value', ['agents']);
+      }
+
+      const record = manager.startRun({
+        name: 'description-fixture',
+        source: 'file',
+        steps: [{ id: 'work', prompt: '{{task}}', secrets: ['FIXTURE_KEY'] }, { id: 'verify', command: 'true' }],
+      }, { task: 'mock:done inspect capabilities', worktree: false });
+      await settle(record.id);
+      const [prompt] = capturedPrompts();
+      expect(prompt).toContain('  FIXTURE_KEY');
+      expect(prompt).not.toContain(value);
+      store.flush();
+      const saved = RunStore.open(join(repoRoot, '.ai/cezar')).getRun(record.id)?.steps[0]?.capabilityPrompt;
+      expect(saved).toContain('  FIXTURE_KEY');
+      expect(saved).not.toContain(value);
+    } finally {
+      if (oldPassword === undefined) delete process.env.DATABASE_PASSWORD;
+      else process.env.DATABASE_PASSWORD = oldPassword;
+    }
+  }, 30_000);
+
   it('refreshes actual OpenCode 1.x resume prompts after a vault grant is revoked', async () => {
     process.env.CEZ_OPENCODE_BIN = fileURLToPath(new URL('../core/__fixtures__/opencode/mock-opencode-serve.mjs', import.meta.url));
     const requestsLog = join(repoRoot, 'requests.ndjson');

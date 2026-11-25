@@ -15,6 +15,7 @@ describe('task capability block', () => {
       '  JENKINS_URL: Jenkins API',
       'Other workflows in this project: operate, plan',
       'Attached skill: jenkins-deploy (scripts in its folder)',
+      'Omitted: 0 workflow names, 0 secret descriptions.',
     ].join('\n'));
   });
 
@@ -23,7 +24,7 @@ describe('task capability block', () => {
     const secrets = Array.from({ length: 10 }, (_, i) => ({ name: `KEY_${i}`, description: 'd'.repeat(200) }));
 
     const workflowsTrimmed = capabilityPrompt({ ...input, workflows, secrets: secrets.slice(0, 1) });
-    expect(workflowsTrimmed.length).toBeLessThanOrEqual(2_000);
+    expect(workflowsTrimmed.split('\n').slice(0, -1).join('\n').length).toBeLessThanOrEqual(2_000);
     expect(workflowsTrimmed).toContain(secrets[0]!.description);
     expect(workflowsTrimmed).toContain(workflows[0]);
     const keptWorkflows = workflows.filter((name) => workflowsTrimmed.includes(name)).length;
@@ -31,7 +32,7 @@ describe('task capability block', () => {
     expect(workflowsTrimmed).toContain(`Omitted: ${workflows.length - keptWorkflows} workflow names, 0 secret descriptions.`);
 
     const descriptionsTrimmed = capabilityPrompt({ ...input, workflows, secrets });
-    expect(descriptionsTrimmed.length).toBeLessThanOrEqual(2_000);
+    expect(descriptionsTrimmed.split('\n').slice(0, -1).join('\n').length).toBeLessThanOrEqual(2_000);
     expect(descriptionsTrimmed).not.toContain('Other workflows');
     expect(descriptionsTrimmed).toContain('  KEY_0: ');
     expect(descriptionsTrimmed).toContain('\n  KEY_9\n');
@@ -46,18 +47,21 @@ describe('task capability block', () => {
     const block = capabilityPrompt({
       ...input, workflows: ['plan'], secrets: names.map((name) => ({ name, description: 'Fixture description' })),
     });
-    expect(block.length).toBeLessThanOrEqual(2_000);
+    expect(block.split('\n').slice(0, -1).join('\n').length).toBeLessThanOrEqual(2_000);
     expect(block.split('\n')[0]?.split(',').map((name) => name.trim())).toEqual(names);
     expect(block).toContain('Omitted: 1 workflow names, 30 secret descriptions.');
   });
 
-  it('uses every character for names if there is no room for the omission note', () => {
+  it('keeps the omission line when names leave no space for it', () => {
     const names = Array.from({ length: 16 }, (_, i) => `KEY_${String(i).padStart(2, '0')}_${'X'.repeat(117)}`);
     const block = capabilityPrompt({
-      ...input, workflows: ['plan'], secrets: names.map((name) => ({ name })),
+      ...input, workflows: ['plan'], secrets: names.map((name, i) => ({ name, description: i === 0 ? 'Fixture description' : undefined })),
     });
-    expect(block.length).toBe(1_999);
-    expect(block.split(',')).toEqual(names);
+    const [namesLine, omissions] = block.split('\n');
+    expect(namesLine?.length).toBe(1_999);
+    expect(namesLine?.split(',')).toEqual(names);
+    expect(omissions).toBe('Omitted: 1 workflow names, 1 secret descriptions.');
+    expect(block.length).toBeGreaterThan(2_000);
   });
 
   it('preserves every name on one line when names alone exceed the cap', () => {

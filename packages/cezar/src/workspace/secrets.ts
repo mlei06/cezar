@@ -1,7 +1,7 @@
 import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from 'node:crypto';
 import { promises as fs, constants } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { redactSecrets } from '../core/secret-redaction.ts';
+import { collectSecretValues, redactSecrets } from '../core/secret-redaction.ts';
 import { renameWithRetry } from '../fs-rename.ts';
 import { z } from 'zod';
 import {
@@ -49,6 +49,10 @@ const CIPHER = 'aes-256-gcm';
 const FILE_VERSION = 1;
 const KEY_FILE = '.key';
 const DEFAULT_AUDIENCES: readonly SecretAudience[] = ['checks', 'agents'];
+
+function normalizeDescription(description: string): string {
+  return description.replace(/\s+/g, ' ').trim();
+}
 
 export class SecretsError extends Error {}
 
@@ -252,7 +256,14 @@ export class SecretStore {
     await this.update(scope, (file, id) => {
       const now = new Date().toISOString();
       const previous = file.secrets[name];
-      const nextDescription = description ?? previous?.description;
+      let nextDescription = description ?? previous?.description;
+      if (description === undefined && previous && nextDescription) {
+        const outgoing = decrypt(dataKey.key, aad(id, name), previous);
+        if (outgoing === null || (outgoing !== value &&
+          (nextDescription.includes(outgoing) || normalizeDescription(nextDescription).includes(outgoing)))) {
+          nextDescription = undefined;
+        }
+      }
       file.secrets[name] = {
         audiences: admitted,
         ...(nextDescription ? { description: nextDescription } : {}),
@@ -318,11 +329,11 @@ export class SecretStore {
     // Agent descriptions may reach prompts. Include shadowed, ungranted and short vault
     // values in the check, even when transcript redaction is disabled.
     const knownValues = audience === 'agents'
-      ? sources.flatMap(({ read }) => Object.values(read.values).map(({ value }) => value)).filter(Boolean)
+      ? [...collectSecretValues(), ...sources.flatMap(({ read }) => Object.values(read.values).map(({ value }) => value))].filter(Boolean)
       : [];
     const describe = (description: string | undefined) => {
       if (!description || audience !== 'agents') return description;
-      const normalized = description.replace(/\s+/g, ' ').trim();
+      const normalized = normalizeDescription(description);
       if (knownValues.some((value) => description.includes(value) || normalized.includes(value))) return undefined;
       return normalized && redactSecrets(normalized, []) === normalized ? normalized : undefined;
     };
