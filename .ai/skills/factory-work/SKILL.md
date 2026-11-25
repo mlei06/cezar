@@ -42,9 +42,9 @@ Add a test that fails without your change. Keep old run files, workflows and con
 
 If a check hits one of these known failures on the factory host, report the failing case in your PR's validation results and continue with the remaining checks. Investigate new or changed failures as usual.
 
-- `src/server/open-in-app.test.ts` — WSL Explorer path translation to a UNC path or a native drive letter.
-- `src/usage-ledger/store.test.ts` — “ends each request’s sample at its answer, and the 07:11 case then charges the re-cache to its turn”.
-- `src/workflows/run.test.ts` — “keeps a live hanging session counted until interrupt teardown, then reaps it”.
+- `packages/cezar/src/server/open-in-app.test.ts` — WSL Explorer path translation to a UNC path or a native drive letter.
+- `packages/cezar/src/usage-ledger/store.test.ts` — “ends each request’s sample at its answer, and the 07:11 case then charges the re-cache to its turn”.
+- `packages/cezar/src/workflows/run.test.ts` — “keeps a live hanging session counted until interrupt teardown, then reaps it”.
 
 ## Work efficiently
 
