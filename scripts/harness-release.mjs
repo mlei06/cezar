@@ -10,6 +10,7 @@
 //   flags: --force (skip the idle wait)  --wait-minutes N (default 15)  --no-restart
 //          --health-url URL (default http://127.0.0.1:4321/api/v1/health)  --keep N (default 5)
 //          --unit NAME (default cezar)  --skip-checks (build only; no typecheck/tests)
+//          --simulate-unhealthy (test the automatic rollback: the new version's health check fails)
 import { execFileSync, spawnSync } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -126,7 +127,7 @@ async function switchTo(su, id, previous, entry) {
   su.activate(id);
   su.writeLaunchers();
   restart();
-  const health = flag('no-restart') ? { ok: true } : await healthy();
+  const health = flag('no-restart') ? { ok: true } : flag('simulate-unhealthy') && entry.action === 'switch' ? { ok: false, reason: 'simulated (--simulate-unhealthy)' } : await healthy();
   if (health.ok) {
     log({ ...entry, id, previous, result: 'ok' });
     say(`now running ${id}`);
