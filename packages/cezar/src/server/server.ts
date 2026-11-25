@@ -5584,9 +5584,9 @@ export function createApp(deps: ServerDeps) {
         if (!workflow) return c.json({ error: `unknown workflow: ${parsed.data.workflow}` }, 404);
       }
       if (parsed.data.secrets?.length) {
-        const available = await secretStore.resolveAgentGrants(
+        const { values: available } = await secretStore.resolveAgentGrants(
           { projectId, root: repoRoot }, parsed.data.secrets,
-        ).catch(() => ({}));
+        ).catch(() => ({ values: {} }));
         if (parsed.data.secrets.some((name) => !Object.hasOwn(available, name))) {
           return c.json({ error: 'Requested secrets must be stored for this project or workspace and available to agents. See the secrets list.' }, 400);
         }

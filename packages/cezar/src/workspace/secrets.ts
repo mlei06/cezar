@@ -49,6 +49,22 @@ const FILE_VERSION = 1;
 const KEY_FILE = '.key';
 const DEFAULT_AUDIENCES: readonly SecretAudience[] = ['checks', 'agents'];
 
+function descriptionIssue(description: string | undefined, value: string): string | undefined {
+  if (!description) return undefined;
+  if (/[\p{Cc}\p{Zl}\p{Zp}]/u.test(description)) {
+    return 'A description must be one line without control characters.';
+  }
+  if (value && description.includes(value)) {
+    return 'A description must not contain its own secret value.';
+  }
+  return undefined;
+}
+
+function refuseUnsafeDescription(description: string | undefined, value: string): void {
+  const issue = descriptionIssue(description, value);
+  if (issue) throw new SecretsError(issue);
+}
+
 export class SecretsError extends Error {}
 
 /** Which file a call addresses. A project's identity is its slug AND its root (see above). */
@@ -88,13 +104,14 @@ type SecretFile = z.infer<typeof secretFileSchema>;
  * to inspect and compare. The caller turns this into one note on the run.
  */
 export interface SecretsRead {
-  values: Record<string, { value: string; audiences: SecretAudience[] }>;
+  values: Record<string, { value: string; audiences: SecretAudience[]; description?: string }>;
   skipped?: string;
 }
 
 /** What a consumer gets back: the variables it may see, and what it should tell the user. */
 export interface ResolvedSecrets {
   values: Record<string, string>;
+  descriptions: Record<string, string | undefined>;
   /** One line each: a skipped store, a bound name that is not stored, a name the audience may not read. */
   notes: string[];
 }
@@ -251,6 +268,7 @@ export class SecretStore {
       const now = new Date().toISOString();
       const previous = file.secrets[name];
       const nextDescription = description ?? previous?.description;
+      refuseUnsafeDescription(nextDescription, Buffer.from(value, 'utf8').toString('utf8'));
       file.secrets[name] = {
         audiences: admitted,
         ...(nextDescription ? { description: nextDescription } : {}),
@@ -262,16 +280,23 @@ export class SecretStore {
     });
   }
 
-  /** Change only metadata, even when the encryption key is unavailable. */
+  /** Replace validated metadata. Clearing it requires no decryption. */
   async describe(scope: SecretScopeRef, name: string, description: string): Promise<boolean> {
     const issue = secretNameIssue(name);
     if (issue) throw new SecretsError(issue);
     validateDescription(description);
-    return this.update(scope, (file) => {
+    return this.update(scope, async (file, id) => {
       const entry = file.secrets[name];
       if (!entry) return false;
-      if (description === '') delete entry.description;
-      else entry.description = description;
+      if (description === '') {
+        delete entry.description;
+      } else {
+        const dataKey = await this.loadDataKey().catch(() => null);
+        const value = dataKey && decrypt(dataKey.key, aad(id, name), entry);
+        if (value === null) throw new SecretsError('The secret value is unavailable for validating its description.');
+        refuseUnsafeDescription(description, value);
+        entry.description = description;
+      }
       entry.updatedAt = new Date().toISOString();
       return true;
     });
@@ -289,10 +314,10 @@ export class SecretStore {
   async resolveAgentGrants(
     project: { projectId: string; root: string } | undefined,
     names: readonly string[],
-  ): Promise<Record<string, string>> {
-    if (names.length === 0) return {};
-    const { values } = await this.resolve(project, 'agents', names, { requireReadableProject: true });
-    return withoutAgentLogins(values);
+  ): Promise<ResolvedSecrets> {
+    if (names.length === 0) return { values: {}, descriptions: {}, notes: [] };
+    const resolved = await this.resolve(project, 'agents', names, { requireReadableProject: true });
+    return { ...resolved, values: withoutAgentLogins(resolved.values) };
   }
 
   /**
@@ -316,7 +341,7 @@ export class SecretStore {
     }
     // An unreadable project may hold the winning binding. Don't read through it to the workspace.
     if (options?.requireReadableProject && sources.some(({ label, read }) => label === 'project' && read.skipped)) {
-      return { values: {}, notes };
+      return { values: {}, descriptions: {}, notes };
     }
     const lookup = (name: string) => {
       for (const source of [...sources].reverse()) {
@@ -326,13 +351,19 @@ export class SecretStore {
       return undefined;
     };
     const values: Record<string, string> = {};
+    const descriptions: ResolvedSecrets['descriptions'] = {};
+    const descriptionFor = ({ description, value }: SecretsRead['values'][string]) =>
+      audience === 'agents' && descriptionIssue(description, value) ? undefined : description;
+
     if (!bindings) {
       for (const source of sources) {
         for (const [name, entry] of Object.entries(source.read.values)) {
-          if (entry.audiences.includes(audience)) values[name] = entry.value;
+          if (!entry.audiences.includes(audience)) continue;
+          values[name] = entry.value;
+          descriptions[name] = descriptionFor(entry);
         }
       }
-      return { values, notes };
+      return { values, descriptions, notes };
     }
     for (const binding of bindings) {
       const name = typeof binding === 'string' ? binding : binding.name;
@@ -347,15 +378,16 @@ export class SecretStore {
         continue;
       }
       values[as] = entry.value;
+      descriptions[as] = descriptionFor(entry);
     }
-    return { values, notes };
+    return { values, descriptions, notes };
   }
 
   private file(id: string): string {
     return join(this.directory, `${id}.json`);
   }
 
-  private async update(scope: SecretScopeRef, mutate: (file: SecretFile, id: string) => boolean): Promise<boolean> {
+  private async update(scope: SecretScopeRef, mutate: (file: SecretFile, id: string) => boolean | Promise<boolean>): Promise<boolean> {
     const id = fileId(scope);
     if (!id) throw new SecretsError('invalid project id');
     const owner = scope.kind === 'project' ? await canonicalRoot(scope.root) : undefined;
@@ -370,7 +402,7 @@ export class SecretStore {
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT' && !(error instanceof SecretsError)) throw error;
       }
-      if (!mutate(file, id)) return false;
+      if (!(await mutate(file, id))) return false;
       const serialized = `${JSON.stringify(file, null, 2)}\n`;
       if (Buffer.byteLength(serialized, 'utf8') > FILE_MAX_BYTES) {
         throw new SecretsError(`a secret store is at most ${FILE_MAX_BYTES} bytes`);

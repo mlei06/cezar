@@ -608,7 +608,10 @@ class OpencodeSession implements AgentSession {
     const resumeId = this.spec.resume && this.apiVersion === 1 ? this.spec.sessionId : undefined;
     if (resumeId) await this.openSession(await this.reopenSession(resumeId));
     else await this.openSession(await this.createSession());
-    await this.prompt(resumeId ? this.spec.userPrompt : prependSystemPrompt(this.spec.systemPrompt, this.spec.userPrompt));
+    await this.prompt(prependSystemPrompt(
+      resumeId ? this.spec.resumeSystemPrompt : this.spec.systemPrompt,
+      this.spec.userPrompt,
+    ));
   }
 
   private async createSession(): Promise<Record<string, unknown>> {

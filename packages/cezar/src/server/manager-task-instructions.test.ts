@@ -237,11 +237,19 @@ describe('manager task instruction propagation through the HTTP API and workflow
     expect(launch?.env?.CLI_TOKEN).toBe('synthetic-value-123');
     expect(launch?.env?.WORKFLOW_TOKEN).toBeUndefined();
     expect(launch?.env?.CHECK_TOKEN).toBeUndefined();
+    expect(launch?.systemPrompt).toContain('  CLI_TOKEN: Task test token');
+    expect(launch?.systemPrompt).toContain('budget 800 tokens, 20 min active, $0.5');
+    expect(launch?.systemPrompt).not.toMatch(/WORKFLOW_TOKEN|CHECK_TOKEN|synthetic-value-123/);
+    expect(launch?.systemPrompt).toContain(record()!.steps[0]!.capabilityPrompt!);
+
 
     expect((await request(`${BASE}/${manager.id}/task-message`, { projectId, runId, text: 'Continue mock:done' })).status).toBe(200);
     await expect.poll(() => specs.at(-1), { timeout: 20_000 }).not.toBe(launch);
     expect(specs.at(-1)?.env?.CLI_TOKEN).toBe('synthetic-value-123');
     expect(specs.at(-1)?.env?.WORKFLOW_TOKEN).toBeUndefined();
+    expect(specs.at(-1)?.systemPrompt).toContain('  CLI_TOKEN: Task test token');
+    expect(specs.at(-1)?.systemPrompt).not.toMatch(/WORKFLOW_TOKEN|CHECK_TOKEN|synthetic-value-123/);
+
 
     for (const flags of [[], ['--secrets', '']]) {
       const text = await cli(['task', 'create', '--project', projectId, '--workflow', 'override', '--runner', 'claude', ...flags, task.task]);
@@ -251,6 +259,10 @@ describe('manager task instruction propagation through the HTTP API and workflow
       const expected = flags.length ? undefined : 'synthetic-value-123';
       const original = specs.at(-1);
       expect(original?.env?.WORKFLOW_TOKEN).toBe(expected);
+      expect(original?.systemPrompt).toContain(flags.length
+        ? 'Secrets in your environment: none.'
+        : '  WORKFLOW_TOKEN: Workflow token');
+
       expect((await request(`${BASE}/${manager.id}/task-message`, { projectId, runId: id, text: 'Continue mock:done' })).status).toBe(200);
       await expect.poll(() => specs.at(-1), { timeout: 20_000 }).not.toBe(original);
       expect(specs.at(-1)?.env?.WORKFLOW_TOKEN).toBe(expected);

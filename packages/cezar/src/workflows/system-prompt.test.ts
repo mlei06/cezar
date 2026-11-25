@@ -321,7 +321,7 @@ describe('systemPrompt end-to-end (dry run)', () => {
     expect(prompt).toContain(CONFIG_PROMPT);
     // Dispatch is off in this suite, so the automations part is the only cockpit part composed —
     // ahead of the extra prompt, which may amend it.
-    expect(prompt).toBe(composeSystemPrompt(AUTOMATIONS_PROMPT, CONFIG_PROMPT, artifactsLine(repoRoot, id), HANDOFF_INSTRUCTIONS));
+    expect(prompt).toBe(composeSystemPrompt(AUTOMATIONS_PROMPT, CONFIG_PROMPT, store.getRun(id)?.steps[0]?.capabilityPrompt, artifactsLine(repoRoot, id), HANDOFF_INSTRUCTIONS));
   });
 
   it('automations on but unreachable (headless), or opted out: no task is taught the CLI', async () => {
@@ -348,7 +348,7 @@ describe('systemPrompt end-to-end (dry run)', () => {
     expect(record?.systemPrompt).toBe(CONFIG_PROMPT);
     const prompt = capturedSystemPrompt();
     // Composition: extra prompt first (no skill on this step), contract last.
-    expect(prompt).toBe(composeSystemPrompt(CONFIG_PROMPT, artifactsLine(repoRoot, id), HANDOFF_INSTRUCTIONS));
+    expect(prompt).toBe(composeSystemPrompt(CONFIG_PROMPT, store.getRun(id)?.steps[0]?.capabilityPrompt, artifactsLine(repoRoot, id), HANDOFF_INSTRUCTIONS));
   }, 30_000);
 
 
@@ -508,7 +508,7 @@ describe('systemPrompt end-to-end (dry run)', () => {
     const record = store.getRun(id);
     expect(record?.systemPrompt).toBe(OVERRIDE_PROMPT);
     const prompt = capturedSystemPrompt();
-    expect(prompt).toBe(composeSystemPrompt(OVERRIDE_PROMPT, artifactsLine(repoRoot, id), HANDOFF_INSTRUCTIONS));
+    expect(prompt).toBe(composeSystemPrompt(OVERRIDE_PROMPT, store.getRun(id)?.steps[0]?.capabilityPrompt, artifactsLine(repoRoot, id), HANDOFF_INSTRUCTIONS));
     expect(prompt).not.toContain(CONFIG_PROMPT);
   }, 30_000);
 
@@ -541,7 +541,7 @@ describe('systemPrompt end-to-end (dry run)', () => {
       source: 'ai',
     });
     expect(capturedSystemPrompt()).toBe(
-      composeSystemPrompt(skillPrompt, CONFIG_PROMPT, artifactsLine(repoRoot, id), HANDOFF_INSTRUCTIONS),
+      composeSystemPrompt(skillPrompt, CONFIG_PROMPT, store.getRun(id)?.steps[0]?.capabilityPrompt, artifactsLine(repoRoot, id), HANDOFF_INSTRUCTIONS),
     );
 
     // The mock writes the actual first user message it received into the run
@@ -572,7 +572,7 @@ describe('systemPrompt end-to-end (dry run)', () => {
     const id = await runToEnd({ task: 'do the thing quietly', generateFollowups: false });
     const record = store.getRun(id);
     expect(record?.generateFollowups).toBe(false);
-    expect(capturedSystemPrompt()).toBe(composeSystemPrompt(CONFIG_PROMPT, artifactsLine(repoRoot, id), HANDOFF_ONLY_INSTRUCTIONS));
+    expect(capturedSystemPrompt()).toBe(composeSystemPrompt(CONFIG_PROMPT, store.getRun(id)?.steps[0]?.capabilityPrompt, artifactsLine(repoRoot, id), HANDOFF_ONLY_INSTRUCTIONS));
     expect(capturedSystemPrompt()).not.toContain('CEZ_TODOS_FILE');
     expect(existsSync(todosFile)).toBe(false);
     // The opt-out must survive an inherited CEZ_TODOS_FILE (nested cezar):
@@ -596,7 +596,7 @@ describe('systemPrompt end-to-end (dry run)', () => {
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
     expect(capturedSystemPrompt(1)).toBe(
-      composeSystemPrompt(CONFIG_PROMPT, artifactsLine(repoRoot, id), HANDOFF_ONLY_INSTRUCTIONS),
+      composeSystemPrompt(CONFIG_PROMPT, store.getRun(id)?.steps.at(-1)?.capabilityPrompt, artifactsLine(repoRoot, id), HANDOFF_ONLY_INSTRUCTIONS),
     );
     expect(capturedSystemPrompt(1)).not.toContain('CEZ_TODOS_FILE');
     const demoDeadline = Date.now() + 10_000;
@@ -713,7 +713,7 @@ describe('the global follow-up gate (dry run)', () => {
       else process.env.CEZ_API_URL = savedApiUrl;
     }
 
-    expect(capturedSystemPrompt()).toBe(composeSystemPrompt(CONFIG_PROMPT, artifactsLine(repoRoot, id), HANDOFF_ONLY_INSTRUCTIONS));
+    expect(capturedSystemPrompt()).toBe(composeSystemPrompt(CONFIG_PROMPT, store.getRun(id)?.steps[0]?.capabilityPrompt, artifactsLine(repoRoot, id), HANDOFF_ONLY_INSTRUCTIONS));
     expect(capturedSystemPrompt()).not.toContain('CEZ_TODOS_FILE');
     expect(existsSync(todosFile)).toBe(false);
     // …and nothing leaked into the parent cezar's inbox either.

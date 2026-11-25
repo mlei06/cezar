@@ -1,9 +1,10 @@
 import { execFile, type SpawnOptions } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildChildEnv } from '../core/agent-env.ts';
 import { RunStore } from '../runs/store.ts';
@@ -44,6 +45,7 @@ describe('project and workspace secrets in check steps', () => {
   let manager: RunManager;
   let secrets: SecretStore;
   let stdinLog: string;
+  let argsLog: string;
   /** Per test, so each case starts with no store of its own — `CEZ_HOME` is one sandbox for the
    *  whole vitest worker, and a shared id would let one case read the previous one's file. */
   let project: string;
@@ -55,10 +57,12 @@ describe('project and workspace secrets in check steps', () => {
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-secrets-'));
     project = `secrets-${randomUUID()}`;
     scope = { kind: 'project', projectId: project, root: repoRoot };
-    for (const key of ['CEZ_DRY_RUN', 'CEZ_MOCK_STDIN_FILE']) savedEnv[key] = process.env[key];
+    for (const key of ['CEZ_DRY_RUN', 'CEZ_MOCK_STDIN_FILE', 'CEZ_MOCK_ARGS_FILE', 'CEZ_OPENCODE_BIN', 'CEZ_REDACT_SECRETS']) savedEnv[key] = process.env[key];
     process.env.CEZ_DRY_RUN = '1';
     stdinLog = join(repoRoot, '.mock-stdin.ndjson');
     process.env.CEZ_MOCK_STDIN_FILE = stdinLog;
+    argsLog = join(repoRoot, '.mock-args.ndjson');
+    process.env.CEZ_MOCK_ARGS_FILE = argsLog;
     await run('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
     writeFileSync(join(repoRoot, 'a.txt'), 'one\n');
     await run('git', ['add', '-A'], { cwd: repoRoot });
@@ -88,6 +92,11 @@ describe('project and workspace secrets in check steps', () => {
       await new Promise((r) => setTimeout(r, 100));
     }
   };
+
+  const capturedPrompts = () => readFileSync(argsLog, 'utf8').trim().split('\n')
+    .map((line) => JSON.parse(line) as string[])
+    .filter((argv) => argv.includes('--append-system-prompt'))
+    .map((argv) => argv[argv.indexOf('--append-system-prompt') + 1]!);
 
   const checkOutputs = (id: string): string[] =>
     readFileSync(join(repoRoot, '.ai/cezar/runs', `${id}.ndjson`), 'utf8')
@@ -211,6 +220,16 @@ describe('project and workspace secrets in check steps', () => {
 
     expect(store.getRun(record.id)?.status).toBe('done');
     expect(launches).toEqual(['fixture-value', undefined]);
+    const steps = store.getRun(record.id)?.steps;
+    expect(steps?.[0]?.capabilityPrompt).toContain('  SHARED_KEY');
+    expect(steps?.[1]?.capabilityPrompt).toContain('Workflow: scoped');
+    expect(steps?.[1]?.capabilityPrompt).toContain('Secrets in your environment: none.');
+    const prompts = capturedPrompts();
+    expect(prompts).toHaveLength(2);
+    expect(prompts[0]).toContain(steps![0]!.capabilityPrompt!);
+    expect(prompts[1]).toContain(steps![1]!.capabilityPrompt!);
+    expect(prompts[1]).not.toContain('SHARED_KEY');
+    expect(prompts.join('\n')).not.toContain('fixture-value');
     store.flush();
     expect(RunStore.open(join(repoRoot, '.ai/cezar')).getRun(record.id)?.workflowDef?.budget).toEqual(budget);
 
@@ -218,6 +237,143 @@ describe('project and workspace secrets in check steps', () => {
     await vi.waitFor(() => expect(launches).toHaveLength(3), { timeout: 10_000 });
     expect(launches[2]).toBeUndefined();
     await settle(record.id);
+  }, 30_000);
+
+  it('composes and snapshots effective capabilities on start and Continue', async () => {
+    process.env.CEZ_REDACT_SECRETS = '0';
+    await secrets.set(workspace, 'SHARED_KEY', 'workspace-fixture-value', ['agents'], 'Workspace description');
+    await secrets.set(scope, 'SHARED_KEY', 'project-fixture-value', ['agents'], 'Project description');
+    const description = 'Operator  metadata: check-fixture-value';
+    await secrets.set(scope, 'OPERATOR_KEY', 'synthetic-operator-value', ['agents'], description);
+    await secrets.set(scope, 'CHECK_ONLY', 'check-fixture-value', ['checks']);
+    await secrets.set(scope, 'UNLISTED', 'unlisted-fixture-value', ['agents']);
+    await secrets.set(scope, 'OPENAI_API_KEY', 'login-fixture-value', ['agents']);
+    mkdirSync(join(repoRoot, '.ai/skills/fixture-skill'), { recursive: true });
+    writeFileSync(join(repoRoot, '.ai/skills/fixture-skill/SKILL.md'), [
+      '---', 'name: fixture-skill', 'description: A fixture skill', '---', 'Fixture instructions.',
+    ].join('\n'));
+
+    const workflow: WorkflowDef = {
+      name: 'capability-fixture',
+      source: 'file',
+      budget: { tokens: 300_000, minutes: 30 },
+      steps: [
+        { id: 'work', prompt: '{{task}}', skill: 'fixture-skill', secrets: ['SHARED_KEY', 'OPERATOR_KEY', 'CHECK_ONLY', 'OPENAI_API_KEY', 'MISSING'] },
+        { id: 'verify', command: 'true' },
+      ],
+    };
+    const instructions = 'Project instructions for capability fixture';
+    const record = manager.startRun(workflow, { task: 'mock:done go', worktree: false, systemPrompt: instructions });
+    await settle(record.id);
+
+    const capabilityBlock = (prompt: string) => prompt.split('\n\n---\n\n').find((part) => part.startsWith('Workflow: capability-fixture'));
+    const opening = capturedPrompts()[0]!;
+    const block = capabilityBlock(opening);
+    expect(block).toBeDefined();
+    expect(opening).toContain(`${instructions}\n\n---\n\n${block}\n\n---\n\n`);
+    expect(block?.split('\n').filter((line) => line.startsWith('  '))).toEqual([`  OPERATOR_KEY: ${description}`, '  SHARED_KEY: Project description']);
+    expect(block).toContain('Workflow: capability-fixture (claude); budget 300000 tokens, 30 min active');
+    expect(block).toContain('Other workflows in this project: ');
+    expect(block).toContain('quick-task');
+    expect(block).toContain('Attached skill: fixture-skill');
+    expect(opening).not.toContain('project-fixture-value');
+    expect(opening).not.toContain('synthetic-operator-value');
+    store.flush();
+    expect(RunStore.open(join(repoRoot, '.ai/cezar')).getRun(record.id)?.steps[0]?.capabilityPrompt).toBe(block);
+
+    await secrets.describe(scope, 'SHARED_KEY', 'Updated project description');
+    await secrets.unset(scope, 'OPERATOR_KEY');
+    expect(manager.continueRun(record.id, { text: 'mock:done continue' })).toEqual({ ok: true });
+    await vi.waitFor(() => {
+      expect(capturedPrompts().map(capabilityBlock)).toContain(block?.replace(`  OPERATOR_KEY: ${description}\n`, '').replace('Project description', 'Updated project description'));
+    }, { timeout: 10_000 });
+    await settle(record.id);
+  }, 30_000);
+
+  it.each([
+    { binding: 'unbound', secrets: undefined, kind: 'own value', description: 'Copied synthetic-legacy-fixture-value' },
+    { binding: 'bound', secrets: ['LEGACY_KEY'], kind: 'own value', description: 'Copied synthetic-legacy-fixture-value' },
+    { binding: 'unbound', secrets: undefined, kind: 'control character', description: 'Operator\0metadata' },
+    { binding: 'bound', secrets: ['LEGACY_KEY'], kind: 'control character', description: 'Operator\0metadata' },
+  ])('omits a legacy description with a $kind for $binding grants', async ({ secrets: bindings, description }) => {
+    const value = 'synthetic-legacy-fixture-value';
+    process.env.CEZ_REDACT_SECRETS = '0';
+    await secrets.set(scope, 'LEGACY_KEY', value, ['agents']);
+    const path = join(process.env.CEZ_HOME!, 'secrets', `${project}.json`);
+    const vault = JSON.parse(readFileSync(path, 'utf8'));
+    vault.secrets.LEGACY_KEY.description = description;
+    const original = JSON.stringify(vault);
+    writeFileSync(path, original);
+
+    const grants: (string | undefined)[] = [];
+    const resolveEnv = manager['agentEnvForStep'].bind(manager);
+    manager['agentEnvForStep'] = async (...args) => {
+      const profile = await resolveEnv(...args);
+      grants.push(profile.env.LEGACY_KEY);
+      return profile;
+    };
+    const record = manager.startRun({
+      name: 'legacy-fixture',
+      source: 'file',
+      steps: [{ id: 'work', prompt: '{{task}}' }, { id: 'verify', command: 'true' }],
+    }, { task: 'mock:done inspect capabilities', runner: 'claude', secrets: bindings, worktree: false });
+    await settle(record.id);
+
+    expect(store.getRun(record.id)?.status).toMatch(/^(done|review)$/);
+    expect(grants).toEqual([value]);
+    const [prompt] = capturedPrompts();
+    expect(prompt).toContain('  LEGACY_KEY\n');
+    expect(prompt).not.toContain(value);
+    expect(prompt).not.toContain(description);
+    store.flush();
+    const saved = RunStore.open(join(repoRoot, '.ai/cezar')).getRun(record.id)?.steps[0]?.capabilityPrompt;
+    expect(saved).toContain('  LEGACY_KEY\n');
+    expect(saved).not.toContain(value);
+    expect(saved).not.toContain(description);
+    expect(readFileSync(path, 'utf8')).toBe(original);
+  }, 30_000);
+
+  it('refreshes actual OpenCode 1.x resume prompts after a vault grant is revoked', async () => {
+    process.env.CEZ_OPENCODE_BIN = fileURLToPath(new URL('../core/__fixtures__/opencode/mock-opencode-serve.mjs', import.meta.url));
+    const requestsLog = join(repoRoot, 'requests.ndjson');
+    const resolveEnv = manager['agentEnvForStep'].bind(manager);
+    manager['agentEnvForStep'] = async (...args) => {
+      const profile = await resolveEnv(...args);
+      profile.env.D3_MOCK_REQUESTS_FILE = requestsLog;
+      return profile;
+    };
+    const value = 'synthetic-revoked-d3-credential';
+    await secrets.set(scope, 'D3_REVOKED_KEY', value, ['agents'], 'Old description');
+    const record = manager.startRun({
+      name: 'native-resume',
+      source: 'file',
+      steps: [
+        { id: 'work', prompt: '{{task}}', secrets: ['D3_REVOKED_KEY'] },
+        { id: 'check', command: 'true' },
+      ],
+    }, { task: 'Start the fixture', runner: 'opencode', worktree: false });
+    await settle(record.id);
+    const requests = () => readFileSync(requestsLog, 'utf8').trim().split('\n')
+      .map((line) => JSON.parse(line) as { method: string; url: string; text?: string; hasRevokedKey?: boolean });
+    expect(requests()).toEqual([
+      expect.objectContaining({ method: 'POST', hasRevokedKey: true, text: expect.stringContaining('  D3_REVOKED_KEY: Old description') }),
+    ]);
+
+    await secrets.set(scope, 'D3_REVOKED_KEY', value, ['checks']);
+    expect(manager.continueRun(record.id, { text: 'Continue the fixture' })).toEqual({ ok: true });
+    await vi.waitFor(() => expect(requests()).toHaveLength(3), { timeout: 10_000 });
+    const [opening, reopen, resume] = requests();
+    expect(reopen).toEqual({ method: 'GET', url: '/session/ses_mock_1' });
+    expect(resume).toMatchObject({
+      method: 'POST', url: '/session/ses_mock_1/message', hasRevokedKey: false,
+      text: expect.stringContaining('Secrets in your environment: none.'),
+    });
+    expect(resume?.text).toContain('Continue the fixture');
+    expect(resume?.text).not.toContain('D3_REVOKED_KEY');
+    expect(resume?.text).not.toContain('Old description');
+    expect(`${opening?.text}${resume?.text}`).not.toContain(value);
+    expect(resume?.text).toContain(store.getRun(record.id)!.steps.at(-1)!.capabilityPrompt!);
+    await vi.waitFor(() => expect(store.getRun(record.id)?.status).toBe('waiting'), { timeout: 10_000 });
   }, 30_000);
 
   it('never leaks a secret into the server process env', async () => {

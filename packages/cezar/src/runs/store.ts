@@ -130,6 +130,7 @@ const stepStateSchema = z.object({
   profileId: z.string().optional(),
   toolPolicy: stepToolPolicySchema.optional(),
   sessionSecretPolicy: sessionSecretPolicySchema.optional(),
+  capabilityPrompt: z.string().optional(),
   /** Canonical provider/model identity resolved for this step. Optional so older runs.json files
    *  remain readable and auto-model steps can retain an absent identity. */
   modelIdentity: z.string().optional(),
