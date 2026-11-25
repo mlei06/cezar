@@ -41,6 +41,7 @@ export const PROJECT_CONFIG_KEYS = Object.keys(bundleProjectConfigSchema.shape) 
 /** Every workspace key the bundle leaves out, and why — `config-bundle.test.ts` requires a reason for each. */
 export const WORKSPACE_EXCLUDED: Record<string, string> = {
   branding: 'names this instance',
+  factory: 'machine-local factory model settings',
   schemaVersion: 'migration cursor of this home',
   browseRoot: 'machine path',
   projectsDir: 'machine path',

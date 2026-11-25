@@ -6,10 +6,12 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { CodexAppServerRunner } from '../core/codex-app-server-runner.ts';
 import { buildChildEnv } from '../core/agent-env.ts';
 import { RunStore } from '../runs/store.ts';
 import { SecretStore } from '../workspace/secrets.ts';
 import { CHECK_CONTEXT_VARS, RunManager } from './run.ts';
+import { implementWorkflow } from './templates.ts';
 import { workflowStepSchema, type WorkflowDef } from './types.ts';
 
 // Secret fixtures assert exact check output; developer login profiles must not
@@ -374,6 +376,39 @@ describe('project and workspace secrets in check steps', () => {
     expect(`${opening?.text}${resume?.text}`).not.toContain(value);
     expect(resume?.text).toContain(store.getRun(record.id)!.steps.at(-1)!.capabilityPrompt!);
     await vi.waitFor(() => expect(store.getRun(record.id)?.status).toBe('waiting'), { timeout: 10_000 });
+  }, 30_000);
+
+  it('redacts passing and failing check output before it reaches the implement repair prompt', async () => {
+    const pass = 'synthetic-pass-check-value';
+    const fail = 'synthetic-fail-check-value';
+    await secrets.set(scope, 'PASS_VALUE', pass, ['checks']);
+    await secrets.set(scope, 'FAIL_VALUE', fail, ['checks']);
+    const launch = vi.spyOn(CodexAppServerRunner.prototype, 'startSession');
+    try {
+      const workflow = implementWorkflow(['printf "prior %s" "$PASS_VALUE"', 'printf "failed %s" "$FAIL_VALUE"; exit 1']);
+      const record = manager.startRun(workflow, { task: 'repair validation' });
+      await settle(record.id);
+      const prompts = launch.mock.calls.map(([spec]) => spec.userPrompt);
+      expect(prompts).toHaveLength(3);
+      for (const prompt of prompts.slice(1)) {
+        expect(prompt).toContain('prior [REDACTED]');
+        expect(prompt).toContain('failed [REDACTED]');
+        expect(prompt).not.toContain(pass);
+        expect(prompt).not.toContain(fail);
+      }
+      expect(store.getRun(record.id)?.status).toBe('failed');
+      store.flush();
+      const graphState = RunStore.open(join(repoRoot, '.ai/cezar')).getRun(record.id)?.graphState;
+      expect(graphState?.outputs).toMatchObject({
+        'check-1': { output: 'prior [REDACTED]', exitCode: 0 },
+        'check-2': { output: 'failed [REDACTED]', exitCode: 1 },
+      });
+      const checkpoint = JSON.stringify(graphState);
+      expect(checkpoint).not.toContain(pass);
+      expect(checkpoint).not.toContain(fail);
+    } finally {
+      launch.mockRestore();
+    }
   }, 30_000);
 
   it('never leaks a secret into the server process env', async () => {

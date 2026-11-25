@@ -24,7 +24,7 @@ import { enforceWorktreeRetention } from './runs/retention.ts';
 import { armRepoHandle } from './runs/arm-repo-handle.ts';
 import { isIdleParked, RunStore } from './runs/store.ts';
 import { RunManager } from './workflows/run.ts';
-import { loadWorkflows } from './workflows/load.ts';
+import { loadWorkflows, resolveWorkflowModelAlias } from './workflows/load.ts';
 import { resolveCapabilities } from './server/capabilities.ts';
 import { narrowForRelay } from './relay/scope.ts';
 import { startServer, WorkspaceEventBus } from './server/server.ts';
@@ -741,8 +741,9 @@ async function runCommand(
   }
 
   const providerAuth = new ProviderAuthService({ cwd: repoRoot, onInconclusive: (probe) => void reportInconclusiveProbe(probe) });
+  const preflightWorkflow = (await resolveWorkflowModelAlias(workflow, repoRoot)).workflow;
   const requiredProviders = providersRequiredByWorkflow(
-    workflow,
+    preflightWorkflow,
     (await loadConfig(repoRoot)).defaultRunner,
   );
   if (requiredProviders.length > 0 && !providerAuthChecksDisabled()) {

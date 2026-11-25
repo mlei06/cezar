@@ -224,7 +224,7 @@ export function createAzureDriver(remote: AzureRemote, deps: AzureDriverDeps = {
       const branch = run.branch;
       const existing = input.updateExisting ? run.pullRequestUrl : undefined;
       if (!worktree || !branch) return { ok: false, error: 'this task has no worktree/branch to publish' };
-      const saved = await autosaveCommit(worktree, 'pre-PR');
+      const saved = await autosaveCommit(worktree, 'pre-PR', input.excludedPaths);
       if (saved === 'refused') return { ok: false, error: 'worktree has unresolved merge conflicts — resolve them, then publish again' };
       if (saved === 'failed') return { ok: false, error: 'could not commit the final changes — check git status in the worktree' };
       if (dryRun()) {

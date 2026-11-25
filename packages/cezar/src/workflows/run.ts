@@ -42,7 +42,7 @@ import { isUsageExhaustion, parseUsageLimit } from '../core/usage-limit.ts';
 import { diskFullAgentErrorText } from '../disk-space.ts';
 import { accountStateHint, classifyAgentFailure, isOauthRefreshRace, transientRetryCap, transientRetryDelayMs } from '../core/agent-failure-class.ts';
 import { reportAgentError } from '../runs/agent-error-telemetry.ts';
-import { createRunner } from '../core/runner-factory.ts';
+import { canEnforceReadOnly, createRunner, readOnlyUnsupportedMessage } from '../core/runner-factory.ts';
 import { REASONING_EFFORT_UNSUPPORTED_ERROR, runnerSupportsReasoningEffort, type RunnerId } from '../core/agent-runner.ts';
 import { modelConflictsWithRunner, pinSurvivesRunnerSwitch } from '../core/model-presets.ts';
 import { AGENT_MODELS_LOCKED_ERROR, agentModelsLocked } from '../core/agent-model-policy.ts';
@@ -107,7 +107,7 @@ import { commentOnIssue, commentOnPr, fetchPrWatchFingerprint, findBranchPr, res
 import { baseDivergence, createOrSwitchBranch } from '../server/git-changes.ts';
 import { isReadOnlyWorkflow, readOnlyWorkflowRefusal } from './capabilities.ts';
 import { getHeadCommit, getRepoInfo } from '../server/git.ts';
-import { loadWorkflows, newerCatalogWorkflow } from './load.ts';
+import { loadWorkflows, newerCatalogWorkflow, resolveWorkflowModelAlias } from './load.ts';
 import { capabilityPrompt } from './capability-prompt.ts';
 import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/store.ts';
 import { switchedWorkflowAgent, taskAgentSelection, workflowAgentSwitch } from '../runs/agent-selection.ts';
@@ -222,6 +222,7 @@ import {
   type WorkflowGraph,
 } from './graph.ts';
 import { GATE_APPROVE, GATE_FULL_PR, GATE_REJECT, classifyGateReply, gateInstructionsPrompt, gateOpensPr } from './gate-reply.ts';
+import { PLAN } from './templates.ts';
 import { resolveContinuationModel } from './run-continuation-model.ts';
 
 /** Backends whose runner honors `resume` (AgentRunSpec) — graph `session.continue` and the
@@ -820,6 +821,10 @@ function continuationSecretNames(run: RunRecord | undefined, owner?: StepState):
 
 function savedContinuationTools(run: RunRecord | undefined, owner?: StepState): StepToolPolicy | undefined {
   return owner ? owner.toolPolicy : [...(run?.steps ?? [])].reverse().find((step) => step.kind === 'agent' && step.toolPolicy)?.toolPolicy;
+}
+
+function isBuiltInPlan(workflow: WorkflowDef | undefined): boolean {
+  return workflow?.source === 'built-in' && workflow.name === PLAN.name;
 }
 
 function resolveAgentStepTools(
@@ -2265,7 +2270,14 @@ export class RunManager {
     input: StartRunInput,
     group?: { groupId: string; variant: string },
   ): RunRecord {
-    if (input.readOnly && !group) {
+    const plan = isBuiltInPlan(workflow);
+    if (plan) {
+      input = { ...input, readOnly: true, enforceReadOnly: true };
+    }
+    if (workflow.source === 'built-in' && workflow.name === 'implement' && !input.readOnly) {
+      input = { ...input, worktree: true };
+    }
+    if (input.readOnly && (!group || plan)) {
       input = { ...input, worktree: false, newBranch: undefined, dispatchIntent: undefined, forkRef: undefined };
     }
     // Sanitize at the manager boundary so CLI runs, workflows, variants, and
@@ -2310,7 +2322,7 @@ export class RunManager {
       autonomous: input.autonomous === true,
       // Persist the explicit opt-out so queued-run restart recovery and the
       // session Git routes can distinguish it from a removed isolated worktree.
-      worktree: !group && !input.dispatchIntent && !input.forkRef && input.worktree === false ? false : undefined,
+      worktree: (!group || plan) && !input.dispatchIntent && !input.forkRef && input.worktree === false ? false : undefined,
       groupId: group?.groupId,
       variant: group?.variant,
       steps: workflow.graph
@@ -6428,7 +6440,8 @@ export class RunManager {
     this.starting.delete(runId);
     if (record?.worktreePath && state.cwd !== this.repoRoot) state.releaseWorktree = await this.lifecycle.acquireAgentLease(runId);
     state.readOnly = record?.readOnly === true && state.cwd === this.repoRoot;
-    state.enforceReadOnly = state.readOnly && record?.enforceReadOnly === true;
+    state.enforceReadOnly = (state.readOnly && record?.enforceReadOnly === true) ||
+      isBuiltInPlan(record?.workflowDef);
     const continueConfig = await loadConfig(this.repoRoot);
     state.bypassPermissions = await this.bypassPolicy(state.readOnly, continueConfig, (message) =>
       this.store.appendEvent(runId, { type: 'note', message }),
@@ -6788,6 +6801,10 @@ export class RunManager {
       });
       this.dropActive(runId, state);
     };
+    if (isBuiltInPlan(record?.workflowDef) && !canEnforceReadOnly(continueBackend)) {
+      failBeforeSpawn(readOnlyUnsupportedMessage(continueBackend));
+      return;
+    }
     // Admission may have waited in the queue. Recheck consent, account existence and the
     // provider before preparing the session; consent is checked again after preparation.
     const fallback = this.store.getRun(runId);
@@ -7147,6 +7164,20 @@ export class RunManager {
     // the config default. Per-step `runner` can still override it below.
     const config = await loadConfig(this.repoRoot);
     const taskBackend: RunnerId = (original?.agentSwitch?.workflow ? original.runner : input.runner) ?? config.defaultRunner;
+    const selection = await resolveWorkflowModelAlias(workflow, this.repoRoot, config);
+    if (state.cancelled) return;
+    if (selection.workflow !== workflow) {
+      workflow = selection.workflow;
+      state.workflow = workflow;
+      this.store.updateRun(runId, { workflowDef: workflow });
+      if (selection.fallback) {
+        emit({ type: 'note', message: `low-reasoning is unset in workspace settings. Using the project default runner (${selection.fallback}) with low effort where supported.` });
+      }
+    }
+    if (!original?.startedAt && workflow.source === 'built-in' && workflow.name === 'implement' &&
+      !workflow.graph?.nodes.some((node) => node.type === 'check')) {
+      emit({ type: 'note', message: 'No validation is configured for Implement.' });
+    }
     const effortIssue = agentModelsLocked(this.repoRoot) || original?.agentSwitch?.workflow
       ? undefined
       : reasoningEffortIssue(workflow, taskBackend, input.reasoningEffort);
@@ -7173,6 +7204,7 @@ export class RunManager {
     if (
       input.worktree === undefined &&
       config.taskWorkspace === 'in-place' &&
+      !(workflow.source === 'built-in' && workflow.name === 'implement') &&
       !defaultable?.groupId &&
       !defaultable?.dispatch &&
       !input.dispatchIntent &&
@@ -7182,7 +7214,8 @@ export class RunManager {
       this.store.updateRun(runId, { worktree: false });
     }
     state.readOnly = input.readOnly === true && input.worktree === false;
-    state.enforceReadOnly = state.readOnly && input.enforceReadOnly === true;
+    state.enforceReadOnly = (state.readOnly && input.enforceReadOnly === true) ||
+      isBuiltInPlan(workflow);
     state.autoLand = await this.landingPolicy(this.store.getRun(runId), config, (message) =>
       this.store.appendEvent(runId, { type: 'note', message }),
     );
@@ -7589,6 +7622,8 @@ export class RunManager {
     },
   ): Promise<string | null> {
     const { input, skills, emit, taskBackend, extraSystemPrompt } = ctx;
+    const isImplement = workflow.source === 'built-in' && workflow.name === 'implement';
+    const validationChecks = isImplement ? graph.nodes.filter((node) => node.type === 'check') : [];
     let { startImages } = ctx;
     const { startAttachments } = ctx;
     // Resume only onto a node this graph still has; anything else starts the walk afresh.
@@ -7765,6 +7800,9 @@ export class RunManager {
       const node = step.node;
       const resuming = resumeNode?.id === node.id && cursor === undefined;
       cursor = node.id;
+      if (node.id === validationChecks[0]?.id) {
+        for (const check of validationChecks) outputs.delete(check.id);
+      }
       persistWalk();
       const kind: 'agent' | 'check' = node.type === 'agent' ? 'agent' : 'check';
       const iteration = (this.store.getRun(runId)?.steps.find((s) => s.id === node.id)?.iterations ?? 0) + 1;
@@ -7979,7 +8017,7 @@ export class RunManager {
         }
       } else {
         const rendered = nodeToStep(node);
-        if (rendered.command) rendered.command = renderNodeRefs(rendered.command, outputs);
+        if (!node.literalCommand && rendered.command) rendered.command = renderNodeRefs(rendered.command, outputs);
         // Check commands are allowed to generate tracked output, but that output
         // is verification residue rather than agent work. Save the agent's state
         // before the command, then keep the command's changed paths excluded from
@@ -7996,6 +8034,11 @@ export class RunManager {
         state.autosaveCheckpointBlocked = !checkpointSafe;
         if (checkpointSafe) this.autosaveCheckpointBlockedRuns.delete(runId);
         else this.autosaveCheckpointBlockedRuns.add(runId);
+        if (isImplement && !checkpointSafe) {
+          const error = 'unable to checkpoint changes before validation; no PR was opened';
+          this.finishStep(runId, node.id, 'failed', error, emit);
+          return error;
+        }
         let checkResult: { ok: boolean; output: string; exitCode: number };
         state.checkInProgress = true;
         try {
@@ -8010,7 +8053,8 @@ export class RunManager {
         }
         const { ok, output, exitCode } = checkResult;
         if (state.cancelled) return null;
-        outputs.set(node.id, { exitCode, output });
+        const redacted = isImplement || !ok ? this.store.redactRunText(runId, output) : output;
+        outputs.set(node.id, { exitCode, output: isImplement ? redacted : output });
         if (ok) {
           this.finishStep(runId, node.id, 'done', undefined, emit);
           port = 'pass';
@@ -8018,7 +8062,7 @@ export class RunManager {
           // The output goes into the next agent prompt — to the agent's model provider — so it is
           // scrubbed like an event is: host secrets, this run's registered secrets (project
           // secrets included) and token patterns. Strictly narrowing, for every workflow.
-          checkFailure = this.store.redactRunText(runId, output);
+          checkFailure = redacted;
           this.recordFailedPlanAttempt(runId);
           if (node.retryOn?.length && !node.retryOn.includes(exitCode)) {
             const codes = node.retryOn.join(', ');
@@ -8362,12 +8406,14 @@ export class RunManager {
           note(`PR already open: ${run.pullRequestUrl}`);
           return !readyPr || await markReady(run.pullRequestUrl) ? 'created' : 'failed';
         }
-        // Nothing to propose — a clean tree with no commits ahead of the base (a review-only
-        // run): succeed without pushing, rather than fail on gh's refusal.
+        const excludedPaths = run.worktreePath
+          ? new Set(await currentCheckExclusions(run.worktreePath, state.autosaveExcludedPaths))
+          : new Set<string>();
+        // Nothing to propose — no publishable changes or commits ahead of the base.
         if (
           !run.pullRequestUrl &&
           run.worktreePath &&
-          (await worktreeChangedPaths(run.worktreePath)).length === 0 &&
+          (await worktreeChangedPaths(run.worktreePath)).every((path) => excludedPaths.has(path)) &&
           (await baseDivergence(run.worktreePath, run.baseBranch)).ahead === 0
         ) {
           outputs.set(node.id, { url: '', number: '' });
@@ -8379,6 +8425,7 @@ export class RunManager {
           repoRoot: this.repoRoot,
           run: title ? { ...run, title } : run,
           handoffText: readHandoff(this.dataDir, runId),
+          ...(excludedPaths.size ? { excludedPaths: [...excludedPaths] } : {}),
           ...(readyPr ? { draft: false } : {}),
           ...(run.pullRequestUrl && updateExistingPr ? { updateExisting: true } : {}),
         });
@@ -9185,12 +9232,12 @@ export class RunManager {
     const secretNames = graphHooks?.resumeSessionId || graphHooks?.continuing || resumeStep || checkFailure !== null
       ? continuationSecretNames(launchRecord, resumedOwner)
       : launchRecord?.secretNames ?? step.secrets?.filter((name) => typeof name === 'string');
-    const reasoningEffort = agentModelsLocked(this.repoRoot)
-      ? undefined
-      : resolveStepReasoningEffort(step, taskBackend, input.reasoningEffort);
+    const modelsLocked = agentModelsLocked(this.repoRoot);
+    const reasoningEffort = modelsLocked ? undefined : resolveStepReasoningEffort(step, taskBackend, input.reasoningEffort);
     this.store.updateStep(runId, step.id, {
       ...(reasoningEffort ? { reasoningEffort } : {}),
       ...(graphHooks?.workflowAgent ? { reasoningEffort, model: step.model, actualModel: undefined, modelIdentity: undefined } : {}),
+      ...(!modelsLocked && step.model === '' ? { model: '' } : {}),
     });
 
     const stepRecord = this.store.getRun(runId)?.steps.find((s) => s.id === step.id);
