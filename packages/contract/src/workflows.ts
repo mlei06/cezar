@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { reasoningEffortSchema } from './agent.ts';
 import { runnerSchema } from './health.ts';
-import { stepSecretsSchema } from './secrets.ts';
+import { secretNameSchema, stepSecretBindingSchema, stepSecretsSchema } from './secrets.ts';
 
 /**
  * The WORKFLOWS family: the chain catalog, the save/parse routes, and the planner.
@@ -14,6 +14,16 @@ import { stepSecretsSchema } from './secrets.ts';
  */
 
 // ---- workflows (`GET/POST /workflows`, `DELETE /workflows/:name`, `POST /workflows/parse`) ----
+
+export const workflowBudgetSchema = z.object({
+  tokens: z.number().int().positive().optional(),
+  minutes: z.number().positive().optional(),
+}).strict().refine((budget) => budget.tokens !== undefined || budget.minutes !== undefined, {
+  message: 'budget must set tokens or minutes',
+});
+export type WorkflowBudget = z.infer<typeof workflowBudgetSchema>;
+
+export const agentStepSecretsSchema = z.array(secretNameSchema);
 
 /**
  * One step of a chain: either an agent step (`prompt`/`skill`) or a check step (`command`).
@@ -45,15 +55,17 @@ export const workflowStepDefSchema = z
         retryOn: z.array(z.number().int().positive()).optional(),
       })
       .optional(),
-    /** Check steps only: which project/workspace secrets reach this command (by name, optionally
-     *  renamed). Omitted means every secret whose audiences include `checks`. */
-    secrets: stepSecretsSchema.optional(),
+    /** Check steps bind names with optional aliases. Agent steps allow only names; [] grants none. */
+    secrets: z.array(stepSecretBindingSchema).optional(),
   })
   .refine((s) => Boolean(s.command) !== Boolean(s.prompt ?? s.skill), {
     message: 'a step is either an agent step (prompt/skill) or a check step (command), not both',
   })
-  .refine((s) => !s.secrets || Boolean(s.command), {
-    message: 'secrets: is for check steps only — an agent step never receives a secret',
+  .refine((s) => s.secrets === undefined || (s.command
+    ? s.secrets.length > 0
+    : s.secrets.every((name) => typeof name === 'string')), {
+    path: ['secrets'],
+    message: 'check steps require at least one secret binding; agent steps accept only secret names',
   });
 export type WorkflowStepDef = z.infer<typeof workflowStepDefSchema>;
 
@@ -106,6 +118,7 @@ export const workflowGraphNodeSchema = z.discriminatedUnion('type', [
     runner: runnerSchema.optional(),
     allowedTools: z.array(z.string()).optional(),
     bashAllowlist: z.array(z.string()).optional(),
+    secrets: agentStepSecretsSchema.optional(),
     verdicts: z.array(verdictName).min(1).optional(),
     session: z.object({ continue: nodeId }).optional(),
     review: z.boolean().optional(),
@@ -181,6 +194,7 @@ export type WorkflowGraph = z.infer<typeof workflowGraphSchema>;
 export const workflowDefSchema = z.object({
   name: z.string(),
   description: z.string().optional(),
+  budget: workflowBudgetSchema.optional(),
   steps: z.array(workflowStepDefSchema),
   /** Present on `version: 2` graph workflows only; `steps` is then derived from its nodes. */
   graph: workflowGraphSchema.optional(),
@@ -229,6 +243,7 @@ export const saveWorkflowInputSchema = z
   .object({
     name: z.string().trim().min(1).max(80),
     description: z.string().max(2_000, 'must be at most 2000 characters').optional(),
+    budget: workflowBudgetSchema.optional(),
     steps: z.array(workflowStepDefSchema).min(1).max(8).optional(),
     skills: z.array(z.string().trim().min(1)).min(1).max(8).optional(),
     overwrite: z.boolean().optional(),
@@ -249,6 +264,7 @@ export type SaveWorkflowResponse = z.infer<typeof saveWorkflowResponseSchema>;
 export const parsedWorkflowSchema = z.object({
   name: z.string(),
   description: z.string().optional(),
+  budget: workflowBudgetSchema.optional(),
   steps: z.array(workflowStepDefSchema),
   /** Present when the pasted YAML was a `version: 2` graph. */
   graph: workflowGraphSchema.optional(),
@@ -260,6 +276,7 @@ export type ParsedWorkflow = z.infer<typeof parsedWorkflowSchema>;
 export const saveWorkflowGraphInputSchema = z.object({
   name: z.string().trim().min(1).max(80),
   description: z.string().max(2_000, 'must be at most 2000 characters').optional(),
+  budget: workflowBudgetSchema.optional(),
   graph: workflowGraphSchema,
   overwrite: z.boolean().optional(),
 });

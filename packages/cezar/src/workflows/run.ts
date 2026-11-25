@@ -2025,7 +2025,7 @@ export class RunManager {
   private async agentEnvForStep(
     runId: string,
     backend: RunnerId,
-    options: { generateFollowups?: boolean; recordedProfileId?: string; namingOnly?: boolean; workflowAgent?: { agentProfile?: string; replaced: boolean } } = {},
+    options: { generateFollowups?: boolean; recordedProfileId?: string; namingOnly?: boolean; secretNames?: WorkflowStepDef['secrets']; workflowAgent?: { agentProfile?: string; replaced: boolean } } = {},
   ): Promise<{ env: Record<string, string>; trackerContext?: string; profileId: string; onUsageWindows?: (observation: UsageWindowsObservation) => void; planUsageAccount?: PlanUsageAccountRef }> {
     const run = this.store.getRun(runId);
     const owner = this.active.get(runId);
@@ -2151,11 +2151,15 @@ export class RunManager {
     } : undefined;
     // Secrets the user shared with agents (`agents` audience), as environment variables. A fork's
     // untrusted head gets none, as its checks do. Registered for redaction like a check's.
-    const agentSecrets: Record<string, string> = this.store.getRun(runId)?.untrustedHead === true
+    let agentSecrets: Record<string, string> = this.store.getRun(runId)?.untrustedHead === true || options.secretNames?.length === 0
       ? {}
       : withoutAgentLogins((await this.secrets.resolve(this.projectId ? { projectId: this.projectId, root: this.repoRoot } : undefined, 'agents').catch(() => ({ values: {} as Record<string, string> }))).values);
-    // `az devops` reads its PAT from AZURE_DEVOPS_EXT_PAT; a project stores it as AZURE_DEVOPS_PAT.
-    if (agentSecrets.AZURE_DEVOPS_PAT && !agentSecrets.AZURE_DEVOPS_EXT_PAT) agentSecrets.AZURE_DEVOPS_EXT_PAT = agentSecrets.AZURE_DEVOPS_PAT;
+    if (options.secretNames?.length) {
+      const names = new Set(options.secretNames);
+      agentSecrets = Object.fromEntries(Object.entries(agentSecrets).filter(([name]) => names.has(name)));
+    }
+    // Keep the legacy Azure CLI alias for unrestricted steps; restricted steps use the listed names.
+    if (options.secretNames === undefined && agentSecrets.AZURE_DEVOPS_PAT && !agentSecrets.AZURE_DEVOPS_EXT_PAT) agentSecrets.AZURE_DEVOPS_EXT_PAT = agentSecrets.AZURE_DEVOPS_PAT;
     this.store.registerRunSecrets(runId, Object.values(agentSecrets).filter((value) => value.length >= MIN_SECRET_LEN));
     return {
       env: { ...agentSecrets, ...this.agentEnv(runId, options.generateFollowups), ...resolved.env, ...trackerEnv },
@@ -6752,14 +6756,22 @@ export class RunManager {
     }
     const continuationTools = resolveAgentStepTools(state, toolsStep, savedTools);
     this.store.updateStep(runId, stepId, { toolPolicy: continuationTools });
-    // The temp-directory preflight (#785) rides along with the account resolution: a resumed
-    // turn hits the same broken `/tmp` a fresh one would, and an agent whose shell silently
-    // returns nothing is worse than a turn that refuses to start and says why.
+    // A graph can reopen one session in several nodes. Use its most recent authored step
+    // for the vault allowlist; synthetic continuation rows carry no workflow definition.
+    const secretStep = record?.workflowDef?.graph && sessionId
+      ? record.steps
+          .filter((s) => s.sessionId === sessionId)
+          .sort((a, b) => (b.startedAt ?? '').localeCompare(a.startedAt ?? ''))
+          .map((s) => defSteps?.find((def) => def.id === s.id))
+          .find((step) => step !== undefined) ?? toolsStep
+      : toolsStep;
+    // The temp-directory preflight (#785) rides along with account resolution on resume.
     let continueProfile: Awaited<ReturnType<RunManager['agentEnvForStep']>>;
     try {
       continueProfile = await this.agentEnvForStep(runId, continueBackend, {
         generateFollowups,
         recordedProfileId: resumedProfileId,
+        secretNames: secretStep?.secrets,
       });
     } catch (err) {
       if (!(err instanceof AgentTempDirError || err instanceof TrackerAgentBindingError || err instanceof AgentAccountUnavailableError)) throw err;
@@ -8019,6 +8031,7 @@ export class RunManager {
                   ...(a.skill ? { skill: a.skill } : {}),
                   ...(a.allowedTools ? { allowedTools: a.allowedTools } : {}),
                   ...(a.bashAllowlist ? { bashAllowlist: a.bashAllowlist } : {}),
+                  ...(a.secrets ? { secrets: a.secrets } : {}),
                 },
               ],
             },
@@ -9383,6 +9396,7 @@ export class RunManager {
       stepProfile = await this.agentEnvForStep(runId, stepBackend, {
         generateFollowups: followupsEnabled() && input.generateFollowups !== false,
         workflowAgent: graphHooks?.workflowAgent,
+        secretNames: step.secrets,
         ...(resumeStep ? { recordedProfileId: resumeStep.profileId ?? DEFAULT_AGENT_ACCOUNT_ID } : {}),
       });
     } catch (err) {
@@ -9712,7 +9726,7 @@ export class RunManager {
           ? Object.values(scheduled.workflowDef.graph.nodes).find(node => node.type === 'agent')
           : scheduled.workflowDef?.steps.find(s => stepKind(s) === 'agent');
         const runner = first?.runner ?? scheduled.runner ?? 'claude';
-        const profile = await this.agentEnvForStep(runId, runner, { namingOnly: true });
+        const profile = await this.agentEnvForStep(runId, runner, { namingOnly: true, secretNames: first?.secrets });
         execution = { runner, env: profile.env, onUsageWindows: profile.onUsageWindows, ...(profile.planUsageAccount ? { planUsageAccount: profile.planUsageAccount } : {}) };
       }
       const result = await generateRunName(this.repoRoot, { task, skillName, skillDescription, ...live, nameBranch: !live }, execution,

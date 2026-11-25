@@ -1,6 +1,5 @@
 import { z } from 'zod';
-import { stepSecretsSchema } from '@open-mercato/cezar-contract';
-import { RUNNER_IDS } from '../core/agent-runner.ts';
+import { workflowBudgetSchema, workflowStepDefSchema, type WorkflowBudget } from '@open-mercato/cezar-contract';
 import { workflowGraphSchema } from './graph.ts';
 
 /**
@@ -23,55 +22,7 @@ import { workflowGraphSchema } from './graph.ts';
  * in the diff. `retryOn: [1]` loops on the verdict and fails the run on the
  * infrastructure, naming the code.
  */
-export const workflowStepSchema = z
-  .object({
-    id: z.string().min(1),
-    name: z.string().optional(),
-    // agent step
-    prompt: z.string().optional(),
-    skill: z.string().optional(),
-    model: z.string().optional(),
-    /** Per-step Codex reasoning level; values are discovered from the selected model. */
-    reasoningEffort: z.string().trim().min(1).max(64).optional(),
-    /** Per-step agent backend override (falls back to the task / config default).
-     *
-     *  Deliberately NOT widened to the legacy `claude-cli` the way the run store's
-     *  `runner`/`backend` were (#547). This enum validates two things a user AUTHORS —
-     *  workflow YAML, and the inline chain on `POST /runs` — so the selectable set is the
-     *  right one, and rejecting `claude-cli` here is a loud load-time error rather than
-     *  data loss. It also gates the persisted `workflowDef` (`runs/store.ts`), but nothing
-     *  has ever been able to write the legacy id THERE either, because this same enum was
-     *  the only way in: there is no legacy shape to keep parseable. */
-    runner: z.enum(RUNNER_IDS).optional(),
-    allowedTools: z.array(z.string()).optional(),
-    bashAllowlist: z.array(z.string()).optional(),
-    // check step
-    command: z.string().optional(),
-    onFail: z
-      .object({
-        retry: z.string().min(1),
-        max: z.number().int().positive().default(2),
-        /** Exit codes that loop back. Omitted (or empty — same thing, so a GUI that
-         *  serializes "no selection" as `[]` doesn't accidentally mean "never retry"):
-         *  any non-zero code does, which is what every workflow written before this
-         *  field expects. `0` is rejected rather than ignored: a check that exits 0
-         *  passed and never reaches the loop, so listing it is a misreading of the
-         *  field, and a load-time error says so where a silent no-op would not. */
-        retryOn: z.array(z.number().int().positive()).optional(),
-      })
-      .optional(),
-    /** Check steps only (spec 2026-10-10-project-secrets-vault-options): which project or
-     *  workspace secrets reach this command, by name, each optionally renamed with `as`.
-     *  Omitted means every secret whose audiences include `checks`. Refused on an agent step at
-     *  load time — the one place YAML could try to route a secret to a backend. */
-    secrets: stepSecretsSchema.optional(),
-  })
-  .refine((s) => Boolean(s.command) !== Boolean(s.prompt ?? s.skill), {
-    message: 'a step is either an agent step (prompt/skill) or a check step (command), not both',
-  })
-  .refine((s) => !s.secrets || Boolean(s.command), {
-    message: 'secrets: binds names for a check step only — an agent step already gets every secret shared with agents as environment variables',
-  });
+export const workflowStepSchema = workflowStepDefSchema;
 
 /**
  * A workflow file names either full `steps` or the portable `skills` shorthand
@@ -82,6 +33,7 @@ export const workflowFileSchema = z
   .object({
     name: z.string().min(1),
     description: z.string().optional(),
+    budget: workflowBudgetSchema.optional(),
     steps: z.array(workflowStepSchema).min(1).optional(),
     skills: z.array(z.string().trim().min(1)).min(1).optional(),
   })
@@ -102,6 +54,7 @@ export type WorkflowDoc = z.infer<typeof workflowFileSchema>;
 export const workflowDefSchema = z.object({
   name: z.string(),
   description: z.string().optional(),
+  budget: workflowBudgetSchema.optional(),
   steps: z.array(workflowStepSchema),
   /** A `version: 2` graph workflow (spec 2026-09-30-workflow-node-editor). When present the
    *  executor walks the graph; `steps` is then derived from its agent/check nodes
@@ -128,11 +81,13 @@ export function skillsToSteps(skills: string[]): WorkflowStepDef[] {
 export function normalizeWorkflowDoc(doc: WorkflowDoc): {
   name: string;
   description?: string;
+  budget?: WorkflowBudget;
   steps: WorkflowStepDef[];
 } {
   return {
     name: doc.name,
     ...(doc.description ? { description: doc.description } : {}),
+    ...(doc.budget ? { budget: doc.budget } : {}),
     steps: doc.steps ?? skillsToSteps(doc.skills ?? []),
   };
 }
@@ -149,7 +104,7 @@ export function skillStackOf(steps: WorkflowStepDef[]): string[] | null {
     if (stepKind(s) !== 'agent' || !s.skill) return null;
     if (s.prompt !== undefined && s.prompt !== '{{task}}') return null;
     if (s.name !== undefined && s.name !== s.skill) return null;
-    if (s.model || s.reasoningEffort || s.runner || s.allowedTools || s.bashAllowlist || s.onFail) return null;
+    if (s.model || s.reasoningEffort || s.runner || s.allowedTools || s.bashAllowlist || s.onFail || s.secrets) return null;
     skills.push(s.skill);
   }
   return skills.length ? skills : null;

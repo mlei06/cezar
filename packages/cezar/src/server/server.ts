@@ -5,6 +5,7 @@ import { webhooksEnabled } from '../webhooks/service.ts';
 import { listServerInstances } from '../server-install/state.ts';
 import { resolveDeferredReset, deferredHoldUntil } from '../automations/deferred-reset.ts';
 import { deferredStartOptions, previewDeferredStart, digest, validateDeferredBinding } from '../automations/deferred-start.ts';
+import { saveWorkflowInputSchema, saveWorkflowGraphInputSchema } from '@open-mercato/cezar-contract';
 import { deferredOptionsInputSchema, deferredPreviewInputSchema, deferredCreateInputSchema, deferredMutationQuerySchema } from '@open-mercato/cezar-contract';
 import { answerQuestionInputSchema, messageInputSchema, questionKeyParamSchema } from '@open-mercato/cezar-contract';
 import { DEFAULT_PHONE_PUSH_PREFS, attentionOverrideClearInputSchema, attentionOverrideInputSchema, phonePushPrefsSchema, phonePushSettingsSchema, type AttentionResponse, type GitStatusResponse } from '@open-mercato/cezar-contract';
@@ -239,7 +240,6 @@ import {
   skillsToSteps,
   stepsIssue,
   workflowFileSchema,
-  workflowStepSchema,
   type WorkflowDef,
 } from '../workflows/types.ts';
 import { planChain, slugify } from '../planner.ts';
@@ -971,27 +971,7 @@ const planSchema = z.object({
 // A saved workflow carries full `steps` OR the builder's `skills` stack
 // (spec 012). `overwrite: true` is the builder's Save on an existing file —
 // the GUI asks first; a plain POST still refuses to clobber.
-const saveWorkflowSchema = z
-  .object({
-    name: z.string().trim().min(1).max(80),
-    // Written into a YAML file on disk (#429) — a workflow description is a
-    // short blurb, so a 2k cap is generous without allowing a file-bloat write.
-    description: z.string().max(2_000, 'must be at most 2000 characters').optional(),
-    steps: z.array(workflowStepSchema).min(1).max(8).optional(),
-    skills: z.array(z.string().trim().min(1)).min(1).max(8).optional(),
-    overwrite: z.boolean().optional(),
-  })
-  .refine((b) => Boolean(b.steps) !== Boolean(b.skills), {
-    message: 'provide either "steps" or "skills", not both',
-  });
-
 const validateGraphSchema = z.object({ graph: workflowGraphSchema });
-const saveGraphSchema = z.object({
-  name: z.string().trim().min(1).max(80),
-  description: z.string().max(2_000, 'must be at most 2000 characters').optional(),
-  graph: workflowGraphSchema,
-  overwrite: z.boolean().optional(),
-});
 
 const parseWorkflowSchema = z.object({
   yaml: z.string().min(1).max(100_000),
@@ -4474,7 +4454,7 @@ export function createApp(deps: ServerDeps) {
     // Save an approved plan as a reusable chain (spec 008): YAML in
     // `.ai/cezar/workflows/<slug>.yaml` — from then on it's in the dropdown
     // like any other workflow.
-    .post('/workflows', jsonZodValidator(saveWorkflowSchema), async (c) => {
+    .post('/workflows', jsonZodValidator(saveWorkflowInputSchema), async (c) => {
       const { root: repoRoot } = c.get('project');
       const parsed = { data: c.req.valid('json') };
       const steps = parsed.data.steps ?? skillsToSteps(parsed.data.skills ?? []);
@@ -4489,6 +4469,7 @@ export function createApp(deps: ServerDeps) {
       const doc = {
         name: parsed.data.name,
         ...(parsed.data.description ? { description: parsed.data.description } : {}),
+        ...(parsed.data.budget ? { budget: parsed.data.budget } : {}),
         ...(stack ? { skills: stack } : { steps }),
       };
       try {
@@ -4540,7 +4521,7 @@ export function createApp(deps: ServerDeps) {
     .post('/workflows/validate', jsonZodValidator(validateGraphSchema), (c) =>
       c.json({ issues: graphIssues(c.req.valid('json').graph) }),
     )
-    .post('/workflows/graph', jsonZodValidator(saveGraphSchema), async (c) => {
+    .post('/workflows/graph', jsonZodValidator(saveWorkflowGraphInputSchema), async (c) => {
       const { root: repoRoot } = c.get('project');
       const body = c.req.valid('json');
       const issues = graphIssues(body.graph);
@@ -4553,6 +4534,7 @@ export function createApp(deps: ServerDeps) {
         version: 2,
         name: body.name,
         ...(body.description ? { description: body.description } : {}),
+        ...(body.budget ? { budget: body.budget } : {}),
         nodes,
         edges,
         ...(layout ? { layout } : {}),
@@ -4593,10 +4575,11 @@ export function createApp(deps: ServerDeps) {
         }
         const problems = graphIssues(graphDoc.data);
         if (problems.length) return c.json({ error: problems.join('; ') }, 400);
-        const { name, description, nodes, edges, layout } = graphDoc.data;
+        const { name, description, budget, nodes, edges, layout } = graphDoc.data;
         return c.json({
           name,
           ...(description ? { description } : {}),
+          ...(budget ? { budget } : {}),
           steps: graphToSteps(graphDoc.data),
           graph: { nodes, edges, ...(layout ? { layout } : {}) },
         });

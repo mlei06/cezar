@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { stepSecretsSchema } from '@open-mercato/cezar-contract';
+import { agentStepSecretsSchema, stepSecretsSchema, workflowBudgetSchema } from '@open-mercato/cezar-contract';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 import type { WorkflowStepDef } from './types.ts';
 
@@ -60,6 +60,7 @@ export const graphNodeSchema = z.discriminatedUnion('type', [
     runner: z.enum(RUNNER_IDS).optional(),
     allowedTools: z.array(z.string()).optional(),
     bashAllowlist: z.array(z.string()).optional(),
+    secrets: agentStepSecretsSchema.optional(),
     /** Author-declared outcomes (D10/D17). The agent picks one by ending its turn with
      *  `CEZ:VERDICT <name>`; each becomes an output port in place of `done`. */
     verdicts: z.array(verdictName).min(1).optional(),
@@ -163,6 +164,7 @@ export const workflowGraphFileSchema = workflowGraphSchema.extend({
   version: z.literal(2),
   name: z.string().min(1),
   description: z.string().optional(),
+  budget: workflowBudgetSchema.optional(),
 });
 
 export type GraphNode = z.infer<typeof graphNodeSchema>;
@@ -540,11 +542,11 @@ export function compileV1(steps: readonly WorkflowStepDef[]): WorkflowGraph {
   const nodes: GraphNode[] = [{ id: startId, type: 'start' }];
   const out = (s: WorkflowStepDef) => `${s.id}.${s.command ? 'pass' : 'done'}`;
   steps.forEach((s, i) => {
-    const { onFail, command, ...rest } = s;
+    const { onFail, command, secrets, ...rest } = s;
     nodes.push(
       command
-        ? { ...rest, type: 'check', command, ...(onFail?.retryOn ? { retryOn: onFail.retryOn } : {}) }
-        : { ...rest, type: 'agent' },
+        ? { ...rest, type: 'check', command, ...(secrets ? { secrets } : {}), ...(onFail?.retryOn ? { retryOn: onFail.retryOn } : {}) }
+        : { ...rest, type: 'agent', ...(secrets ? { secrets: secrets.filter((name) => typeof name === 'string') } : {}) },
     );
     edges.push({ from: i === 0 ? `${startId}.next` : out(steps[i - 1]!), to: s.id });
     if (command && onFail) {
