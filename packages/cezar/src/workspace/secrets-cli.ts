@@ -4,10 +4,11 @@ import { SECRET_AUDIENCES, secretNameIssue, type SecretAudience } from '@open-me
 import { SecretStore, SecretsError, type SecretScopeRef } from './secrets.ts';
 import { loadWorkspaceConfig } from './config.ts';
 
-const USAGE = 'Usage: cezar secrets list | set <NAME> [--audience checks,cezar] | unset <NAME>   [--workspace] [--repo <dir>]\n' +
+const USAGE = 'Usage: cezar secrets list | get <NAME> | env | set <NAME> [--audience checks,agents,cezar] | unset <NAME>   [--workspace] [--repo <dir>]\n' +
+  '  get prints one value (project first, then workspace); env prints `export NAME=…` lines for every agents-audience secret.\n' +
   '  set reads the value from stdin (pipe it in, or type it at the hidden prompt) — never from argv.\n' +
   '  --workspace addresses the user\'s own secrets, shared by every project; the default is this project\'s.\n' +
-  `  --audience names who may read the secret (${SECRET_AUDIENCES.join(', ')}); the default is checks.`;
+  `  --audience names who may read the secret (${SECRET_AUDIENCES.join(', ')}); the default is checks,agents.`;
 
 export interface SecretsCliIo {
   log: (line: string) => void;
@@ -34,7 +35,7 @@ export async function runSecretsCommand(
     return 1;
   }
   const { action, workspace, repo, audiences } = parsed;
-  if (action.kind !== 'list') {
+  if ('name' in action) {
     const issue = secretNameIssue(action.name);
     if (issue) {
       io.error(`cezar secrets: ${action.name} — ${issue}`);
@@ -61,6 +62,25 @@ export async function runSecretsCommand(
       io.error(keyBackend === 'keychain'
         ? '# encrypted with a data key in the OS keychain'
         : '# encrypted with a data key in ~/.cezar/secrets/.key (no OS keychain in use) — private file, not a vault');
+      return 0;
+    }
+    if (action.kind === 'get' || action.kind === 'env') {
+      // Project values win over workspace ones, as they do for a check.
+      const scopes: SecretScopeRef[] = workspace || scope.kind === 'workspace' ? [{ kind: 'workspace' }] : [{ kind: 'workspace' }, scope];
+      const merged: Record<string, { value: string; audiences: SecretAudience[] }> = {};
+      for (const one of scopes) Object.assign(merged, (await store.read(one)).values);
+      if (action.kind === 'get') {
+        const found = merged[action.name];
+        if (!found) {
+          io.error(`cezar secrets: no secret named ${action.name}`);
+          return 1;
+        }
+        io.log(found.value);
+        return 0;
+      }
+      for (const [name, entry] of Object.entries(merged)) {
+        if (entry.audiences.includes('agents')) io.log(`export ${name}=${shellQuote(entry.value)}`);
+      }
       return 0;
     }
     if (action.kind === 'set') {
@@ -91,7 +111,9 @@ export async function runSecretsCommand(
 
 /** `list` takes no operand; `set` and `unset` take exactly a name. Parsing it into this shape
  *  once is what lets the body above use `action.name` as a string without an assertion. */
-type SecretsAction = { kind: 'list' } | { kind: 'set' | 'unset'; name: string };
+type SecretsAction = { kind: 'list' } | { kind: 'env' } | { kind: 'set' } & { name: string } | { kind: 'unset'; name: string } | { kind: 'get'; name: string };
+
+const shellQuote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
 
 interface ParsedArgs {
   action: SecretsAction;
@@ -125,7 +147,8 @@ function parseArgs(args: string[]): ParsedArgs | undefined {
     }
   }
   const [command, ...operands] = rest;
-  if (command === 'list' && operands.length === 0) return { action: { kind: 'list' }, workspace, repo };
+  if ((command === 'list' || command === 'env') && operands.length === 0) return { action: command === 'env' ? { kind: 'env' } : { kind: 'list' }, workspace, repo };
+  if (command === 'get' && operands.length === 1 && !audiences) return { action: { kind: 'get', name: operands[0]! }, workspace, repo };
   const [name] = operands;
   if ((command === 'set' || command === 'unset') && name !== undefined && operands.length === 1) {
     if (command === 'unset' && audiences) return undefined;

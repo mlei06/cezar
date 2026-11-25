@@ -70,7 +70,7 @@ export const workflowStepSchema = z
     message: 'a step is either an agent step (prompt/skill) or a check step (command), not both',
   })
   .refine((s) => !s.secrets || Boolean(s.command), {
-    message: 'secrets: is for check steps only — an agent step never receives a secret',
+    message: 'secrets: binds names for a check step only — an agent step already gets every secret shared with agents as environment variables',
   });
 
 /**

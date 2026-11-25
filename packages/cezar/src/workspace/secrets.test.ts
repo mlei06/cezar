@@ -49,7 +49,7 @@ describe('SecretStore (spec 2026-10-10-project-secrets-vault-options)', () => {
     const raw = await readFile(join(dir, 'demo.json'), 'utf8');
     expect(raw).not.toContain('value-1-with-enough-length');
     expect(raw).toContain('"E2E_KEY"');
-    expect((await store.read(project)).values.E2E_KEY).toMatchObject({ value: 'value-1-with-enough-length', audiences: ['checks'] });
+    expect((await store.read(project)).values.E2E_KEY).toMatchObject({ value: 'value-1-with-enough-length', audiences: ['checks', 'agents'] });
     expect(await store.keyBackend()).toBe('file');
   });
 

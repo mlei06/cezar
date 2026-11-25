@@ -46,7 +46,7 @@ const FILE_MAX_BYTES = 1024 * 1024;
 const CIPHER = 'aes-256-gcm';
 const FILE_VERSION = 1;
 const KEY_FILE = '.key';
-const DEFAULT_AUDIENCES: readonly SecretAudience[] = ['checks'];
+const DEFAULT_AUDIENCES: readonly SecretAudience[] = ['checks', 'agents'];
 
 export class SecretsError extends Error {}
 
@@ -585,4 +585,12 @@ async function canonicalRoot(root: string): Promise<string> {
   } catch {
     return resolve(root);
   }
+}
+
+/** Names that would switch an agent's own login (API billing, another account): a secret by one of
+ *  these names stays with checks, so storing a key for an e2e runner never re-bills the agents. */
+const AGENT_LOGIN_NAMES = /^(ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|CLAUDE_CODE_OAUTH_TOKEN|CLAUDE_CONFIG_DIR|OPENAI_API_KEY|CODEX_HOME|CODEX_API_KEY)$/;
+
+export function withoutAgentLogins(values: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(Object.entries(values).filter(([name]) => !AGENT_LOGIN_NAMES.test(name)));
 }

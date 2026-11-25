@@ -223,7 +223,13 @@ class ChatLog {
 export class ManagerStore {
   private readonly logs = new Map<string, ChatLog>();
   private readonly warned = new Set<string>();
-  private readonly secrets = collectSecretValues();
+  private secrets = collectSecretValues();
+
+  /** Stored secret values a turn was handed: redacted from every message from now on. */
+  addSecretValues(values: readonly string[]): void {
+    const fresh = values.filter((value) => value.length >= 8 && !this.secrets.includes(value));
+    if (fresh.length) this.secrets = [...this.secrets, ...fresh].sort((a, b) => b.length - a.length);
+  }
 
   constructor(private readonly warn: (message: string) => void = (message) => console.warn(message)) {}
 

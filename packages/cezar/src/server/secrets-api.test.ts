@@ -52,7 +52,7 @@ describe('secrets API (spec 2026-10-10-project-secrets-vault-options)', () => {
       expect(text).not.toMatch(/secret-value-123|llm-value-123/);
       const body = secretsListSchema.parse(JSON.parse(text));
       expect(body.keyBackend).toBe('file');
-      expect(body.secrets.map((s) => [s.name, s.audiences])).toEqual([['E2E_KEY', ['checks']], ['LLM_KEY', ['cezar']]]);
+      expect(body.secrets.map((s) => [s.name, s.audiences])).toEqual([['E2E_KEY', ['checks', 'agents']], ['LLM_KEY', ['cezar']]]);
     }
     const raw = readFileSync(join(root, 'home', 'secrets', `${id}.json`), 'utf8');
     expect(raw).toContain('"E2E_KEY"');
@@ -95,7 +95,7 @@ describe('secrets API (spec 2026-10-10-project-secrets-vault-options)', () => {
     expect((await apiRequest(instance, '/api/v1/secrets/KEY', put({ value: 'x'.repeat(16 * 1024 + 1) }))).status).toBe(400);
     expect((await apiRequest(instance, '/api/v1/secrets/KEY', put({ value: 42 }))).status).toBe(400);
     expect((await apiRequest(instance, '/api/v1/secrets/KEY', put({ value: 'ok', audiences: [] }))).status).toBe(400);
-    expect((await apiRequest(instance, '/api/v1/secrets/KEY', put({ value: 'ok', audiences: ['agents'] }))).status).toBe(400);
+    expect((await apiRequest(instance, '/api/v1/secrets/KEY', put({ value: 'ok', audiences: ['nobody'] }))).status).toBe(400);
     expect(secretsListSchema.parse(await (await apiRequest(instance, '/api/v1/secrets')).json()).secrets).toEqual([]);
   });
 

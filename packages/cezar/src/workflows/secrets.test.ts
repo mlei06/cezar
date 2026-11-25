@@ -159,12 +159,24 @@ describe('project and workspace secrets in check steps', () => {
     expect(workflowStepSchema.safeParse({ id: 'verify', command: 'true', secrets: ['E2E_KEY'] }).success).toBe(true);
     const refused = workflowStepSchema.safeParse({ id: 'implement', prompt: '{{task}}', secrets: ['E2E_KEY'] });
     expect(refused.success).toBe(false);
-    expect(JSON.stringify(refused.error?.issues)).toContain('check steps only');
+    expect(JSON.stringify(refused.error?.issues)).toContain('check step only');
     expect(workflowStepSchema.safeParse({ id: 'verify', command: 'true', secrets: ['PATH'] }).success).toBe(false);
     expect(workflowStepSchema.safeParse({ id: 'verify', command: 'true', secrets: [] }).success).toBe(false);
   });
 
-  it('never puts a secret where an agent env can see it', async () => {
+  it('hands agents-audience secrets to the agent step, never an agent login or a checks-only one', async () => {
+    await secrets.set(scope, 'NODE_SSH_USER', 'deploy-user');
+    await secrets.set(workspace, 'JENKINS_TOKEN', 'jenkins-token-value');
+    await secrets.set(scope, 'ANTHROPIC_API_KEY', 'sk-ant-api03-agentloginagentloginagentlogin');
+    await secrets.set(scope, 'CHECK_ONLY', 'check-only-value', ['checks']);
+    const run = store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [{ id: 'work', name: 'work', kind: 'agent' }] });
+    const { env } = await (manager as unknown as { agentEnvForStep(id: string, backend: string): Promise<{ env: Record<string, string> }> }).agentEnvForStep(run.id, 'claude');
+    expect(env).toMatchObject({ NODE_SSH_USER: 'deploy-user', JENKINS_TOKEN: 'jenkins-token-value' });
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(env.CHECK_ONLY).toBeUndefined();
+  });
+
+  it('never leaks a secret into the server process env', async () => {
     const key = 'sk-ant-api03-checkonlycheckonlycheckonly';
     await secrets.set(scope, 'ANTHROPIC_API_KEY', key);
     await secrets.set(scope, 'FOO', 'check-only-value');

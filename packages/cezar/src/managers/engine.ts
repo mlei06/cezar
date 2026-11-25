@@ -68,6 +68,7 @@ import { canEnforceReadOnly, createRunner } from '../core/runner-factory.ts';
 import { parseUsageLimit } from '../core/usage-limit.ts';
 import type { UiEvent } from '../core/ui-events.ts';
 import { assertCezarHomeWriteIsSandboxed, managersDir } from '../paths.ts';
+import { withoutAgentLogins, type SecretStore } from '../workspace/secrets.ts';
 import { resolveProfileEnvForRoot } from '../workspace/agent-profiles.ts';
 import {
   changedSettingFields,
@@ -180,6 +181,8 @@ export interface ManagerEngineDeps {
   olderAfterDays?: () => number | undefined | Promise<number | undefined>;
   /** Test seam for `TURN_LIMIT_MS`. */
   turnLimitMs?: number;
+  /** The secret store autonomous turns read `agents` secrets from. Absent: none are handed over. */
+  secrets?: SecretStore;
   /** New managers start autonomous unless created with `autonomous: false`. Absent = off. */
   autonomousDefault?: boolean;
   /** Every registered project with no manager of its own gets one, once (a deleted one stays gone). */
@@ -652,6 +655,19 @@ export class ManagerEngine {
     void this.reconcileFollows().catch((error) => console.warn(`[cezar] manager follows: ${error instanceof Error ? error.message : String(error)}`));
     for (const manager of this.deps.store.list()) {
       if (!manager.inactive && this.deps.store.state(manager.id).followups.length > 0) this.scheduleFollowup(manager.id);
+    }
+  }
+
+  private async agentSecretEnv(sources: ManagerProjectSource[]): Promise<Record<string, string>> {
+    const store = this.deps.secrets;
+    if (!store) return {};
+    const project = sources.length === 1 && sources[0]!.available ? { projectId: sources[0]!.id, root: sources[0]!.root } : undefined;
+    try {
+      const values = withoutAgentLogins((await store.resolve(project, 'agents')).values);
+      this.deps.store.addSecretValues(Object.values(values));
+      return values;
+    } catch {
+      return {};
     }
   }
 
@@ -2367,6 +2383,9 @@ export class ManagerEngine {
     const unseen = turn.cards?.ids ? prompt.replace(turn.cards.ids, () => turn.cards!.full) : prompt;
     const freshPrompt = turn.kind === 'chat' ? `${this.preamble(id, sources)}${unseen}` : prompt;
     const connectorRules = connectorTurn ? connectorAllowRules(manager.connectors, state.connectors) : [];
+    // Secrets shared with agents: the workspace's, plus the project's when it manages exactly one
+    // (several projects may store the same name; `cezar secrets get --repo` reads any of them).
+    const secretEnv = full ? await this.agentSecretEnv(sources) : {};
     // A manager with nothing granted loads no connector; a watch never calls one (spec 2026-11-21 § 2.4).
     const noMcpServers = runner === 'claude' && (!connectorTurn || !hasConnectorGrant(manager.connectors));
     const base: AgentRunSpec = {
@@ -2400,6 +2419,7 @@ export class ManagerEngine {
       ],
       ...(turn.images ? { images: turn.images } : {}),
       env: {
+        ...secretEnv,
         ...profile.env,
         CEZ_MANAGER_ID: id,
         CEZ_MANAGER_TURN: turn.kind,

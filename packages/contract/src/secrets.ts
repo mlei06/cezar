@@ -6,8 +6,8 @@ import { z } from 'zod';
  *
  * A secret is a named value with a SCOPE (one project, or the whole workspace) and a list of
  * AUDIENCES — who may read it. The API speaks names and metadata; a value goes in once and
- * never comes back out, not even masked. An agent session is never an audience: the type has
- * no such member, so no route, store or workflow can hand one to a backend.
+ * comes back out only through `cezar secrets get` on this machine. The `agents` audience hands a
+ * value to agent sessions (tasks and managers) as an environment variable.
  */
 
 /** A value's upper bound: 16 KiB of UTF-8 (a service-account JSON fits, a log file does not). */
@@ -18,8 +18,10 @@ export const SECRET_VALUE_MAX_BYTES = 16 * 1024;
  * - `checks`: a workflow's check steps (`command:`), as environment variables.
  * - `cezar`: cezar's own features (an LLM key for cezar-level actions). Reserved for consumers
  *   that read through the store's `cezar` audience; nothing ships one yet.
+ * - `agents`: agent sessions — task agents get them as environment variables, managers too, and a
+ *   manager may read a value with `cezar secrets get`. Redacted from transcripts like any secret.
  */
-export const SECRET_AUDIENCES = ['checks', 'cezar'] as const;
+export const SECRET_AUDIENCES = ['checks', 'cezar', 'agents'] as const;
 export const secretAudienceSchema = z.enum(SECRET_AUDIENCES);
 export type SecretAudience = z.infer<typeof secretAudienceSchema>;
 
@@ -89,7 +91,7 @@ export function secretValueIssue(value: string): string | null {
 }
 
 /**
- * `PUT /secrets/:name`: the value, and who may read it. `audiences` omitted means `['checks']`
+ * `PUT /secrets/:name`: the value, and who may read it. `audiences` omitted means `['checks', 'agents']`
  * — the one consumer that exists today, and what the first release of this store meant by a
  * secret. Setting a name that exists REPLACES it, audiences included.
  */

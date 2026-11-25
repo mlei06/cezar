@@ -65,7 +65,7 @@ describe('Secrets settings', () => {
     const put = calls.find((c) => c.method === 'PUT')!
     expect(put.url).toMatch(/\/secrets\/NEW_KEY$/)
     expect(put.url).not.toContain('/workspace/')
-    expect(JSON.parse(put.body!)).toEqual({ value: 's3cret', audiences: ['checks', 'cezar'] })
+    expect(JSON.parse(put.body!)).toEqual({ value: 's3cret', audiences: ['checks', 'agents', 'cezar'] })
     expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('')
     expect(screen.queryByText('s3cret')).toBeNull()
   })
@@ -99,6 +99,7 @@ describe('Secrets settings', () => {
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'OK_NAME' } })
     fireEvent.change(screen.getByLabelText('Value'), { target: { value: 'x' } })
     fireEvent.click(screen.getByLabelText(/Check steps/))
+    fireEvent.click(screen.getByLabelText(/^Agents/))
     expect((screen.getByRole('button', { name: /save secret/i }) as HTMLButtonElement).disabled).toBe(true)
     fireEvent.submit(screen.getByLabelText('Name').closest('form')!)
     expect(calls.some((c) => c.method === 'PUT')).toBe(false)

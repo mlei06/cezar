@@ -84,6 +84,7 @@ import { seedAgentConfigLocalLayer } from '../agent-config/seed.ts';
 import { readAgentModelProvider } from '../agent-config/models.ts';
 import { loadConfig, type CezConfig } from '../config.ts';
 import { bypassPermissionsBlocked } from '../bypass-permissions.ts';
+import { withoutAgentLogins } from '../workspace/secrets.ts';
 import { isLifecycleConfigTracked } from '../worktree-lifecycle/config.ts';
 import { generateCommitMessage } from './commit-message.ts';
 import { hasUnlanded, landInPlace, landingPromptPart, READ_ONLY_PROMPT, READ_ONLY_TOOLS, type LandResult } from './landing.ts';
@@ -2148,8 +2149,14 @@ export class RunManager {
         attributionDisabled = true;
       }
     } : undefined;
+    // Secrets the user shared with agents (`agents` audience), as environment variables. A fork's
+    // untrusted head gets none, as its checks do. Registered for redaction like a check's.
+    const agentSecrets = this.store.getRun(runId)?.untrustedHead === true
+      ? {}
+      : withoutAgentLogins((await this.secrets.resolve(this.projectId ? { projectId: this.projectId, root: this.repoRoot } : undefined, 'agents').catch(() => ({ values: {} as Record<string, string> }))).values);
+    this.store.registerRunSecrets(runId, Object.values(agentSecrets).filter((value) => value.length >= MIN_SECRET_LEN));
     return {
-      env: { ...this.agentEnv(runId, options.generateFollowups), ...resolved.env, ...trackerEnv },
+      env: { ...agentSecrets, ...this.agentEnv(runId, options.generateFollowups), ...resolved.env, ...trackerEnv },
       ...(trackerContext ? { trackerContext } : {}),
       profileId: resolved.profile.id,
       ...(onUsageWindows ? { onUsageWindows } : {}),

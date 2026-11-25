@@ -17,7 +17,8 @@ import { CardNote, FormRow, SettingsCard } from './form-row'
 /** What each audience means to the person storing the secret. */
 const AUDIENCE_LABELS: Record<SecretAudience, string> = {
   checks: 'Check steps (workflow commands)',
-  cezar: 'cezar itself (its own features — not the agents)',
+  cezar: 'cezar itself (its own features)',
+  agents: 'Agents (task agents and managers, as environment variables)',
 }
 
 /** The short form for the table's "Visible to" column. */
@@ -49,7 +50,7 @@ function SecretsSection({ scope, list, save, remove, invalidate }: SecretsSectio
   const queryClient = useQueryClient()
   const [name, setName] = useState('')
   const [value, setValue] = useState('')
-  const [audiences, setAudiences] = useState<SecretAudience[]>(['checks'])
+  const [audiences, setAudiences] = useState<SecretAudience[]>(['checks', 'agents'])
   const [error, setError] = useState<string | null>(null)
   const nameIssue = name === '' ? null : secretNameIssue(name)
 

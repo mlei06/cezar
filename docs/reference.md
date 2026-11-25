@@ -366,8 +366,11 @@ known token shapes redacted — is appended to the retried agent's prompt so the
 next attempt can see what broke.
 
 A check step runs `bash -lc <command>` in the task's worktree with the server's
-environment plus the **secrets** it may read, which no agent step ever
-receives. A secret has a scope — the project (Settings → *Secrets*,
+environment plus the **secrets** it may read. Secrets with the `agents`
+audience (on by default) also reach every agent step and manager turn as
+environment variables; `cezar secrets get <NAME>` and `cezar secrets env`
+read them back on this machine. Agent login names (`ANTHROPIC_API_KEY`,
+`OPENAI_API_KEY`, …) are never handed to agents, so they keep their own login. A secret has a scope — the project (Settings → *Secrets*,
 `cezar secrets …`) or the whole workspace (Settings → Global → *Secrets*,
 `cezar secrets … --workspace`) — and audiences: `checks` (check steps) and/or
 `cezar` (cezar's own features). By default a check step gets every
