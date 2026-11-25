@@ -50,6 +50,9 @@ After M3, this log is also the calibration set for the automated judge.
 | M1-2 | The manager stopped and raised a real spec conflict (D3's cap against never dropping secret names) instead of deciding it | manager message 09:44 | none (good) | spec v5.3 |
 | M1-3 | All three code tasks so far polled their test runs through the model (8 to 16 turns each), despite the `factory-work` guidance | judge efficiency on 85efd7a7 and 6651d04f | harness | confirms v5.2 (`implement` validates with check steps); M1 item 2 |
 | M1-4 | Implementation tokens are high: 7.2M (secret descriptions), 11.9M (workflow fields), largely from long full-suite waits re-reading context | run records | harness | budgets (M2) and v5.2 checks should cut this; re-measure after M1 |
+| M1-5 | The manager held new starts for about 3 hours after a merge, waiting for a release confirmation, while the overseer was out of usage | events 07:07 to 10:09 | harness | B14: the hold belongs in `harness-release`, with a time limit (M4) |
+| M1-6 | A built-in workflow task added a human gate to `implement` that the spec doesn't have | PR #6 | task-setup | corrected through the manager; spec D2 unchanged |
+| M1-7 | Scope drift that matches the brief but not the spec is invisible to the judge, which only sees the brief | calibration on e04a507e | harness | backlog B19: give the `scope` scorer the spec sections a task names |
 
 ## Judge calibration
 
@@ -71,6 +74,11 @@ Blind comparisons: the overseer's verdict is written before Mistral's is read, o
 | cezar 6651d04f | efficiency | lean (blind, from the PR only) | some-waste | yes (both pass) | n/a | the judge saw 16 polling turns during a 17-min test run that the PR didn't show |
 | cezar 6651d04f | procedure | followed | followed | yes | n/a | |
 | cezar 6651d04f | scope | in-scope | in-scope | yes | n/a | |
+
+| cezar e04a507e (built-in workflows) | outcome | delivered | delivered | yes | n/a | |
+| cezar e04a507e | efficiency | some-waste (blind) | wasteful | no | n/a | the judge is right: 128k average context over 121 requests; my blind call from the PR was too generous |
+| cezar e04a507e | procedure | followed | followed | yes | n/a | |
+| cezar e04a507e | scope | drifted (added a human gate the spec doesn't have) | in-scope | no | n/a | the judge scores against the brief, not the spec, so spec drift the brief allowed is invisible to it |
 
 Rubric revisions: efficiency v2 (2026-11-25), anchored labels after the 43299e6b disagreement. Judge prompt: target definitions added after the same run.
 

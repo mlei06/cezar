@@ -307,6 +307,8 @@ New features and improvements found so far, not yet scheduled into a milestone. 
 | B15 | **Secret-narrowing edge cases left after PR #4:** Claude error or signal exits can record an unstarted session; OpenCode 2.x can silently start fresh with the resumed session's grants; no coverage for completion without startup events | PR #4 final review | after M2 |
 | B16 | **Azure ready transition** can mark an unrelated PR ready: it uses a stored PR URL without checking the PR's source branch belongs to the task (pre-existing) | PR #4 final review | M2 |
 | B17 | **Merged PRs broke `factory`'s typecheck together** (#3 + #4); the manager must check a PR is rebased on current `factory` before merging, and the release's typecheck caught it | release of 7de5499 failed safely | M1 (manager rule), M4 (CI-like check before merge) |
+| B18 | **Cap each tool call's output and compact context between turns**, so early large reads don't inflate every later request (e04a507e: 128k average context over 121 requests) | judge on e04a507e | M2 or after M3 |
+| B19 | **The `scope` scorer sees the spec sections a task names,** not only its brief, so drift the brief allowed is still caught | M1-7 | M3 |
 
 ## Risks
 
