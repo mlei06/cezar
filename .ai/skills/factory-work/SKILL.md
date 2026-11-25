@@ -56,6 +56,10 @@ If a check hits one of these known failures on the factory host, report the fail
 - `packages/cezar/src/usage-ledger/store.test.ts` — “ends each request’s sample at its answer, and the 07:11 case then charges the re-cache to its turn”.
 - `packages/cezar/src/workflows/run.test.ts` — “keeps a live hanging session counted until interrupt teardown, then reaps it”.
 
+## Keep the fork generic
+
+This fork is public. Never put internal host names, addresses, company paths, user names, provider or model ids, other projects' names, or run data and transcripts into code, tests, fixtures, docs or PR text. Use generic placeholders (`example.internal`, `provider-a`). Internal details belong in the repositories of the projects they concern (spec D11.9).
+
 ## Work efficiently
 
 - **Search, don't dump:** `rg -n` and `sed -n 'a,bp'`, not `cat` of large files.

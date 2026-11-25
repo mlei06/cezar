@@ -1,6 +1,6 @@
 # The self-improving factory
 
-Status: draft v5, 2026-11-25. Fork: `mlei06/cezar`, trunk `factory`. Spec owner: the overseer (see the roadmap). Implementation plan: `2026-11-25-self-improving-factory-roadmap.md`. Findings during the build: `2026-11-25-self-improving-factory-observations.md`.
+Status: draft v5.11, 2026-11-25. Fork: `mlei06/cezar`, trunk `factory`. Spec owner: the overseer (see the roadmap). Implementation plan: `2026-11-25-self-improving-factory-roadmap.md`. Findings during the build: `2026-11-25-self-improving-factory-observations.md`.
 
 ## TLDR
 
@@ -13,12 +13,13 @@ Cezar already runs a factory: managers turn outcomes into tasks, tasks run workf
 5. **Self-improvement.** Root causes are routed to the queue of whoever can fix them: the project or the harness. A deterministic timer starts an improvement run when a queue fills or ages; the manager or the owner can also start one. The run clusters the causes and opens a pull request of redrafts that lists the regressions it addresses.
 6. **Verification and replay.** Every run records its starting commit and harness version, so any task can be replayed from its original input with one thing changed (harness release, workflow, model, skill or brief), as a variant beside the original, and compared by score. Benchmarks are saved collections of replays. Before/after comparison of scores checks a change after it merges.
 7. **A self-maintaining harness.** The Cezar fork is a project with its own manager. Cezar runs from pinned releases, so a harness change ships through a benchmarked release with automatic rollback.
+8. **Managers that run ungated.** Every manager follows the same operating rules (D11): reviews only for runtime changes, its own decision after two review rounds, ambiguities decided and recorded for the owner to audit, and shared-machine limits on test runs.
 
 ## Contents
 
 - Evidence, Principles, Glossary
 - Reuse map: what Cezar already has, part by part
-- Decisions D1–D10
+- Decisions D1–D11
 - Data model and storage
 - Settings, CLI and API reference
 - Failure handling and edge cases
@@ -505,6 +506,26 @@ These use Cezar's existing automations and manager jobs:
 - **Daily:** a credential health check that every secret a workflow names still works (CI login, token expiry, SSH reachability), using check commands a project declares in a `credential-health` workflow. A failure becomes an `access` cause and a note to the owner before it blocks a run.
 - **Later:** monitoring webhooks (Sentry/Grafana style) that start an investigation task.
 
+### D11. Manager operating rules
+
+Every manager works by these rules, which ship in the `manage-project` skill (and, for the harness project, `manage-harness`), so a manager dropped into any project behaves the same. They came out of running the harness project during M1. Project-specific rules stay in that project's AGENTS.md or its task skill, never in the manager skill.
+
+1. **Ungated by default.** A manager plans, briefs, reviews, merges and (where a release workflow exists) releases without waiting for the owner. Only D7's "Always the owner" list needs the owner. The owner audits afterwards: what the manager decided is recorded where the owner will read it (below).
+2. **Reviews only for runtime changes.** A PR that changes anything that executes (product code, scripts, build, test or CI config, workflows) gets a review task before merging. A PR that only changes documentation, specs, skills or AGENTS.md merges after the manager's own diff check, with no review task.
+3. **Review stalemates.** At most two review rounds per PR. After that the manager decides: correctness bugs, data loss, secret-value leaks and security issues block the merge; anything else (edge cases, defense in depth, style) merges, with the remaining findings listed as follow-ups in the PR and the project's backlog. The manager reports the decision rather than asking.
+4. **Requirement ambiguities.** When the spec or brief is unclear, the manager decides in the direction that best fits the spec's decisions and reuse map, and keeps going. It records each decision under "Spec decisions" in the PR description and as one line in the project's observation or decision log, in the same PR. It stops for the owner only when a decision would contradict the spec outright or touch security, secrets or permissions.
+5. **Fresh enough to merge.** A PR's head must include the current trunk, except that trunk commits touching only documentation or agent guidance (specs, skills, `*.md` outside source directories) never force a rebase or revalidation.
+6. **Shared machine resources.** Tasks share one laptop:
+   - tasks never override the repository's test-runner concurrency (for Vitest, no `--maxWorkers` or `--pool`);
+   - at most one full test suite per task at a time, waited for inside one command, and an abandoned run is stopped before another starts;
+   - focused tests first, the full suite once before the PR;
+   - a timing failure seen while other suites run is rerun alone before it is reported;
+   - the workspace's `maxParallel` defaults to 2 on a single machine.
+   Briefs repeat these rules, and the project's task skill holds them (`factory-work` in the harness project). Each run also gets a lower CPU priority than the cockpit (`nice`), so a busy machine slows tasks rather than the cockpit (backlog B22).
+7. **Briefs.** Every brief states the goal, what is out of scope, the acceptance checks, the skill to attach and the validation commands, and points at the spec sections it implements instead of restating them.
+8. **Releases of the harness.** Until the `harness-release` workflow (D9) exists, the harness manager runs `scripts/harness-release.mjs` itself after merging runtime PRs, batching merges that land close together. A release restarts the cockpit the manager runs in, so it is started detached (`systemd-run --user --collect --unit=harness-release-<sha7> … node scripts/harness-release.mjs <sha>`), the manager ends its turn so it counts as idle, and starts nothing while the unit runs. After waking it reads the unit's journal and the last line of `release-log.ndjson`; a rollback means the merge is broken, and the manager fixes it forward or reverts it.
+9. **A public fork stays generic.** When the project's repository is public, nothing internal goes into it: no internal host names, addresses, company paths, user names, provider ids, other projects' names or run data. Internal details belong in the repositories of the projects they concern.
+
 ## Data model and storage
 
 | What | Where | Notes |
@@ -691,7 +712,7 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
 | `workspace/secrets*` | `description` |
 | `server/` | the routes and events above |
 | web | score columns, Scores panel, Factory view, Factory settings |
-| `manager-skills/` | `manage-project` (list commands, workflow choice, budgets, improvement); `manage-harness` (new) |
+| `manager-skills/` | `manage-project` (list commands, workflow choice, budgets, improvement, the D11 operating rules); `manage-harness` (new: D11's release and public-fork rules) |
 | `skills/improve-factory` (new) | the improvement playbook |
 | `self-update/` | used as is: `linkCheckout` from a build worktree, `activate` (`cezar use`), the launchers, supervisor restart |
 | release | `scripts/harness-release.mjs` (wait for idle, health check, automatic `use <previous>`, staging cockpit, log) and the `harness-release` workflow; the unit runs `~/.cezar/bin/cezar` with `CEZ_SUPERVISED=1` |
@@ -735,6 +756,7 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
   - a failing build, benchmark or health check keeps or restores the previous version;
   - no switch happens while work is active;
   - scores record `harnessVersion`.
+- **Manager rules (D11):** the shipped `manage-project` skill states every D11 rule; a run's process has a lower CPU priority than the cockpit.
 - **Compatibility:** old run files parse; contract-parity and route-parity tests pass; every new env var is in `.env.example`.
 
 **Acceptance:**
@@ -752,6 +774,7 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
 
 ## Changelog
 
+- **v5.11:** D11, manager operating rules, so the rules the harness manager was given during M1 live in the product: ungated by default, reviews only for runtime changes, two review rounds then the manager decides, ambiguities decided and recorded, docs-only trunk commits never force a rebase, shared-machine test limits and a lower CPU priority for runs, brief contents, detached harness releases, a public fork stays generic.
 - **v1:** first draft ("software factory feedback").
 - **v2:** separate list commands; optional `--secrets`; the judge reads the full transcript; helper scripts live in skills; pattern detectors dropped.
 - **v3:**
