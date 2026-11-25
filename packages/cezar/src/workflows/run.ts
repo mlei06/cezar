@@ -794,6 +794,27 @@ interface ActiveRun {
   };
 }
 
+function continuationSession(run: RunRecord | undefined, excludeStepId?: string, sessionId?: string): StepState | undefined {
+  return [...(run?.steps ?? [])].reverse().find((step) =>
+    step.id !== excludeStepId && step.sessionId && (sessionId === undefined || step.sessionId === sessionId));
+}
+
+function continuationSecretNames(run: RunRecord | undefined, owner?: StepState): string[] | undefined {
+  if (owner?.sessionSecretPolicy) return owner.sessionSecretPolicy.names;
+  const workflow = run?.workflowDef;
+  const steps = workflow?.graph
+    ? workflow.graph.nodes.filter((node) => node.type === 'agent')
+    : workflow?.steps.filter((step) => stepKind(step) === 'agent');
+  let names: string[] | undefined;
+  for (const step of steps ?? []) {
+    if (step.secrets === undefined) continue;
+    const configured: NonNullable<WorkflowStepDef['secrets']> = step.secrets;
+    const allowed = configured.filter((name) => typeof name === 'string');
+    names = names?.filter((name) => allowed.includes(name)) ?? allowed;
+  }
+  return names;
+}
+
 function savedContinuationTools(run: RunRecord | undefined, owner?: StepState): StepToolPolicy | undefined {
   return owner ? owner.toolPolicy : [...(run?.steps ?? [])].reverse().find((step) => step.kind === 'agent' && step.toolPolicy)?.toolPolicy;
 }
@@ -1502,6 +1523,7 @@ const SWITCH_AGENT_PROMPT =
 
 interface PendingContinuation {
   stepId: string;
+  resumeStepId?: string;
   sessionId: string | undefined;
   backend: RunnerId;
   prompt: string;
@@ -2642,7 +2664,7 @@ export class RunManager {
       .reverse()
       .find((step) => step.status === 'pending' && step.id.startsWith('continue-'));
     const sessionStep = queuedContinuation
-      ? [...run.steps].reverse().find((step) => step.id !== queuedContinuation.id && step.sessionId)
+      ? continuationSession(run, queuedContinuation.id)
       : undefined;
     // A reserved fallback successor may have no session yet (its predecessor ran out first);
     // it re-queues as a fresh continuation rather than reviving the workflow from the top.
@@ -2659,6 +2681,7 @@ export class RunManager {
       this.pendingContinuations.set(run.id, {
         stepId: queuedContinuation.id,
         sessionId: !switched && sessionStep?.sessionId && sessionBackend === backend && accountMatches ? sessionStep.sessionId : undefined,
+        resumeStepId: sessionStep?.id,
         backend,
         prompt: switchedInput?.prompt ?? (switched ? SWITCH_AGENT_PROMPT : RESTART_CONTINUATION_PROMPT),
         images: [],
@@ -6027,7 +6050,7 @@ export class RunManager {
       && !(internal.freshSessionAllowed && run.status === 'queued' && run.fallbackEpisode?.pending)) {
       return { ok: false, error: `cannot continue a ${run.status} run` };
     }
-    const sessionStep = [...run.steps].reverse().find((s) => s.sessionId);
+    const sessionStep = continuationSession(run);
     if (!sessionStep?.sessionId) {
       if (!agentSwitch && run.worktreeLifecycle?.phase === 'setup' && run.worktreeLifecycle.state === 'cancelled') {
         void this.lifecycle.reopenSetup(runId).catch(error => this.store.updateRun(runId, {error: String(error)}));
@@ -6165,6 +6188,7 @@ export class RunManager {
       this.pendingContinuations.set(runId, {
         stepId,
         sessionId: resume ? sessionStep?.sessionId : undefined,
+        resumeStepId: resume ? sessionStep?.id : undefined,
         backend: targetRunner,
         prompt,
         images: previous ? [] : images,
@@ -6191,7 +6215,8 @@ export class RunManager {
     // registers it in `active`.
     this.starting.add(runId);
     this.launchContinuation(runId, {
-      stepId, sessionId: resume ? sessionStep?.sessionId : undefined, backend: targetRunner, prompt, images,
+      stepId, sessionId: resume ? sessionStep?.sessionId : undefined, resumeStepId: resume ? sessionStep?.id : undefined,
+      backend: targetRunner, prompt, images,
     });
     return { ok: true };
   }
@@ -6202,7 +6227,7 @@ export class RunManager {
     const hydrated = queued ? this.hydrateQueuedContinuation(runId, opening) : undefined;
     void outsideRelayScope(() => this.runContinuation(
       runId, opening.stepId, opening.sessionId, opening.backend, hydrated?.prompt ?? opening.prompt, opening.images,
-      hydrated?.persistedImages, hydrated?.persistedAttachments, ownerToken,
+      hydrated?.persistedImages, hydrated?.persistedAttachments, ownerToken, opening.resumeStepId,
     )).catch((err: unknown) => {
       this.failOwnedContinuation(runId, ownerToken, err instanceof Error ? err.message : String(err));
       if (!this.abandonCancelledStart(runId)) this.starting.delete(runId);
@@ -6210,6 +6235,25 @@ export class RunManager {
       // Dropping the old owner can start the successor before this callback runs.
       if (this.openingContinuations.get(runId) === opening) this.openingContinuations.delete(runId);
     });
+  }
+
+  private launchWithSecretPolicy(
+    runId: string, stepId: string,
+    binding: Pick<StepState, 'sessionId' | 'backend' | 'profileId'>,
+    names: string[] | undefined, launch: () => AgentSession,
+  ): AgentSession {
+    const previous = this.store.getRun(runId)?.steps.find((step) => step.id === stepId);
+    const restore = {
+      sessionId: previous?.sessionId, backend: previous?.backend, profileId: previous?.profileId,
+      sessionSecretPolicy: previous?.sessionSecretPolicy,
+    };
+    this.store.updateStep(runId, stepId, { ...binding, sessionSecretPolicy: { names } });
+    try {
+      return launch();
+    } catch (err) {
+      this.store.updateStep(runId, stepId, restore);
+      throw err;
+    }
   }
 
   private async runContinuation(
@@ -6222,6 +6266,7 @@ export class RunManager {
     persistedImages: ContentBlock[] = [],
     persistedAttachments: PersistedAttachment[] = [],
     effectiveOwnerToken = Symbol('run-owner'),
+    resumeStepId?: string,
   ): Promise<void> {
     // Continuation runs in the task's worktree when it still exists (spec
     // 006) — the resumed session sees exactly what the original run left.
@@ -6256,6 +6301,10 @@ export class RunManager {
       if (this.abandonCancelledStart(runId)) return;
     }
     const record = this.store.getRun(runId);
+    const owningStep = sessionId === undefined ? undefined : resumeStepId === undefined
+      ? continuationSession(record, stepId, sessionId)
+      : record?.steps.find((step) => step.id === resumeStepId && step.sessionId === sessionId);
+    const secretNames = continuationSecretNames(record, owningStep);
     const continuationReasoningEffort = agentModelsLocked(this.repoRoot)
       ? undefined
       : record?.steps.find((step) => step.id === stepId)?.reasoningEffort;
@@ -6269,12 +6318,6 @@ export class RunManager {
     const recordBeforeTurn = record && sessionId !== undefined
       ? { ...record, steps: record.steps.map((step) => ({ ...step })) }
       : undefined;
-    // A fresh session is pinned and recorded up front, exactly like a workflow step's
-    // (`runAgentStep`): Claude emits no `session` event of its own, so an unpinned fresh
-    // continuation left its step without a session id, and the NEXT Continue resumed the last
-    // step that had one — an older session under whatever account created it, silently undoing
-    // the account switch this continuation was opened for. Runners that mint their own id still
-    // overwrite it through the `session` event.
     const spawnSessionId = sessionId ?? randomUUID();
     // The env is a live ceiling: a run created while the inbox was on must not keep writing
     // follow-ups after it is switched off.
@@ -6337,8 +6380,6 @@ export class RunManager {
       status: 'running',
       iterations: 1,
       startedAt: new Date().toISOString(),
-      sessionId: spawnSessionId,
-      backend,
       ...(continuationReasoningEffort ? { reasoningEffort: continuationReasoningEffort } : {}),
     });
     this.store.appendEvent(runId, { type: 'step-start', stepId, name: 'Continue', kind: 'agent', iteration: 1 });
@@ -6659,9 +6700,6 @@ export class RunManager {
         status: 'failed',
         error: message,
         finishedAt: failedAt,
-        // The fresh session pinned up front was never created: leaving its id on the step
-        // would make the next Continue `--resume` a conversation that does not exist.
-        ...(sessionId === undefined ? { sessionId: undefined } : {}),
       });
       this.publishRunFailure(runId, {
         status: 'failed',
@@ -6728,9 +6766,6 @@ export class RunManager {
     // Resuming reattaches to a session that lives inside ONE account's config dir, so the
     // continuation must run under the account that created it — not whatever the project has
     // been switched to since. The owning step is the one carrying this session id.
-    const owningStep = sessionId === undefined
-      ? undefined
-      : record?.steps.find((s) => s.sessionId === sessionId);
     const resumedProfileId = owningStep?.profileId;
     // The owning step also names the session's tools: resolve `allowedTools`/`bashAllowlist`
     // from the persisted `workflowDef` exactly as the first spawn did (`runAgentStep`).
@@ -6756,29 +6791,19 @@ export class RunManager {
     }
     const continuationTools = resolveAgentStepTools(state, toolsStep, savedTools);
     this.store.updateStep(runId, stepId, { toolPolicy: continuationTools });
-    // A fresh Continue has no session id, and subsequent Continues can own only synthetic rows.
-    // Recover the originating policy from the last executed workflow agent in the saved rail.
-    // Use execution time because graph rail order can differ from the path the run took.
-    const secretStep = record?.steps
-      .filter((s) => s.kind === 'agent' && s.sessionId)
-      .reverse()
-      .sort((a, b) => (b.startedAt ?? '').localeCompare(a.startedAt ?? ''))
-      .map((s) => defSteps?.find((def) => def.id === s.id && stepKind(def) === 'agent'))
-      .find((step) => step !== undefined);
     // The temp-directory preflight (#785) rides along with account resolution on resume.
     let continueProfile: Awaited<ReturnType<RunManager['agentEnvForStep']>>;
     try {
       continueProfile = await this.agentEnvForStep(runId, continueBackend, {
         generateFollowups,
         recordedProfileId: resumedProfileId,
-        secretNames: secretStep?.secrets,
+        secretNames,
       });
     } catch (err) {
       if (!(err instanceof AgentTempDirError || err instanceof TrackerAgentBindingError || err instanceof AgentAccountUnavailableError)) throw err;
       failBeforeSpawn(err.message);
       return;
     }
-    this.store.updateStep(runId, stepId, { profileId: continueProfile.profileId });
 
     if (!state.enforceReadOnly) {
       const refusal = readOnlyWorkflowRefusal(record?.workflowDef, continueBackend);
@@ -6838,7 +6863,9 @@ export class RunManager {
     const planUsage = this.planUsageTracker(runId, continueProfile.planUsageAccount);
     const launch = (launchSessionId: string, resume: boolean, context: string | undefined): AgentSession => {
       const contextualOpeningPrompt = withContext(context);
-      const started = runner.startSession(
+      const started = this.launchWithSecretPolicy(runId, stepId, {
+        sessionId: launchSessionId, backend: continueBackend, profileId: continueProfile.profileId,
+      }, secretNames, () => runner.startSession(
         {
           // The Continue step is a fresh agent session on the same run — the
           // run's extra system prompt (already resolved at execute time and
@@ -6881,7 +6908,7 @@ export class RunManager {
           },
           canAskPermission: () => this.canAskPermission(state),
         },
-      );
+      ));
       state.session = resume ? resumeGuard.track(started) : started;
       state.sessionEverOpened = true;
       // Set before the flush: `session.started` arrives later, and a buffered `/command` picks its variant by it.
@@ -6906,7 +6933,6 @@ export class RunManager {
         sessionError = undefined;
         turnText = '';
         const freshId = randomUUID();
-        this.store.updateStep(runId, stepId, { sessionId: freshId });
         this.store.appendEvent(runId, { type: 'note', stepId, message: MISSING_SESSION_NOTE });
         const context = freshContinuationContext(
           { ...recordBeforeTurn, steps: recordBeforeTurn.steps.filter((step) => step.id !== stepId) },
@@ -7611,6 +7637,7 @@ export class RunManager {
         prompt: `Continue by fixing the failed check "${label}" in this worktree before verification runs again.\n\n{{task}}`,
       }, input, skills, this.store.redactRunText(runId, output), false, emit, startImages, taskBackend, extraSystemPrompt, undefined, startAttachments, {
         resumeSessionId,
+        continuing: true,
         usageLimitResume: interrupted,
         savedTools,
         portableContext: resumeSessionId ? undefined : freshContinuationContext(repairRun, events, this.attachmentsDir(runId)),
@@ -7789,7 +7816,11 @@ export class RunManager {
           extraSystemPrompt,
           stepIdx >= 0 ? chainStepNote(workflow.steps, stepIdx) : undefined,
           startAttachments,
-          { ...session, lastTurn, portableContext, workflowAgent: agent },
+          {
+            ...session, lastTurn, portableContext, workflowAgent: agent,
+            resumeStepId: resuming ? undefined : node.session?.continue,
+            continuing: resuming || node.session !== undefined || iteration > 1,
+          },
         );
         startImages = undefined;
         checkFailure = null;
@@ -8768,7 +8799,7 @@ export class RunManager {
     const failure = await this.runAgentStep(
       runId, state, step, agent ? { ...input, model: undefined, reasoningEffort: undefined } : input,
       skills, null, false, emit, undefined, taskBackend, extraSystemPrompt, undefined, [],
-      { resumeSessionId, lastTurn, workflowAgent: agent },
+      { resumeSessionId, resumeStepId: worker?.id, continuing: true, lastTurn, workflowAgent: agent },
     );
     if (state.cancelled || state.finishRequested || state.askPark === 'abandoned') return 'finished';
     if (state.askPark === 'waiting' || state.idleClosed) {
@@ -8958,6 +8989,8 @@ export class RunManager {
      *  `usageLimitResume` reopens a step a usage limit interrupted (#1300). */
     graphHooks?: {
       resumeSessionId?: string;
+      resumeStepId?: string;
+      continuing?: boolean;
       lastTurn?: { text: string };
       usageLimitResume?: StepState;
       portableContext?: string;
@@ -9052,12 +9085,18 @@ export class RunManager {
 
     const sessionId = graphHooks?.resumeSessionId ?? randomUUID();
     const backend = step.runner ?? taskBackend;
+    const launchRecord = this.store.getRun(runId);
+    const resumedOwnerId = resumeStep?.id ?? graphHooks?.resumeStepId;
+    const resumedOwner = graphHooks?.resumeSessionId === undefined ? undefined : launchRecord?.steps.find(
+      (candidate) => candidate.id === (resumedOwnerId ?? step.id) && candidate.sessionId === graphHooks.resumeSessionId,
+    );
+    const secretNames = graphHooks?.resumeSessionId || graphHooks?.continuing || resumeStep || checkFailure !== null
+      ? continuationSecretNames(launchRecord, resumedOwner)
+      : step.secrets?.filter((name) => typeof name === 'string');
     const reasoningEffort = agentModelsLocked(this.repoRoot)
       ? undefined
       : resolveStepReasoningEffort(step, taskBackend, input.reasoningEffort);
     this.store.updateStep(runId, step.id, {
-      sessionId,
-      backend,
       ...(reasoningEffort ? { reasoningEffort } : {}),
       ...(graphHooks?.workflowAgent ? { reasoningEffort, model: step.model, actualModel: undefined, modelIdentity: undefined } : {}),
     });
@@ -9396,7 +9435,7 @@ export class RunManager {
       stepProfile = await this.agentEnvForStep(runId, stepBackend, {
         generateFollowups: followupsEnabled() && input.generateFollowups !== false,
         workflowAgent: graphHooks?.workflowAgent,
-        secretNames: step.secrets,
+        secretNames,
         ...(resumeStep ? { recordedProfileId: resumeStep.profileId ?? DEFAULT_AGENT_ACCOUNT_ID } : {}),
       });
     } catch (err) {
@@ -9404,7 +9443,6 @@ export class RunManager {
       throw err;
     }
     if (state.cancelled) return 'cancelled';
-    this.store.updateStep(runId, step.id, { profileId: stepProfile.profileId });
 
     // A read-only workflow is only as read-only as the backend holding its tool limits.
     const stepDef = this.store.getRun(runId)?.workflowDef;
@@ -9423,7 +9461,9 @@ export class RunManager {
     if (state.cancelled) return 'cancelled';
     const planUsage = this.planUsageTracker(runId, stepProfile.planUsageAccount);
     const launch = (launchSessionId: string, resume: boolean, prompt: string): AgentSession =>
-      runner.startSession(
+      this.launchWithSecretPolicy(runId, step.id, {
+        sessionId: launchSessionId, backend: stepBackend, profileId: stepProfile.profileId,
+      }, secretNames, () => runner.startSession(
         {
           // Skill body, then the dispatch prompt (spec 2026-09-10-dispatch — how a task dispatches,
           // reports and asks), then the automations prompt (spec 2026-09-13-automations-from-prompt
@@ -9485,7 +9525,7 @@ export class RunManager {
           },
           canAskPermission: () => this.canAskPermission(state),
         },
-      );
+      ));
     const attach = (started: AgentSession, resume: boolean): AgentSession => {
       state.session = resume ? resumeGuard.track(started) : started;
       state.sessionEverOpened = true;
@@ -9522,7 +9562,6 @@ export class RunManager {
         sessionError = undefined;
         turnText = '';
         const freshId = randomUUID();
-        this.store.updateStep(runId, step.id, { sessionId: freshId, backend });
         emit({ type: 'note', stepId: step.id, message: MISSING_SESSION_NOTE });
         const context = freshContinuationContext(record, this.store.readEvents(runId), this.attachmentsDir(runId));
         result = await trackFallbackOutcome(() => {

@@ -8,6 +8,7 @@ import * as bypassPolicy from '../bypass-permissions.ts';
 import { AGENT_MODELS_LOCKED_ENV } from '../core/agent-model-policy.ts';
 import type { AgentEvent, AgentRunResult, AgentRunSpec, RunnerId } from '../core/agent-runner.ts';
 import { createWorktree } from '../git-worktree.ts';
+import { AgentTempDirError } from '../runs/agent-tmpdir.ts';
 import { RunStore } from '../runs/store.ts';
 import { mergeWriteAgentAccounts } from '../workspace/agent-accounts.ts';
 import { SecretStore } from '../workspace/secrets.ts';
@@ -490,49 +491,91 @@ describe('switching a task agent', { timeout: 20_000 }, () => {
   });
 
   it.each([
-    { policy: 'restricted', names: ['ALLOWED_KEY'], expected: ['allowed-fixture', undefined] },
-    { policy: 'empty', names: [], expected: [undefined, undefined] },
-    { policy: 'omitted', names: undefined, expected: ['allowed-fixture', 'other-fixture'] },
-  ])('keeps the originating $policy vault policy across switches and restart', async ({ names, expected }) => {
+    { policy: 'recorded names', recorded: { names: ['ALLOWED_KEY'] }, expected: ['allowed-fixture', undefined] },
+    { policy: 'recorded empty', recorded: { names: [] }, expected: [undefined, undefined] },
+    { policy: 'recorded omission', recorded: {}, expected: ['allowed-fixture', 'other-fixture'] },
+    { policy: 'legacy ambiguity', recorded: undefined, expected: [undefined, undefined] },
+  ])('applies $policy when the selected graph session differs from execution order', async ({ recorded, expected }) => {
     const secrets = new SecretStore(process.env, { keychain: async () => null });
     const vault = { kind: 'workspace' } as const;
     await secrets.set(vault, 'ALLOWED_KEY', 'allowed-fixture', ['agents']);
     await secrets.set(vault, 'OTHER_KEY', 'other-fixture', ['agents']);
     await addWorkAccount('claude');
-    const definition: WorkflowDef = {
-      name: 'partially-executed', source: 'file',
-      steps: [
-        { id: 'origin', prompt: '{{task}}', ...(names === undefined ? {} : { secrets: names }) },
-        { id: 'later', prompt: '{{task}}' },
-      ],
-    };
+    const graph = compileV1([
+      { id: 'later-execution', prompt: '{{task}}', secrets: ['OTHER_KEY'] },
+      { id: 'selected', prompt: '{{task}}', secrets: ['ALLOWED_KEY'] },
+      { id: 'pending', prompt: '{{task}}' },
+    ]);
+    const definition: WorkflowDef = { name: 'graph', source: 'file', graph, steps: graphToSteps(graph) };
     const { id } = store.createRun({
       title: 'Continue', workflow: definition.name, task: 't', runner: 'claude', worktree: false,
       steps: definition.steps.map((step) => ({ id: step.id, name: step.id, kind: 'agent' })),
     });
-    store.updateStep(id, 'origin', { status: 'done', backend: 'claude', sessionId: 'origin-session' });
+    store.updateStep(id, 'later-execution', {
+      status: 'done', backend: 'claude', sessionId: 'later-session', startedAt: '2026-11-25T10:01:00Z',
+      sessionSecretPolicy: { names: ['OTHER_KEY'] },
+    });
+    store.updateStep(id, 'selected', {
+      status: 'done', backend: 'claude', sessionId: 'selected-session', startedAt: '2026-11-25T10:00:00Z',
+      sessionSecretPolicy: recorded,
+    });
     store.updateRun(id, { status: 'done', workflowDef: definition });
     await restart(secrets);
 
-    const continueWith = async (opts: Parameters<RunManager['continueRun']>[1], resume: boolean) => {
+    const continueWith = async (opts: Parameters<RunManager['continueRun']>[1], resume: boolean, grants: (string | undefined)[]) => {
       const next = sessions.length;
       expect(manager.continueRun(id, { text: 'Follow up', ...opts })).toEqual({ ok: true });
       await vi.waitFor(() => expect(sessions).toHaveLength(next + 1), wait);
       const session = sessions[next]!;
       expect(session.spec.resume).toBe(resume);
+      expect([session.spec.env?.ALLOWED_KEY, session.spec.env?.OTHER_KEY]).toEqual(grants);
       session.settle();
       await vi.waitFor(() => expect(manager.isActive(id)).toBe(false), wait);
     };
 
-    await continueWith({ agentProfile: 'work' }, false);
+    await continueWith({}, true, expected);
+    expect(sessions[0]?.spec.sessionId).toBe('selected-session');
     await restart(secrets);
-    await continueWith({}, true);
-    await continueWith({ runner: 'codex' }, false);
-    await continueWith({}, true);
-    expect(sessions.map(({ spec }) => [spec.env?.ALLOWED_KEY, spec.env?.OTHER_KEY])).toEqual(
-      [expected, expected, expected, expected],
-    );
-    expect(store.getRun(id)?.steps.find((step) => step.id === 'later')?.status).toBe('pending');
+    await continueWith({}, true, expected);
+    await continueWith({ agentProfile: 'work' }, false, [undefined, undefined]);
+    await continueWith({ runner: 'codex' }, false, [undefined, undefined]);
+    await restart(secrets);
+    await continueWith({}, true, [undefined, undefined]);
+  });
+
+  it('keeps the launched policy when a later agent step fails preflight', async () => {
+    const secrets = new SecretStore(process.env, { keychain: async () => null });
+    const vault = { kind: 'workspace' } as const;
+    await secrets.set(vault, 'ALLOWED_KEY', 'allowed-fixture', ['agents']);
+    await secrets.set(vault, 'OTHER_KEY', 'other-fixture', ['agents']);
+    await restart(secrets);
+    const resolveEnv = manager['agentEnvForStep'].bind(manager);
+    manager['agentEnvForStep'] = async (...args) => {
+      if (args[2]?.secretNames === undefined) throw new AgentTempDirError(root, 'synthetic preflight failure');
+      return resolveEnv(...args);
+    };
+
+    const { id } = manager.startRun({
+      name: 'preflight', source: 'file',
+      steps: [
+        { id: 'launched', prompt: '{{task}}', secrets: ['ALLOWED_KEY'] },
+        { id: 'blocked', prompt: '{{task}}' },
+      ],
+    }, { task: 't', worktree: false });
+    await vi.waitFor(() => expect(sessions).toHaveLength(1), wait);
+    sessions[0]!.settle();
+    await vi.waitFor(() => expect(manager.isActive(id)).toBe(false), wait);
+    expect(store.getRun(id)?.steps.find((step) => step.id === 'blocked')).toMatchObject({ status: 'failed' });
+    expect(store.getRun(id)?.steps.find((step) => step.id === 'blocked')?.sessionId).toBeUndefined();
+
+    await restart(secrets);
+    expect(manager.continueRun(id, { text: 'Follow up' })).toEqual({ ok: true });
+    await vi.waitFor(() => expect(sessions).toHaveLength(2), wait);
+    expect(sessions[1]?.spec).toMatchObject({
+      resume: true, sessionId: sessions[0]?.spec.sessionId, env: { ALLOWED_KEY: 'allowed-fixture' },
+    });
+    expect(sessions[1]?.spec.env?.OTHER_KEY).toBeUndefined();
+    sessions[1]!.settle();
   });
 
   it.each([false, true])('switches the account on Continue with the expected model and effort (locked: %s)', async (locked) => {
