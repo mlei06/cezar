@@ -15,6 +15,7 @@ import { z } from 'zod';
 import { byLastActivityDesc, lastActivityAt } from '../runs/run-index.ts';
 import { reconcileLoadedRun, runRecordSchema, type RunRecord } from '../runs/store.ts';
 import { lifecycleBusy } from '../worktree-lifecycle/coordinator.ts';
+import { prNumberOfUrl } from '../server/forge/pr-url.ts';
 
 /**
  * What a manager sees (spec 2026-10-31-managers § Watching). A snapshot reads what the stores and
@@ -83,13 +84,12 @@ function taskRow(run: RunRecord, childCount: number): ManagerSnapshotTask {
   };
 }
 
-const PR_NUMBER = /\/pull\/(\d+)(?:[/?#]|$)/;
 
 /** The PR the task opened, else the one it declared (`CEZ:PR`): what tells a manager the work exists. */
 function pullRequestOf(run: RunRecord): { prNumber?: number; prUrl?: string } {
   const opened = run.prRefs?.find((ref) => ref.origin === 'created') ?? run.prRefs?.find((ref) => ref.origin === 'marker');
   const url = opened?.url ?? run.pullRequestUrl;
-  const number = opened?.number ?? (url ? Number(PR_NUMBER.exec(url)?.[1]) || undefined : undefined) ?? run.markerRefs?.pr;
+  const number = opened?.number ?? prNumberOfUrl(url) ?? run.markerRefs?.pr;
   return { ...(number !== undefined ? { prNumber: number } : {}), ...(url ? { prUrl: url } : {}) };
 }
 
@@ -100,7 +100,7 @@ function pullRequestOf(run: RunRecord): { prNumber?: number; prUrl?: string } {
  */
 export function prTie(run: RunRecord, number: number): 0 | 1 | 2 | undefined {
   const refs = run.prRefs ?? [];
-  const urlNumber = run.pullRequestUrl ? Number(PR_NUMBER.exec(run.pullRequestUrl)?.[1]) : undefined;
+  const urlNumber = prNumberOfUrl(run.pullRequestUrl);
   if (urlNumber === number || refs.some((ref) => ref.origin === 'created' && ref.number === number)) return 0;
   if (run.markerRefs?.pr === number || refs.some((ref) => ref.origin === 'marker' && ref.number === number)) return 1;
   return refs.some((ref) => ref.number === number) ? 2 : undefined;

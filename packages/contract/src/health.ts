@@ -21,8 +21,10 @@ export const backendCheckSchema = z.object({
 });
 export type BackendCheck = z.infer<typeof backendCheckSchema>;
 
+/** Additive: `azure-devops` (spec 2026-11-24-azure-repos-forge-driver) joins `github`. */
+export const forgeKindSchema = z.enum(['github', 'azure-devops']);
 export const forgeInfoSchema = z.object({
-  kind: z.literal('github'),
+  kind: forgeKindSchema,
   /**
    * Whether the forge is reachable — **absent until the availability probe has warmed**.
    *

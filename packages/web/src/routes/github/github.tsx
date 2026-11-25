@@ -80,6 +80,7 @@ import { IssueOwnership } from './issue-ownership'
 import { HandToAgent } from './hand-to-agent'
 import { SwipeLaunchSheet, SwipeReveal, useRowSwipe } from './swipe-launch'
 import { readFollowupSelection, writeFollowupSelection } from './hand-to-agent-draft'
+import { forgeLabel, useActiveForge } from '@/lib/active-forge'
 
 /**
  * `/github` — the forge tab rebuilt in React (R6 Step 1.1, spec §"GitHub tab (forge tab)"):
@@ -186,6 +187,7 @@ export function GithubRoute({
   /** This is the bare `/github` index (#417): restore the remembered sub-tab before rendering. */
   index?: boolean
 }) {
+  const forgeName = forgeLabel(useActiveForge()?.kind)
   const { n } = useParams()
   // One fast page now that the list is cursor-backed; later pages append without replacing this
   // first-paint result or refetching rows already shown.
@@ -571,7 +573,7 @@ export function GithubRoute({
     <IssueBrowserLayout name="gh" route="github" selected={n !== undefined} list={<>
         <header data-slot="gh-header" className="sticky top-0 z-10 border-b border-border bg-background/95 px-4 pt-3 backdrop-blur">
           <div className="flex min-w-0 items-center gap-2.5">
-            <h1 className="text-lg font-semibold">GitHub</h1>
+            <h1 className="text-lg font-semibold">{forgeName}</h1>
             {gh.repo ? (
               <span data-slot="gh-repo" className="min-w-0 truncate font-mono text-meta text-soft-foreground">
                 {gh.repo}

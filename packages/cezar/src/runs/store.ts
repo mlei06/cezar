@@ -47,6 +47,7 @@ import { foldReportedModel, foldRunModels } from './reported-model.ts';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 
 import type { RunnerId } from '../core/agent-runner.ts';
+import { PR_URL_RE } from '../server/forge/pr-url.ts';
 
 export type RunStatus = 'queued' | 'running' | 'waiting' | 'review' | 'done' | 'failed' | 'cancelled';
 /**
@@ -643,8 +644,7 @@ const salvageHeaderSchema = z.object({
   archived: z.boolean().catch(false),
 });
 
-// Any host: GitHub Enterprise lives on arbitrary domains (`isGithubHost` can't be asked from a regex).
-const PR_URL_RE = /https:\/\/[^/\s]+\/[^/\s]+\/[^/\s]+\/pull\/\d+/;
+// PR_URL_RE: any host and both forges (server/forge/pr-url.ts).
 const ISSUE_URL_RE = /https:\/\/[^/\s]+\/[^/\s]+\/[^/\s]+\/issues\/\d+/;
 // The transcript auto-link is convenience only (the cockpit's own `gh pr create` path sets the
 // URL authoritatively). Adopt a PR URL ONLY when the agent actually CREATED one — a task that

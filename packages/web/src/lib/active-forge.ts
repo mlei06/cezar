@@ -6,7 +6,13 @@ import { useActiveProjectId } from '@/lib/project-router'
 
 /** The host CLI health probes for each forge kind. A `Record` so a new kind (GitLab via `glab`,
  *  #847 / #1226) fails the typecheck until it names its own CLI instead of inheriting `gh`'s. */
-const FORGE_CLI: Record<ForgeInfo['kind'], BackendCheck['name']> = { github: 'gh' }
+// Azure DevOps has no CLI of its own here: git holds the credential (spec 2026-11-24-azure-repos-forge-driver).
+const FORGE_CLI: Record<ForgeInfo['kind'], BackendCheck['name']> = { github: 'gh', 'azure-devops': 'git' }
+
+/** The forge's name where the cockpit shows it (nav item, page title). */
+export function forgeLabel(kind: ForgeInfo['kind'] | null | undefined): string {
+  return kind === 'azure-devops' ? 'Azure DevOps' : 'GitHub'
+}
 
 export function cliFor(kind: ForgeInfo['kind']): BackendCheck['name'] | undefined {
   return FORGE_CLI[kind]

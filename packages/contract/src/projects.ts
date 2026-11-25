@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { trackerKindSchema } from './tracker.ts';
+import { forgeKindSchema } from './health.ts';
 
 /**
  * The project-registry family: `GET/POST/PATCH/DELETE /api/v1/projects`, the folder picker
@@ -35,7 +36,7 @@ export const projectListEntrySchema = z.object({
   branch: z.string().optional(),
   /** Which forge this project's remote belongs to (#698) — classified server-side from the
    *  remote URL alone. Gates the project group's GitHub nav item; omitted = no forge remote. */
-  forge: z.literal('github').optional(),
+  forge: forgeKindSchema.optional(),
   /**
    * The remote's web root, `https://github.com/owner/repo`. Rebuilt server-side from the parsed
    * remote rather than passed through, so a remote carrying credentials cannot leak into the

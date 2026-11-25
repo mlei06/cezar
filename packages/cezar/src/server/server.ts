@@ -447,7 +447,17 @@ import {
   openInApp,
   withResolvedClaudeBin,
 } from './open-in-app.ts';
-import { createDraftPr, type DraftPrOutcome } from './pr.ts';
+import { type DraftPrOutcome } from './pr.ts';
+import { createTaskPr } from './forge/task-pr.ts';
+import {
+  azureChecks,
+  azureComments,
+  azureDriverFor,
+  azureGithubData,
+  azurePrChanges,
+  azureRefStatus,
+  azureSearch,
+} from './forge/azure-routes.ts';
 import { findBranchPr, peekPrHeadSha, resolvePrTarget } from './forge/github.ts';
 import {
   DEFAULT_TELEMETRY_URL,
@@ -6577,7 +6587,7 @@ export function createApp(deps: ServerDeps) {
         const branch = run.branch;
         publish = (async () => {
           const outcome = await withWorktreeMutation(c.get('project'), id, () =>
-            createDraftPr({ repoRoot, run, handoffText: readHandoff(dataDir, id), draft }),
+            createTaskPr({ repoRoot, run, handoffText: readHandoff(dataDir, id), draft }),
           );
           if (!outcome.ok) return outcome;
           // A number the cockpit asked about BEFORE the pull request existed is cached as "this
@@ -7846,6 +7856,8 @@ export function createApp(deps: ServerDeps) {
         const { root: repoRoot } = c.get('project');
         const query = c.req.valid('query');
         const limit = Number.parseInt(query.limit ?? '', 10);
+        const azure = await azureDriverFor(repoRoot);
+        if (azure) return c.json(await azureGithubData(azure, query.refresh === '1', Number.isFinite(limit) ? limit : 50));
         return c.json(await fetchGithub(repoRoot, query.refresh === '1', Number.isFinite(limit) ? limit : 50, {
           issuesCursor: query.issuesCursor,
           prsCursor: query.prsCursor,
@@ -7862,6 +7874,7 @@ export function createApp(deps: ServerDeps) {
         number: c.req.param('number'),
       });
       if (!parsed.success) return c.json({ error: 'invalid kind or number' }, 400);
+      if (await azureDriverFor(repoRoot)) return c.json(azureComments());
       return c.json(
         await fetchGithubComments(repoRoot, parsed.data.kind, parsed.data.number, c.req.valid('query').refresh === '1'),
       );
@@ -7885,7 +7898,8 @@ export function createApp(deps: ServerDeps) {
         if (!Number.isInteger(n) || n <= 0 || String(n) !== part) return c.json({ error: 'invalid prs query' }, 400);
         numbers.push(n);
       }
-      return c.json(await fetchGithubChecks(repoRoot, numbers));
+      const azure = await azureDriverFor(repoRoot);
+      return c.json(azure ? await azureChecks(azure, numbers) : await fetchGithubChecks(repoRoot, numbers));
     })
 
     // Search across ALL states (#730). Additive sibling of `/github`, which lists the OPEN set
@@ -7906,7 +7920,8 @@ export function createApp(deps: ServerDeps) {
       async (c) => {
         const { root: repoRoot } = c.get('project');
         const { kind, q, limit } = c.req.valid('query');
-        return c.json(await searchGithubItems(repoRoot, kind, q, limit));
+        const azure = await azureDriverFor(repoRoot);
+        return c.json(azure ? await azureSearch(azure, kind, q, limit) : await searchGithubItems(repoRoot, kind, q, limit));
       },
     )
 
@@ -7927,6 +7942,8 @@ export function createApp(deps: ServerDeps) {
         if (parsedPrs.length === 0 && parsedIssues.length === 0) {
           return c.json({ error: 'missing prs or issues query' }, 400);
         }
+        const azure = await azureDriverFor(repoRoot);
+        if (azure) return c.json(await azureRefStatus(azure, parsedPrs));
         return c.json(await fetchGithubRefStatus(repoRoot, { prs: parsedPrs, issues: parsedIssues }));
       },
     )
@@ -7985,6 +8002,7 @@ export function createApp(deps: ServerDeps) {
       async (c) => {
         const { root: repoRoot } = c.get('project');
         const parsed = { data: c.req.valid('param') };
+        if (await azureDriverFor(repoRoot)) return c.json(azurePrChanges());
         try {
           return c.json(
             await fetchGithubPrDiff(repoRoot, parsed.data.number, c.req.valid('query').refresh === '1'),

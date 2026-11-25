@@ -12,7 +12,8 @@ import {
   TicketIcon,
 } from 'lucide-react'
 import type { ComponentType, SVGProps } from 'react'
-import type { TrackerKind } from '@open-mercato/cezar-api-client'
+import type { ForgeInfo, TrackerKind } from '@open-mercato/cezar-api-client'
+import { forgeLabel } from '@/lib/active-forge'
 
 import { TRACKER_PROVIDERS } from '@/lib/tracker-providers'
 import { GithubIcon } from '@/components/icons'
@@ -74,6 +75,8 @@ export const NAV_ITEMS: NavItem[] = [
 export type NavAvailability = {
   /** `forge` non-null — a recognized remote (spec §"GitHub tab (forge tab)", #1412). */
   forge?: boolean
+  /** Which forge, so its tab carries the forge's own name (spec 2026-11-24-azure-repos-forge-driver). */
+  forgeKind?: ForgeInfo['kind']
   /** `capabilities.followups` — the opt-in global inbox (#471). */
   inbox?: boolean
   /** `capabilities.automations` — automations, default-on (spec 2026-09-14), `CEZ_AUTOMATIONS=0` off. */
@@ -101,6 +104,7 @@ export type NavAvailability = {
  */
 export function visibleNavItems({
   forge = false,
+  forgeKind,
   inbox = false,
   automations = false,
   tracker,
@@ -113,6 +117,7 @@ export function visibleNavItems({
     && (item.terminal ? terminal : true)
     && (item.tracker ? tracker !== undefined : true))
     .map((item) => item.tracker ? { ...item, label: tracker ? TRACKER_PROVIDERS[tracker].label : item.label } : item)
+    .map((item) => (item.forge && forgeKind ? { ...item, label: forgeLabel(forgeKind) } : item))
 }
 
 /** Does `pathname` sit inside the area rooted at `prefix`?

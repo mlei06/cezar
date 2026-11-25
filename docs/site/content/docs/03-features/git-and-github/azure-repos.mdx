@@ -1,0 +1,38 @@
+---
+title: "Azure Repos pull requests"
+description: "Pull requests, PR status and merging for repositories on Azure DevOps Services."
+sources:
+  - label: "Implementation"
+    path: packages/cezar/src/server/forge/azure.ts
+    line: 1
+---
+A project whose git remote is on Azure DevOps Services (`dev.azure.com` or `*.visualstudio.com`) gets the same
+pull request features as a GitHub project: the pull request list, Create PR from a task, PR status chips, merge
+readiness and merging. The forge tab is called **Azure DevOps** for these projects.
+
+## Where to find it
+
+Project → Azure DevOps
+
+## How it signs in
+
+There is nothing to set up. cezar uses, in this order:
+
+1. `AZURE_DEVOPS_EXT_PAT`, the variable the Azure CLI's DevOps extension reads;
+2. the credential git already holds for the repository's remote, which is there once you have pushed over HTTPS;
+3. a token from the Azure CLI, after `az login`.
+
+The credential stays in cezar's memory. It is never written to disk or given to an agent.
+
+## What works
+
+- Open pull requests, and search by number. Azure Repos has no title search, so a word filters the newest 100.
+- Create PR from a task, as a draft or ready for review.
+- PR status: open, merged or abandoned, and its checks: build policies and PR statuses.
+- Merge readiness from branch policies and reviewer votes, and completing the PR. Without a merge-strategy policy,
+  the default is a merge commit.
+- Graph workflows: **Draft PR** and **Wait for CI** nodes.
+
+> **Good to know**: Boards work items, Azure DevOps automations, comment threads and Azure DevOps Server are not
+> supported yet. Completing a PR is asynchronous on Azure DevOps; when it has not finished within a few seconds,
+> cezar says so and the PR completes on its own.

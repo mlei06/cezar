@@ -847,6 +847,7 @@ function PaletteContent({ close }: { close: () => void }) {
           ) : null}
           {visibleNavItems({
             forge: activeForge != null,
+            forgeKind: activeForge?.kind,
             inbox: health.data?.capabilities.followups === true,
             automations: health.data?.capabilities.automations === true,
             terminal: health.data?.capabilities.terminal === true,

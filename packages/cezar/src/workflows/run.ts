@@ -102,8 +102,7 @@ import {
   worktreeDiff,
   worktreeShortstat,
 } from '../git-worktree.ts';
-import { commentOnIssue, commentOnPr, fetchPrHeadChecks, fetchPrWatchFingerprint, findBranchPr, resolvePrTarget, updatePr } from '../server/forge/github.ts';
-import { createDraftPr } from '../server/pr.ts';
+import { commentOnIssue, commentOnPr, fetchPrWatchFingerprint, findBranchPr, resolvePrTarget, updatePr } from '../server/forge/github.ts';
 import { baseDivergence, createOrSwitchBranch } from '../server/git-changes.ts';
 import { isReadOnlyWorkflow, readOnlyWorkflowRefusal } from './capabilities.ts';
 import { getHeadCommit, getRepoInfo } from '../server/git.ts';
@@ -274,6 +273,8 @@ const IDLE_CLOSED_LIFECYCLE = 'run closed after inactivity — nobody replied; C
 /** Tail of an agent node's last turn kept as `{{nodes.<id>.summary}}`. */
 const NODE_SUMMARY_CAP = 4_000;
 import { freshContinuationContext } from './continuation-context.ts';
+import { prNumberOfUrl } from '../server/forge/pr-url.ts';
+import { createTaskPr, markAzurePrReady, taskPrHeadChecks } from '../server/forge/task-pr.ts';
 
 const CHECK_OUTPUT_CAP = 20_000;
 
@@ -8100,7 +8101,7 @@ export class RunManager {
       const run = record();
       const ref = run?.prRefs?.find((r) => r.origin === 'created') ?? run?.prRefs?.[0];
       if (ref) return ref.number;
-      const m = run?.pullRequestUrl ? /\/pull\/(\d+)/.exec(run.pullRequestUrl) : null;
+      const m = run?.pullRequestUrl ? /\/(?:pull|pullrequest)\/(\d+)/.exec(run.pullRequestUrl) : null;
       return m ? Number(m[1]) : undefined;
     };
 
@@ -8198,7 +8199,7 @@ export class RunManager {
         const markReady = async (url: string): Promise<boolean> => {
           // A stored URL can come from the agent's transcript. Confirm the PR belongs
           // to this task branch before changing a PR we did not just find by branch.
-          if (url === run.pullRequestUrl && process.env.CEZ_DRY_RUN !== '1') {
+          if (url === run.pullRequestUrl && process.env.CEZ_DRY_RUN !== '1' && !/\/pullrequest\/\d+/.test(url)) {
             const target = await resolvePrTarget(run);
             const existing = target && run.worktreePath ? await findBranchPr(run.worktreePath, target) : null;
             if (existing?.url !== url) {
@@ -8206,14 +8207,14 @@ export class RunManager {
               return false;
             }
           }
-          const res = await updatePr(this.repoRoot, url, { ready: true });
+          const res = (await markAzurePrReady(this.repoRoot, url)) ?? await updatePr(this.repoRoot, url, { ready: true });
           note(res.ok ? `PR marked ready for review: ${url}` : `could not mark PR ready — ${res.error}`, res.ok ? undefined : 'danger');
           return res.ok;
         };
         // One PR per task: a PR this run already opened (a resumed walk, or a loop back through
         // this node) is reported, never opened twice.
         if (run.pullRequestUrl && !updateExistingPr) {
-          const n = /\/pull\/(\d+)/.exec(run.pullRequestUrl)?.[1];
+          const n = prNumberOfUrl(run.pullRequestUrl);
           outputs.set(node.id, { url: run.pullRequestUrl, number: n ? Number(n) : '' });
           note(`PR already open: ${run.pullRequestUrl}`);
           return !readyPr || await markReady(run.pullRequestUrl) ? 'created' : 'failed';
@@ -8231,7 +8232,7 @@ export class RunManager {
           return 'nothing';
         }
         const title = node.title ? render(node.title) : undefined;
-        const outcome = await createDraftPr({
+        const outcome = await createTaskPr({
           repoRoot: this.repoRoot,
           run: title ? { ...run, title } : run,
           handoffText: readHandoff(this.dataDir, runId),
@@ -8243,7 +8244,7 @@ export class RunManager {
           return 'failed';
         }
         this.store.updateRun(runId, { pullRequestUrl: outcome.url });
-        const number = /\/pull\/(\d+)/.exec(outcome.url)?.[1];
+        const number = prNumberOfUrl(outcome.url);
         if (number) this.store.recordPrRef(runId, { number: Number(number), url: outcome.url, origin: 'created' });
         outputs.set(node.id, { url: outcome.url, number: number ? Number(number) : '' });
         // An adopted PR (the agent opened one already) keeps its own draft state until told.
@@ -8439,7 +8440,7 @@ export class RunManager {
           let stopped = false;
           const poll = async () => {
             if (stopped) return;
-            const v = await fetchPrHeadChecks(this.repoRoot, number, headSha);
+            const v = await taskPrHeadChecks(this.repoRoot, number, headSha);
             if (stopped) return;
             // Unavailable (offline, gh logged out) and stale are not verdicts: keep polling until the timeout.
             if (v.kind === 'conflict') {

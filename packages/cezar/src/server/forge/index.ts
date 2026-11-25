@@ -1,6 +1,8 @@
 import { parseRemote } from '../../git-remotes.ts';
 import { isGithubHost } from '../../github-hosts.ts';
 import type { RepoInfo } from '../git.ts';
+import { createAzureDriver } from './azure.ts';
+import { azureWebRoot, parseAzureRemote } from './azure/remote.ts';
 import { createGithubDriver } from './github.ts';
 import type { ForgeDriver, ForgeKind } from './types.ts';
 
@@ -28,6 +30,7 @@ function forgeKindOfHost(host: string): ForgeKind | null {
  * project's GitHub tab on the project's own remote.
  */
 export function forgeKindOfRemote(remote: string | undefined): ForgeKind | null {
+  if (parseAzureRemote(remote)) return 'azure-devops';
   const parsed = remote ? parseRemote(remote) : null;
   return parsed ? forgeKindOfHost(parsed.host) : null;
 }
@@ -41,6 +44,8 @@ export function forgeKindOfRemote(remote: string | undefined): ForgeKind | null 
  * cockpit renders and links to. Rebuilding it from `{host, owner, repo}` leaves nothing to leak.
  */
 export function forgeWebRoot(remote: string | undefined): string | null {
+  const azure = parseAzureRemote(remote);
+  if (azure) return azureWebRoot(azure);
   const parsed = remote ? parseRemote(remote) : null;
   if (!parsed || !forgeKindOfHost(parsed.host)) return null;
   return `https://${parsed.host}/${parsed.owner}/${parsed.repo}`;
@@ -49,6 +54,9 @@ export function forgeWebRoot(remote: string | undefined): string | null {
 /** Remote host → driver | null. GitLab lands here later as one more case. */
 export function resolveForge(repoInfo: RepoInfo | null): ForgeDriver | null {
   if (!repoInfo?.remote) return null;
+  // Azure DevOps Services (spec 2026-11-24-azure-repos-forge-driver), before the GitHub host lookup.
+  const azure = parseAzureRemote(repoInfo.remote);
+  if (azure) return createAzureDriver(azure);
   const parsed = parseRemote(repoInfo.remote);
   if (!parsed) return null;
   if (forgeKindOfHost(parsed.host) === 'github') {

@@ -41,7 +41,9 @@ export function extractTaskRefs(task: string): TaskRefs {
   const text = task ?? '';
 
   // 1. Explicit URLs — the strongest signal.
-  refs.prNumber = num(urlNumber(text, /(?:https?:\/\/)?[\w-]+(?:\.[\w-]+)+(?::\d+)?\/[\w.-]+\/[\w.-]+\/pull\/(\d+)/i));
+  refs.prNumber = num(urlNumber(text, /(?:https?:\/\/)?[\w-]+(?:\.[\w-]+)+(?::\d+)?\/[\w.-]+\/[\w.-]+\/pull\/(\d+)/i))
+    // Azure Repos (spec 2026-11-24-azure-repos-forge-driver): …/_git/{repo}/pullrequest/<n>.
+    ?? num(urlNumber(text, /(?:https?:\/\/)?[\w-]+(?:\.[\w-]+)+(?:\/[^/\s]+){1,3}\/_git\/[^/\s]+\/pullrequest\/(\d+)/i));
   refs.issueNumber = num(urlNumber(text, /(?:https?:\/\/)?[\w-]+(?:\.[\w-]+)+(?::\d+)?\/[\w.-]+\/[\w.-]+\/issues\/(\d+)/i));
 
   // 2. Worded references — covers the GitHub-tab templates verbatim

@@ -39,6 +39,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Sheet, SheetTrigger } from '@/components/ui/sheet'
 import { activeNavItem, activeNavPath, visibleNavItems, type NavItem } from '@/components/nav-items'
+import { useActiveForge } from '@/lib/active-forge'
 import type { TrackerKind } from '@open-mercato/cezar-api-client'
 import { FOLD_ARIA_KEYS, SidebarDrawer, SidebarFoldButton, SidebarFrame, useDesktopShell, useSidebarFolded, useSidebarWidth, type SidebarResize } from '@/components/sidebar-frame'
 import { cn } from '@/lib/utils'
@@ -291,6 +292,7 @@ export const AppShell = React.memo(function AppShell({
   managerHeads,
   projectSwitcher = null,
 }: AppShellProps) {
+  const activeForge = useActiveForge()
   const { pathname, search } = useLocation()
   // The nav's area rules reason about the flat route map — strip any `/p/:projectId` prefix
   // (multi-project spec, step 3.2) so `/p/cezar/git/commits` still lights Git.
@@ -359,12 +361,13 @@ export const AppShell = React.memo(function AppShell({
   const items = React.useMemo(
     () => visibleNavItems({
       forge: forgeAvailable,
+      forgeKind: activeForge?.kind,
       inbox: inboxAvailable,
       automations: automationsAvailable,
       terminal: terminalAvailable,
       tracker,
     }),
-    [forgeAvailable, inboxAvailable, automationsAvailable, terminalAvailable, tracker],
+    [forgeAvailable, activeForge?.kind, inboxAvailable, automationsAvailable, terminalAvailable, tracker],
   )
 
   const nav = {
