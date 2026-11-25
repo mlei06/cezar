@@ -1,8 +1,12 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { extname, join, resolve } from 'node:path';
 import { parse as parseYaml } from 'yaml';
+import { z } from 'zod';
+import { loadConfig, type CezConfig } from '../config.ts';
+import { runnerSupportsReasoningEffort, type RunnerId } from '../core/agent-runner.ts';
+import { loadWorkspaceConfig } from '../workspace/config.ts';
 import { graphIssues, graphToSteps, workflowGraphFileSchema } from './graph.ts';
-import { ASSESS_IMPACT_WORKFLOW, BUILT_IN_GRAPH_WORKFLOWS } from './templates.ts';
+import { ASSESS_IMPACT_WORKFLOW, BUILT_IN_GRAPH_WORKFLOWS, implementWorkflow, LOW_REASONING_MODEL_ALIAS } from './templates.ts';
 import {
   QUICK_TASK_WORKFLOW,
   normalizeWorkflowDoc,
@@ -17,6 +21,42 @@ export const WORKFLOWS_DIR = '.ai/cezar/workflows';
 export interface WorkflowLoadIssue {
   path: string;
   message: string;
+}
+
+const validationConfigPath = '.ai/agentic.config.json';
+const validationConfig = z.object({
+  validation: z.object({ commands: z.array(z.string().refine((command) => command.trim().length > 0)).optional() }).optional(),
+});
+const testScript = z.object({ scripts: z.object({ test: z.string().trim().min(1) }) });
+
+async function readJson(path: string): Promise<unknown> {
+  try {
+    return JSON.parse(await readFile(path, 'utf8'));
+  } catch {
+    return undefined;
+  }
+}
+
+async function validationCommands(repoRoot: string): Promise<string[]> {
+  const raw = await readFile(join(repoRoot, validationConfigPath), 'utf8').catch((err: NodeJS.ErrnoException) => {
+    if (err.code === 'ENOENT') return undefined;
+    throw new Error('unable to read validation configuration', { cause: err });
+  });
+  if (raw !== undefined) {
+    let doc: unknown;
+    try {
+      doc = JSON.parse(raw);
+    } catch {
+      throw new Error('validation configuration is not valid JSON');
+    }
+    const config = validationConfig.safeParse(doc);
+    if (!config.success) {
+      throw new Error('validation.commands must be an array of non-blank command strings');
+    }
+    if (config.data.validation?.commands !== undefined) return config.data.validation.commands;
+  }
+  const manifest = testScript.safeParse(await readJson(join(repoRoot, 'package.json')));
+  return manifest.success ? ['npm test'] : [];
 }
 
 /**
@@ -96,10 +136,48 @@ export async function loadWorkflows(
   const fileNames = new Set(fromFiles.map((w) => w.name));
   const workflows = [
     ...fromFiles,
-    ...[QUICK_TASK_WORKFLOW, ASSESS_IMPACT_WORKFLOW, ...BUILT_IN_GRAPH_WORKFLOWS].filter((w) => !fileNames.has(w.name)),
+    ...[QUICK_TASK_WORKFLOW, ASSESS_IMPACT_WORKFLOW, ...BUILT_IN_GRAPH_WORKFLOWS]
+      .filter((w) => !fileNames.has(w.name) && w.name !== 'implement'),
   ];
+  if (!fileNames.has('implement')) {
+    try {
+      workflows.push(implementWorkflow(await validationCommands(repoRoot)));
+    } catch (err) {
+      issues.push({
+        path: join(repoRoot, validationConfigPath),
+        message: `cannot construct the implement workflow: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    }
+  }
   workflows.sort((a, b) => a.name.localeCompare(b.name));
   return { workflows, issues };
+}
+
+/** Resolve the machine model alias before provider preflight or an engine launch. */
+export async function resolveWorkflowModelAlias(
+  workflow: WorkflowDef,
+  repoRoot: string,
+  projectConfig?: CezConfig,
+): Promise<{ workflow: WorkflowDef; fallback?: RunnerId }> {
+  if (!workflow.steps.some((step) => !step.command && step.model === LOW_REASONING_MODEL_ALIAS) &&
+    !workflow.graph?.nodes.some((node) => node.type === 'agent' && node.model === LOW_REASONING_MODEL_ALIAS)) {
+    return { workflow };
+  }
+
+  const configured = (await loadWorkspaceConfig()).factory?.models?.lowReasoning;
+  const project = projectConfig ?? await loadConfig(repoRoot);
+  const runner = configured?.runner ?? project.defaultRunner;
+  const auto: Partial<Record<RunnerId, boolean>> | undefined = project.defaultModelsAuto;
+  const model = configured?.model ?? (auto?.[runner] ? '' : project.defaultModels?.[runner] ?? '');
+  const settings = { runner, model, ...(!configured && runnerSupportsReasoningEffort(runner) ? { reasoningEffort: 'low' } : {}) };
+  const graph = workflow.graph && {
+    ...workflow.graph,
+    nodes: workflow.graph.nodes.map((node) =>
+      node.type === 'agent' && node.model === LOW_REASONING_MODEL_ALIAS ? { ...node, ...settings } : node),
+  };
+  const steps = graph ? graphToSteps(graph) : workflow.steps.map((step) =>
+    !step.command && step.model === LOW_REASONING_MODEL_ALIAS ? { ...step, ...settings } : step);
+  return { workflow: { ...workflow, steps, ...(graph ? { graph } : {}) }, ...(!configured ? { fallback: runner } : {}) };
 }
 
 /**

@@ -225,7 +225,7 @@ import {
   removeManagedAccountDir,
   sweepPendingAccounts,
 } from '../workspace/managed-accounts.ts';
-import { WORKFLOWS_DIR, loadWorkflows } from '../workflows/load.ts';
+import { WORKFLOWS_DIR, loadWorkflows, resolveWorkflowModelAlias } from '../workflows/load.ts';
 import { workflowCapabilities } from '../workflows/capabilities.ts';
 import {
   NODE_CATALOG,
@@ -5591,8 +5591,9 @@ export function createApp(deps: ServerDeps) {
           return c.json({ error: 'Requested secrets must be stored for this project or workspace and available to agents. See the secrets list.' }, 400);
         }
       }
+      const preflightWorkflow = (await resolveWorkflowModelAlias(workflow, repoRoot)).workflow;
       const fallback = parsed.data.runner ?? (await loadConfig(repoRoot)).defaultRunner;
-      const blocked = await providerActionError(providersRequiredByWorkflow(workflow, fallback), {
+      const blocked = await providerActionError(providersRequiredByWorkflow(preflightWorkflow, fallback), {
         repoRoot,
         profileFor: (provider) => (provider === fallback ? parsed.data.agentProfile : undefined),
       });
@@ -7184,8 +7185,9 @@ export function createApp(deps: ServerDeps) {
           workflow = workflows.find((w) => w.name === 'quick-task') ?? QUICK_TASK_WORKFLOW;
         }
 
+        const preflightWorkflow = (await resolveWorkflowModelAlias(workflow, repoRoot)).workflow;
         const fallback = parsed.data?.runner ?? (await loadConfig(repoRoot)).defaultRunner;
-        const blocked = await providerActionError(providersRequiredByWorkflow(workflow, fallback), { repoRoot });
+        const blocked = await providerActionError(providersRequiredByWorkflow(preflightWorkflow, fallback), { repoRoot });
         if (blocked) return c.json({ error: blocked }, 409);
 
         const run = manager.startRun(workflow, {

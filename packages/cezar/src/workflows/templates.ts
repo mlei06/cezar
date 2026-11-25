@@ -1,5 +1,5 @@
 import { READ_ONLY_BASH_PREFIXES } from './capabilities.ts';
-import { graphIssues, graphToSteps, type WorkflowGraph } from './graph.ts';
+import { graphIssues, graphToSteps, type GraphNode, type WorkflowGraph } from './graph.ts';
 import type { WorkflowDef } from './types.ts';
 
 /**
@@ -262,7 +262,78 @@ export const REVIEW_PR = builtIn(
   },
 );
 
-export const BUILT_IN_GRAPH_WORKFLOWS: readonly WorkflowDef[] = [IMPLEMENT_AND_VERIFY, IMPLEMENT_REVIEW_PR, REVIEW_COUNCIL, REVIEW_PR, FIX_CI];
+const SOL = { runner: 'codex', model: 'gpt-6.2-sol' } as const;
+export const LOW_REASONING_MODEL_ALIAS = 'low-reasoning';
+
+export function implementWorkflow(commands: readonly string[]): WorkflowDef {
+  const checks = commands.map((command, index) => ({
+    id: `check-${index + 1}`, type: 'check' as const, literalCommand: true as const, name: command, command,
+  }));
+  const nodes: GraphNode[] = [
+    { id: 'start', type: 'start' },
+    { id: 'work', type: 'agent', ...SOL, prompt: '{{task}}\n\nLeave your changes in the task worktree. Cezar runs validation and opens the PR itself.' },
+    ...checks,
+    { id: 'pr', type: 'github.draft-pr' },
+    { id: 'done', type: 'end', status: 'success' },
+  ];
+  const edges: WorkflowGraph['edges'] = [
+    { from: 'start', to: 'work' },
+    { from: 'work.done', to: checks[0]?.id ?? 'pr' },
+    { from: 'pr.created', to: 'done' },
+    { from: 'pr.nothing', to: 'done' },
+  ];
+  if (checks.length) {
+    nodes.push(
+      { id: 'retry', type: 'loop', max: 2 },
+      { id: 'stopped', type: 'end', status: 'failed' },
+      {
+        id: 'fix', type: 'agent', ...SOL, session: { continue: 'work' },
+        prompt: 'Repair the validation failures and leave changes in the task worktree. Cezar reruns validation and handles publication.\n\n' +
+          checks.map(({ id }) => `${id}: exit {{nodes.${id}.exitCode}}\n{{nodes.${id}.output}}`).join('\n\n'),
+      },
+    );
+    edges.push(
+      ...checks.flatMap(({ id }, index) => [
+        { from: `${id}.pass`, to: checks[index + 1]?.id ?? 'pr' },
+        { from: `${id}.fail`, to: 'retry' },
+      ]),
+      { from: 'retry.repeat', to: 'fix' },
+      { from: 'retry.exhausted', to: 'stopped' },
+      { from: 'fix.done', to: checks[0]!.id },
+    );
+  }
+  return {
+    ...builtIn('implement', 'Implement a change, run project validation, and open a PR when validation passes.', { nodes, edges }),
+    budget: { tokens: 3_000_000, minutes: 30 },
+  };
+}
+
+const IMPLEMENT = implementWorkflow([]);
+export const PLAN: WorkflowDef = {
+  ...builtIn('plan', 'Investigate or design a change in read-only mode.', {
+    nodes: [
+      { id: 'start', type: 'start' },
+      { id: 'work', type: 'agent', ...SOL, allowedTools: ['Read', 'Grep', 'Glob'], prompt: '{{task}}\n\nReport the plan or findings in your response.' },
+      { id: 'done', type: 'end', status: 'success' },
+    ],
+    edges: [{ from: 'start', to: 'work' }, { from: 'work.done', to: 'done' }],
+  }),
+  budget: { tokens: 1_500_000, minutes: 20 },
+};
+
+const OPERATE: WorkflowDef = {
+  ...builtIn('operate', 'Run a known workflow or script and report the result.', {
+    nodes: [
+      { id: 'start', type: 'start' },
+      { id: 'work', type: 'agent', model: LOW_REASONING_MODEL_ALIAS, prompt: '{{task}}\n\nCarry out the requested operation and report the result concisely.' },
+      { id: 'done', type: 'end', status: 'success' },
+    ],
+    edges: [{ from: 'start', to: 'work' }, { from: 'work.done', to: 'done' }],
+  }),
+  budget: { tokens: 800_000, minutes: 20 },
+};
+
+export const BUILT_IN_GRAPH_WORKFLOWS: readonly WorkflowDef[] = [IMPLEMENT_AND_VERIFY, IMPLEMENT_REVIEW_PR, REVIEW_COUNCIL, REVIEW_PR, FIX_CI, IMPLEMENT, PLAN, OPERATE];
 
 /**
  * Assess Impact (spec 2026-10-22-html-artifacts-and-impact): one agent step on the bundled

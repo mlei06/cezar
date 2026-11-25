@@ -4,19 +4,21 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AgentEvent, AgentRunResult, AgentRunSpec } from '../core/agent-runner.ts';
+import type { AgentEvent, AgentRunResult, AgentRunSpec, RunnerId } from '../core/agent-runner.ts';
 import { RunStore } from '../runs/store.ts';
 import { RunManager } from './run.ts';
-import { REVIEW_PR } from './templates.ts';
+import { graphToSteps, type WorkflowGraph } from './graph.ts';
+import { PLAN, REVIEW_PR } from './templates.ts';
 
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
 
 const captured = vi.hoisted(() => ({ launches: [] as Array<{ backend: string; spec: AgentRunSpec }> }));
 
-// A capture stub: the backend refusal itself is `read-only-env.test.ts`'s business.
-vi.mock('../core/runner-factory.ts', () => ({
-  createRunner: (backend: string) => ({
+// Capture supported launches and use the real factory guard for the unsupported backend.
+vi.mock('../core/runner-factory.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/runner-factory.ts')>();
+  return { ...actual, createRunner: (backend: RunnerId) => backend === 'kimi' ? actual.createRunner(backend) : ({
     backend,
     run: async () => ({ text: '', toolCalls: [], tokensUsed: 0 }),
     startSession: (spec: AgentRunSpec, onEvent?: (event: AgentEvent) => void) => {
@@ -38,8 +40,8 @@ vi.mock('../core/runner-factory.ts', () => ({
       };
     },
     interrupt: async () => {},
-  }),
-}));
+  }) };
+});
 
 /** The read-only `review-pr` workflow keeps its tool limits on every launch, or does not launch. */
 describe('a read-only workflow', { timeout: 30_000 }, () => {
@@ -70,6 +72,43 @@ describe('a read-only workflow', { timeout: 30_000 }, () => {
 
   const terminal = (id: string) =>
     vi.waitFor(() => expect(['done', 'review', 'failed', 'cancelled']).toContain(store.getRun(id)?.status), { timeout: 20_000 });
+
+  it('enforces plan policy at launch and Continue', async () => {
+    const id = manager!.startRun(PLAN, { task: 'inspect the repo' }).id;
+    await terminal(id);
+    expect(store.getRun(id)?.status, store.getRun(id)?.error).not.toBe('failed');
+    expect(manager!.continueRun(id, { text: 'investigate further', runner: 'codex' })).toEqual({ ok: true });
+    await vi.waitFor(() => expect(captured.launches).toHaveLength(2), { timeout: 15_000 });
+    await terminal(id);
+    for (const { backend, spec } of captured.launches) {
+      expect(backend).toBe('codex');
+      expect(spec).toMatchObject({
+        enforceReadOnly: true, allowedTools: ['Read', 'Grep', 'Glob'], mcpServers: [],
+        env: { GH_TOKEN: '', GITHUB_TOKEN: '', GIT_TERMINAL_PROMPT: '0' },
+      });
+      expect(spec.bypassPermissions).toBeUndefined();
+    }
+  });
+
+  it('refuses plan launch and Continue when the selected backend cannot enforce read-only mode', async () => {
+    const graph: WorkflowGraph = {
+      ...PLAN.graph!,
+      nodes: PLAN.graph!.nodes.map((node) => node.type === 'agent' ? { ...node, runner: 'kimi', model: undefined } : node),
+    };
+    const first = manager!.startRun({ ...PLAN, graph, steps: graphToSteps(graph) }, { task: 'inspect' }).id;
+    await terminal(first);
+    expect(store.getRun(first)?.error).toContain('kimi cannot keep a read-only task');
+    expect(store.getRun(first)?.steps[0]?.sessionId).toBeUndefined();
+
+    const second = manager!.startRun(PLAN, { task: 'inspect' }).id;
+    await terminal(second);
+    expect(manager!.continueRun(second, { text: 'investigate further', runner: 'kimi' })).toEqual({ ok: true });
+    await vi.waitFor(() => {
+      expect(store.readEvents(second).some((event) =>
+        JSON.stringify(event).includes('kimi cannot keep a read-only task'))).toBe(true);
+    }, { timeout: 15_000 });
+    expect(store.getRun(second)?.steps.at(-1)?.sessionId).toBeUndefined();
+  });
 
   it('launches on Claude with a read-only shell and no private MCP', async () => {
     manager!.startRun(REVIEW_PR, { task: 'https://github.com/o/r/pull/1', runner: 'claude' });

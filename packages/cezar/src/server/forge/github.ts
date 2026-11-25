@@ -2878,7 +2878,7 @@ export async function createDraftPr(input: DraftPrInput): Promise<DraftPrOutcome
   // no later autosave to pick the work up, so a refusal (conflicted tree) or a
   // failed commit has to stop the publish instead of silently opening a PR from
   // a branch that is missing the run's final state.
-  const saved = await autosaveCommit(worktree, 'pre-PR');
+  const saved = await autosaveCommit(worktree, 'pre-PR', input.excludedPaths);
   if (saved === 'refused') {
     return {
       ok: false,

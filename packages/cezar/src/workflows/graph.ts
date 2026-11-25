@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { agentStepSecretsSchema, stepSecretsSchema, workflowBudgetSchema } from '@open-mercato/cezar-contract';
+import { agentStepSecretsSchema, reasoningEffortSchema, stepSecretsSchema, workflowBudgetSchema } from '@open-mercato/cezar-contract';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 import type { WorkflowStepDef } from './types.ts';
 
@@ -57,6 +57,7 @@ export const graphNodeSchema = z.discriminatedUnion('type', [
     prompt: z.string().optional(),
     skill: z.string().optional(),
     model: z.string().optional(),
+    reasoningEffort: reasoningEffortSchema.optional(),
     runner: z.enum(RUNNER_IDS).optional(),
     allowedTools: z.array(z.string()).optional(),
     bashAllowlist: z.array(z.string()).optional(),
@@ -76,6 +77,7 @@ export const graphNodeSchema = z.discriminatedUnion('type', [
     ...nodeBase,
     type: z.literal('check'),
     command: z.string().min(1),
+    literalCommand: z.literal(true).optional(),
     /** v1 compatibility: only these non-zero exits are eligible for an onFail retry. */
     retryOn: z.array(z.number().int().positive()).optional(),
     /** The secrets this command may read (see `workflowStepSchema.secrets`). */
@@ -459,7 +461,7 @@ export function templatedText(n: GraphNode): string[] {
     case 'agent':
       return [n.prompt ?? ''];
     case 'check':
-      return [n.command];
+      return n.literalCommand ? [] : [n.command];
     case 'gate.human':
       return [n.message];
     case 'ask-user':
@@ -508,8 +510,9 @@ function walkOrder(graph: WorkflowGraph): GraphNode[] {
 
 export function nodeToStep(node: Extract<GraphNode, { type: 'agent' | 'check' }>): WorkflowStepDef {
   if (node.type === 'check') {
-    const { type, ...rest } = node;
+    const { type, literalCommand, ...rest } = node;
     void type;
+    void literalCommand;
     return rest;
   }
   // Graph-only fields stay on the node; a v1 step never carries them.

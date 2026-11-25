@@ -6,7 +6,7 @@ import { readFileWithRetry, renameSyncWithRetry, renameWithRetry } from '../fs-r
 // Contract VALUES, like `workspaceUiStateSchema` in workspace/migrations.ts: the tag bounds this
 // file must not `.catch` away are the same constants the PATCH route validates against, so they
 // are imported rather than repeated.
-import { PROJECT_TAGS_MAX, PROJECT_TAG_MAX_LENGTH, perRunner } from '@open-mercato/cezar-contract';
+import { PROJECT_TAGS_MAX, PROJECT_TAG_MAX_LENGTH, perRunner, runnerSchema } from '@open-mercato/cezar-contract';
 import { PROVIDER_IDS, type ProviderId } from '../core/provider-auth.ts';
 import { assertCezarHomeWriteIsSandboxed, isAbsolutePath, workspaceConfigPath } from '../paths.ts';
 
@@ -211,6 +211,14 @@ const orgSkillsRepoSchema = z
 
 export const workspaceConfigSchema = z
   .object({
+    factory: z.object({
+      models: z.object({
+        lowReasoning: z.object({
+          runner: runnerSchema,
+          model: z.string().trim().min(1).max(200).refine((model) => model !== 'low-reasoning'),
+        }).passthrough().optional().catch(undefined),
+      }).passthrough().optional().catch(undefined),
+    }).passthrough().optional().catch(undefined),
     /** Optional instance name shown in the cockpit; absent keeps the product default. */
     branding: z.object({
       name: z.string().trim().min(1).max(80).optional().catch(undefined),
