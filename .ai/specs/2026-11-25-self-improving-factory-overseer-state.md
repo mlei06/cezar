@@ -28,6 +28,7 @@ Last updated: 2026-11-25 21:50 UTC.
 - **Services** (user systemd): `cezar` (runs `~/.cezar/bin/cezar`, the released harness), `factory-poller`, `model-relay`.
 - **Config:** `~/.config/factory-overseer.json` (local, never committed).
 - **Workspace `maxParallel` is 2** (back from 4 after the host overloaded). Raise it only once B22 limits a task's CPU.
+- **WSL is capped at 8 cores and 24 GB** (`.wslconfig`, applies after `wsl --shutdown`; backup `.wslconfig.bak-before-cap`).
 - **Tooling and restore steps:** `.ai/factory-overseer/README.md`.
 - **The judge prototype needs the VPN:** the judge endpoint only resolves on the internal network.
 
