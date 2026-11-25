@@ -292,7 +292,6 @@ New features and improvements found so far, not yet scheduled into a milestone. 
 | B9 | **Score manager turns** | spec open question 4 | M6 |
 | B10 | **Monitoring webhooks** that start investigation tasks | spec D10 | after M6 |
 | B11 | **Upstream #1617:** wait for the maintainers' reply, then open the Azure PR from `feat/azure-repos-forge` | the upstream thread | when they reply |
-| B12 | **Rotate the credentials pasted into chat** (production VM, Jenkins VM, Jenkins login, Azure PAT) | they were pasted on 2026-11-25 | owner, now |
 
 ## Risks
 
@@ -324,4 +323,5 @@ New features and improvements found so far, not yet scheduled into a milestone. 
 
 - v1 (2026-11-25): first plan.
 - v1.1: spec revisions and the backlog, owned by the overseer.
-- v2: the full M0 (hygiene, release script and unit, judge prototype, rubric drafts, poller, warm-up prompt); goals, deliverables, prompts, acceptance and watch points per milestone; the overseer's runbook with blind calibration; definition of done; backlog B1–B12; timeline.
+- v2.1: B12 (credential rotation) dropped at the owner's decision.
+- v2: the full M0 (hygiene, release script and unit, judge prototype, rubric drafts, poller, warm-up prompt); goals, deliverables, prompts, acceptance and watch points per milestone; the overseer's runbook with blind calibration; definition of done; backlog B1–B11; timeline.
