@@ -39,6 +39,7 @@ import {
   type ManagerTaskDetail,
   type ManagerTaskAgent,
   type ManagerAccountState,
+  type ManagerAgentsResponse,
   type ManagerTaskMessageInput,
   type ManagerTaskMessageResponse,
   type ManagerTurnKind,
@@ -3149,6 +3150,8 @@ export class ManagerEngine {
         ...(carried.model ? { model: carried.model } : {}),
         ...(carried.effort ? { reasoningEffort: carried.effort } : {}),
         ...(dispatch ? { dispatch: {} } : {}),
+        ...(input.secrets !== undefined ? { secrets: input.secrets } : {}),
+        ...(input.budget !== undefined ? { budget: input.budget } : {}),
         startedByManager: { id: scope.manager.id, name: scope.manager.name },
         managerAgent: { note: agentNote.slice(0, 500), ...(fallback ? { fallback: fallback.slice(0, 10) } : {}) },
       },
@@ -3190,6 +3193,12 @@ export class ManagerEngine {
       label: state?.label ?? agentProfile ?? 'automatic account',
       ...(state?.until !== undefined ? { until: state.until } : {}),
     };
+  }
+
+  async taskAccounts(id: string, projectId: string): Promise<ManagerAgentsResponse | ManagerRefusal> {
+    const scope = await this.toolScope(id, projectId, false);
+    if ('error' in scope) return scope;
+    return { accounts: await this.accountStates(scope.manager, scope.source ? [scope.source] : []) };
   }
 
   /** The accounts new tasks may use and their limit state, for `cez-manager status`. */
@@ -3384,6 +3393,8 @@ export class ManagerEngine {
       ...(pinned && run.agentProfile ? { agentProfile: run.agentProfile } : {}),
       ...(run.model ? { model: run.model } : {}),
       ...(effort ? { effort } : {}),
+      ...(run.secretNames !== undefined ? { secrets: run.secretNames } : {}),
+      ...(run.budget !== undefined ? { budget: run.budget } : {}),
     }, { runner: run.runner, agentProfile: run.agentProfile, allowed });
     if (!('error' in created)) this.managerActed(id, { tasks: [followKey(input.projectId, run.id)] }, 'you retried that task since');
     return created;

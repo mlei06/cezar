@@ -1,11 +1,14 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentRunSpec, AgentSession } from '../core/agent-runner.ts';
 import { ClaudeCliRunner } from '../core/claude-cli-runner.ts';
 import { CodexAppServerRunner } from '../core/codex-app-server-runner.ts';
+import { runManagerCommand } from '../managers/manager-cli.ts';
+import { registerProject } from '../workspace/projects.ts';
+import { SecretStore } from '../workspace/secrets.ts';
 import type { ManagerEngine } from '../managers/engine.ts';
 import { RunStore } from '../runs/store.ts';
 import { mergeWriteWorkspaceConfig } from '../workspace/config.ts';
@@ -14,6 +17,7 @@ import { composeDispatchPrompt } from '../dispatch/prompts.ts';
 import { RunManager } from '../workflows/run.ts';
 import * as pullRequests from './pr.ts';
 import { createApp } from './server.ts';
+import { apiRequest } from './loopback-request.testkit.ts';
 
 const GLOBAL = 'Do not run the full test suite. Run only focused tests.';
 const PROJECT = 'Keep the project API compatible.';
@@ -40,7 +44,7 @@ describe('manager task instruction propagation through the HTTP API and workflow
     vi.stubEnv('CEZ_DRY_RUN', '1');
     vi.stubEnv('CEZ_AUTONAME', '0');
     vi.stubEnv('CEZ_DISPATCH', '1');
-    vi.stubEnv('CEZ_API_URL', 'http://127.0.0.1:4321');
+    vi.stubEnv('CEZ_API_URL', 'http://127.0.0.1:4399');
     vi.stubEnv('CEZ_AUTOMATIONS', '0');
     execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: root, timeout: 10_000 });
     writeFileSync(join(root, 'file.txt'), 'base\n');
@@ -50,7 +54,7 @@ describe('manager task instruction propagation through the HTTP API and workflow
     mkdirSync(join(root, '.ai/cezar/workflows'), { recursive: true });
     mkdirSync(join(root, '.ai/skills/instruction-check'), { recursive: true });
     writeFileSync(join(root, '.ai/skills/instruction-check/SKILL.md'), `---\nname: instruction-check\n---\n${SKILL}\n`);
-    writeFileSync(join(root, '.ai/cezar/config.json'), JSON.stringify({ systemPrompt: PROJECT }));
+    writeFileSync(join(root, '.ai/cezar/config.json'), JSON.stringify({ systemPrompt: PROJECT, skillsRepos: [] }));
     writeFileSync(join(root, '.ai/cezar/workflows/instructions.yaml'), [
       'name: instructions', 'steps:', '  - id: first', '    skill: instruction-check', '    prompt: "{{task}}"',
       '    runner: codex', '  - id: second', '    prompt: "{{task}}"', '    runner: claude',
@@ -69,8 +73,10 @@ describe('manager task instruction propagation through the HTTP API and workflow
       });
     }
     store = RunStore.open(join(root, '.ai/cezar'));
-    runs = new RunManager(store, root, { semaphore: new WorkspaceSemaphore({ initial: { maxParallel: 2 } }) });
-    app = createApp({ repoRoot: root, version: 'test', store, manager: runs, onManagerEngine: (built) => { engine = built; } });
+    const project = await registerProject(root);
+    const secrets = new SecretStore(process.env, { keychain: async () => null });
+    runs = new RunManager(store, root, { projectId: project.id, secrets, semaphore: new WorkspaceSemaphore({ initial: { maxParallel: 2 } }) });
+    app = createApp({ repoRoot: root, version: 'test', store, manager: runs, bootProjectId: project.id, secrets, onManagerEngine: (built) => { engine = built; } });
   });
 
   afterEach(async () => {
@@ -99,6 +105,95 @@ describe('manager task instruction propagation through the HTTP API and workflow
     const task = await response.json() as { runId: string };
     return { ...task, managerId: manager.id, projectId };
   }
+
+  it('discovers task capabilities and applies CLI overrides through the manager and run APIs', async () => {
+    writeFileSync(join(root, '.ai/cezar/workflows/override.yaml'), [
+      'name: override', 'budget: { tokens: 500, minutes: 20 }', 'steps:',
+      '  - id: agent', '    runner: claude', '    model: sonnet',
+      '    secrets: [WORKFLOW_TOKEN]', '    prompt: "{{task}}"',
+    ].join('\n'));
+    const managerOnly = join(process.env.CEZ_HOME!, 'manager-skills', 'private-playbook');
+    mkdirSync(managerOnly, { recursive: true });
+    writeFileSync(join(managerOnly, 'SKILL.md'), '---\nname: private-playbook\n---\nManager playbook');
+    symlinkSync(managerOnly, join(root, '.ai/skills/private-playbook'), process.platform === 'win32' ? 'junction' : 'dir');
+
+    const created = await request(BASE, { instructions: 'Help with tasks', projects: 'all', cronMinutes: 0 });
+    expect(created.status).toBe(201);
+    const manager = await created.json() as { id: string; connectedProjectIds: string[] };
+    await engine.update(manager.id, { followUp: false, notify: false });
+    const projectId = manager.connectedProjectIds[0]!;
+    const prefix = `/api/v1/p/${projectId}`;
+    for (const [path, description, audiences] of [
+      [`${prefix}/secrets/CLI_TOKEN`, 'Task test token', ['agents']],
+      ['/api/v1/workspace/secrets/WORKFLOW_TOKEN', 'Workflow token', ['agents']],
+      ['/api/v1/workspace/secrets/CHECK_TOKEN', 'Check token', ['checks']],
+    ] as const) {
+      const response = await apiRequest(app, path, {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ value: 'synthetic-value-123', description, audiences }),
+      });
+      expect(response.status).toBe(204);
+    }
+
+    const cli = async (args: string[], status = 0) => {
+      const output: string[] = [];
+      const errors: string[] = [];
+      const code = await runManagerCommand(args, { CEZ_API_URL: 'http://127.0.0.1:4399', CEZ_MANAGER_ID: manager.id }, {
+        fetch: (input, init) => {
+          const url = new URL(String(input));
+          return apiRequest(app, url.pathname + url.search, init);
+        },
+        log: (line) => output.push(line), error: (line) => errors.push(line),
+      });
+      expect(code, errors.join('\n')).toBe(status);
+      return output.join('\n');
+    };
+    const flags = ['--project', projectId, '--json'];
+    const secretJson = await cli(['secrets', ...flags]);
+    expect(secretJson).not.toContain('synthetic-value-123');
+    expect(JSON.parse(secretJson).secrets).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'CLI_TOKEN', description: 'Task test token', audiences: ['agents'], scope: 'project' }),
+      expect.objectContaining({ name: 'WORKFLOW_TOKEN', scope: 'workspace' }),
+    ]));
+    const skills = JSON.parse(await cli(['skills', ...flags])).skills;
+    expect(skills.map((skill: { name: string }) => skill.name)).toContain('instruction-check');
+    expect(skills.map((skill: { name: string }) => skill.name)).not.toContain('private-playbook');
+    expect(JSON.parse(await cli(['models', ...flags, '--runner', 'codex'])).catalogs).toEqual([
+      expect.objectContaining({ runner: 'codex', models: expect.any(Array) }),
+    ]);
+    expect(JSON.parse(await cli(['agents', ...flags])).accounts).toEqual([expect.objectContaining({ runner: expect.any(String) })]);
+    expect(await cli(['workflows', '--project', projectId])).toMatch(/override.*model: claude\/sonnet.*500 tokens, 20 min/);
+    expect(JSON.parse(await cli(['workflows', ...flags])).workflows).toContainEqual(expect.objectContaining({
+      name: 'override', budget: { tokens: 500, minutes: 20 }, capabilities: expect.any(Object),
+    }));
+
+    const createPath = `${BASE}/${manager.id}/tasks`;
+    const task = { projectId, workflow: 'override', task: 'Report status mock:done', runner: 'claude' };
+    expect((await request(createPath, { ...task, budget: { tokens: 1.5 } })).status).toBe(400);
+    expect((await request(createPath, { ...task, secrets: ['CHECK_TOKEN'] })).status).toBe(400);
+    expect((await request(`${prefix}/runs`, { ...task, budget: { minutes: -1 } })).status).toBe(400);
+    expect((await apiRequest(app, `${BASE}/${manager.id}/agents?projectId=outside`)).status).toBe(403);
+    await cli(['task', 'create', '--budget-tokens', '0', 'Invalid'], 1);
+    expect(store.listRuns()).toHaveLength(0);
+
+    const output = await cli(['task', 'create', '--project', projectId, '--workflow', 'override', '--runner', 'claude',
+      '--secrets', 'CLI_TOKEN', '--budget-tokens', '800', '--budget-usd', '0.5', task.task]);
+    const runId = /\[\[task:[^/]+\/([^\]]+)\]\]/.exec(output)?.[1];
+    expect(runId).toBeTruthy();
+    const record = () => store.getRun(runId!);
+    await expect.poll(() => record()?.status, { timeout: 20_000 }).toMatch(/done|review/);
+    const persisted = await apiRequest(app, `${prefix}/runs/${runId}`);
+    expect(await persisted.json()).toMatchObject({ secretNames: ['CLI_TOKEN'], budget: { tokens: 800, minutes: 20, usd: 0.5 } });
+    const launch = specs.at(-1);
+    expect(launch?.env?.CLI_TOKEN).toBe('synthetic-value-123');
+    expect(launch?.env?.WORKFLOW_TOKEN).toBeUndefined();
+    expect(launch?.env?.CHECK_TOKEN).toBeUndefined();
+
+    expect((await request(`${BASE}/${manager.id}/task-message`, { projectId, runId, text: 'Continue mock:done' })).status).toBe(200);
+    await expect.poll(() => specs.at(-1), { timeout: 20_000 }).not.toBe(launch);
+    expect(specs.at(-1)?.env?.CLI_TOKEN).toBe('synthetic-value-123');
+    expect(specs.at(-1)?.env?.WORKFLOW_TOKEN).toBeUndefined();
+  }, 60_000);
 
   it.each([undefined, 'https://github.com/open-mercato/demo/pull/42'])(
     'answers the built-in review gate via task say before publishing (existing PR: %s)', async (existing) => {

@@ -801,6 +801,7 @@ function continuationSession(run: RunRecord | undefined, excludeStepId?: string,
 
 function continuationSecretNames(run: RunRecord | undefined, owner?: StepState): string[] | undefined {
   if (owner?.sessionSecretPolicy) return owner.sessionSecretPolicy.names;
+  if (run?.secretNames !== undefined) return run.secretNames;
   const workflow = run?.workflowDef;
   const steps = workflow?.graph
     ? workflow.graph.nodes.filter((node) => node.type === 'agent')
@@ -1135,6 +1136,8 @@ function formatWakeInstant(at: Date): string {
 }
 
 export interface StartRunInput {
+  secrets?: RunRecord['secretNames'];
+  budget?: RunRecord['budget'];
   /** Internal scheduled launch identity, persisted before any naming or execution side effect. */
   scheduledLaunch?: { id: string; provenance: NonNullable<RunRecord['automationTrigger']>; binding: NonNullable<RunRecord['deferredBinding']> };
   /** Internal child admission: inherit the launch guard without the scheduler's run identity. */
@@ -2265,8 +2268,11 @@ export class RunManager {
     });
     // Persist the full definition so a queued run survives a restart (#367) —
     // ad-hoc "(planned)" chains exist nowhere else to re-resolve from.
+    const budget = workflow.budget ?? input.budget;
     this.store.updateRun(run.id, {
       workflowDef: workflow,
+      ...(input.secrets !== undefined ? { secretNames: input.secrets } : {}),
+      ...(budget !== undefined ? { budget: { ...budget, ...input.budget } } : {}),
       ...(input.startedByManager ? { startedByManager: input.startedByManager } : {}),
     });
     // On the record, not only the input: restart recovery rebuilds the run from it.
@@ -9115,7 +9121,7 @@ export class RunManager {
     );
     const secretNames = graphHooks?.resumeSessionId || graphHooks?.continuing || resumeStep || checkFailure !== null
       ? continuationSecretNames(launchRecord, resumedOwner)
-      : step.secrets?.filter((name) => typeof name === 'string');
+      : launchRecord?.secretNames ?? step.secrets?.filter((name) => typeof name === 'string');
     const reasoningEffort = agentModelsLocked(this.repoRoot)
       ? undefined
       : resolveStepReasoningEffort(step, taskBackend, input.reasoningEffort);
@@ -9788,7 +9794,7 @@ export class RunManager {
           ? Object.values(scheduled.workflowDef.graph.nodes).find(node => node.type === 'agent')
           : scheduled.workflowDef?.steps.find(s => stepKind(s) === 'agent');
         const runner = first?.runner ?? scheduled.runner ?? 'claude';
-        const profile = await this.agentEnvForStep(runId, runner, { namingOnly: true, secretNames: first?.secrets });
+        const profile = await this.agentEnvForStep(runId, runner, { namingOnly: true, secretNames: scheduled.secretNames ?? first?.secrets });
         execution = { runner, env: profile.env, onUsageWindows: profile.onUsageWindows, ...(profile.planUsageAccount ? { planUsageAccount: profile.planUsageAccount } : {}) };
       }
       const result = await generateRunName(this.repoRoot, { task, skillName, skillDescription, ...live, nameBranch: !live }, execution,

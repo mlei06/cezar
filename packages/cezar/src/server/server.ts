@@ -24,7 +24,7 @@ import {
   e2eSetupInputSchema, type E2eStatus, taskActionSurfaceSchema,
 } from '@open-mercato/cezar-contract';
 import { sendSystemNotification } from '../managers/system-notify.ts';
-import { SecretStore, SecretsError, type SecretScopeRef } from '../workspace/secrets.ts';
+import { SecretStore, SecretsError, withoutAgentLogins, type SecretScopeRef } from '../workspace/secrets.ts';
 import { E2E_SETUP_TASK, e2eCredentialsAmong, e2eSetupWorkflow, latestE2eSetupRun, readE2eStatus, setupInFlight } from '../e2e-setup.ts';
 import { createTrackerService } from './tracker/index.ts';
 import { trackerTaskContext, executeTrackerOperation } from './tracker/task-access.ts';
@@ -41,6 +41,7 @@ import {
   createManagerInputSchema,
   managerActionDecisionInputSchema,
   managerActionParamSchema,
+  managerAgentsQuerySchema,
   managerCreateTaskInputSchema,
   managerIdParamSchema,
   managerMemoryParamSchema,
@@ -975,6 +976,9 @@ async function workflowCatalog(repoRoot: string) {
 
 // Give both mounts a named response so declaration emit doesn't inline the full catalog twice.
 interface WorkflowCatalogBody extends Awaited<ReturnType<typeof workflowCatalog>> {}
+interface RunWithUsageBody extends RunRecord {
+  usage?: ReturnType<typeof currentUsage>;
+}
 
 const validateGraphSchema = z.object({ graph: workflowGraphSchema });
 
@@ -5394,7 +5398,7 @@ export function createApp(deps: ServerDeps) {
   // Additive `usage` field (#348): the latest CPU/RSS/proc-count sample of the
   // run's live process tree — absent for finished runs and when `ps` yields
   // nothing. The stored record itself is never touched.
-  const withUsage = (run: RunRecord): RunRecord & { usage?: ReturnType<typeof currentUsage> } => {
+  const withUsage = (run: RunRecord): RunWithUsageBody => {
     const usage = currentUsage(run.id);
     return usage ? { ...run, usage } : run;
   };
@@ -5438,7 +5442,7 @@ export function createApp(deps: ServerDeps) {
   // ---- chained family: runs lifecycle + artifacts (project-scoped) ----
   const runsRoutes = new Hono<ProjectApiEnv>()
     // `workflowDef` is ~1.3 MB per run; the list leaves it out (`?full=1` opts back in, GET /runs/:id is always complete).
-    .get('/runs', queryZodValidator(runsListQuerySchema), (c) => {
+    .get('/runs', queryZodValidator(runsListQuerySchema), (c): Response & TypedResponse<RunWithUsageBody[], 200, 'json'> => {
       const full = c.req.valid('query').full === '1';
       return c.json(
         c
@@ -5547,7 +5551,7 @@ export function createApp(deps: ServerDeps) {
     })
 
     .post('/runs', jsonZodValidator(createRunInputSchema), async (c) => {
-      const { root: repoRoot, dataDir, manager, store } = c.get('project');
+      const { root: repoRoot, dataDir, manager, store, id: projectId } = c.get('project');
       const parsed = { data: c.req.valid('json') };
       // A manager fallback policy bypasses the project's Automatic fallback setting: only the
       // manager engine's in-process request, which carries this process's token, may set one.
@@ -5571,6 +5575,18 @@ export function createApp(deps: ServerDeps) {
         const { workflows } = await loadWorkflows(repoRoot);
         workflow = workflows.find((w) => w.name === parsed.data.workflow);
         if (!workflow) return c.json({ error: `unknown workflow: ${parsed.data.workflow}` }, 404);
+      }
+      if (parsed.data.secrets?.length) {
+        const lists = await Promise.all([
+          secretStore.list({ kind: 'workspace' }),
+          secretStore.list({ kind: 'project', projectId, root: repoRoot }),
+        ]);
+        const available = withoutAgentLogins(Object.fromEntries(lists.flatMap(({ secrets }) =>
+          secrets.filter((secret) => secret.audiences.includes('agents')).map(({ name }) => [name, '']),
+        )));
+        if (parsed.data.secrets.some((name) => !Object.hasOwn(available, name))) {
+          return c.json({ error: 'Requested secrets must be stored for this project or workspace and available to agents. See the secrets list.' }, 400);
+        }
       }
       const fallback = parsed.data.runner ?? (await loadConfig(repoRoot)).defaultRunner;
       const blocked = await providerActionError(providersRequiredByWorkflow(workflow, fallback), {
@@ -5608,6 +5624,8 @@ export function createApp(deps: ServerDeps) {
         reasoningEffort: parsed.data.reasoningEffort,
         runner: parsed.data.runner,
         agentProfile: parsed.data.agentProfile,
+        secrets: parsed.data.secrets,
+        budget: parsed.data.budget,
         images,
         systemPrompt: parsed.data.systemPrompt,
         ...(parsed.data.startedByManager ? { startedByManager: parsed.data.startedByManager } : {}),
@@ -9612,6 +9630,10 @@ export function createApp(deps: ServerDeps) {
     .get('/workspace/managers/:id/snapshot', paramZodValidator(managerIdParamSchema), async (c) => {
       const snapshot = await managerEngine.snapshot(c.req.valid('param').id);
       return snapshot ? c.json(snapshot) : c.json(MANAGER_NOT_FOUND, 404);
+    })
+    .get('/workspace/managers/:id/agents', paramZodValidator(managerIdParamSchema), queryZodValidator(managerAgentsQuerySchema), async (c) => {
+      const outcome = await managerEngine.taskAccounts(c.req.valid('param').id, c.req.valid('query').projectId);
+      return 'error' in outcome ? c.json({ error: outcome.error }, outcome.status) : c.json(outcome);
     })
     .get('/workspace/managers/:id/task', paramZodValidator(managerIdParamSchema), queryZodValidator(managerTaskDetailQuerySchema), async (c) => {
       const { projectId, runId } = c.req.valid('query');

@@ -309,7 +309,11 @@ A queued task keeps its place. A live agent turn stops before its replacement st
 
 `cez-manager task retry <run> --runner codex` retries a failed or cancelled task in place using the switch permissions. A retry without agent flags starts a new task with the original objective, workflow, model and effort. With **Automatic**, it keeps the original agent. A selected **Agent for new tasks** also applies to retries. An incompatible model or effort is refused with the valid choices when available.
 
-Tasks you start yourself also appear in the manager's task list and attention, marked as started by the user, and each task lists the pull request it opened. So a manager can see work that already exists before it starts more. `cez-manager workflows` marks what each workflow can do (push, open a pull request, post to GitHub, or read-only), and the manager is told to use a read-only workflow when you ask only for a review.
+Tasks you start yourself also appear in the manager's task list and attention, marked as started by the user, and each task lists the pull request it opened. So a manager can see work that already exists before it starts more. `cez-manager workflows` marks what each workflow can do (push, open a pull request, post to GitHub, or read-only), and shows the models and budget set in the workflow. The manager uses a read-only workflow when you ask only for a review.
+
+Use `cez-manager secrets` for project and workspace secret names, audiences and descriptions, `skills` for task skills, `models --runner codex` for a runner's models and effort levels, and `agents` for task accounts and their usage-limit state. Each list command accepts `--project <id>` and `--json`.
+
+On `cez-manager task create`, `--secrets NAME,OTHER` sets the agent secret allowlist for the task. Pass `--secrets ""` to grant none. Check steps keep their own bindings. `--budget-tokens`, `--budget-minutes` and `--budget-usd` record per-task limits and take precedence over workflow budget values for the same metric. Budget accounting is planned for M2.
 
 > **Good to know**: Every `cez-manager` command takes `--help`, and `task create --help` lists the project's workflows. A mistyped subcommand such as `task foo` fails with the valid ones instead of being read as a task id.
 
