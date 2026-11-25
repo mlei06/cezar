@@ -1,6 +1,6 @@
 # The self-improving factory
 
-Status: draft v5.13, 2026-11-25. Fork: `mlei06/cezar`, trunk `factory`. Spec owner: the overseer (see the roadmap). Implementation plan: `2026-11-25-self-improving-factory-roadmap.md`. Findings during the build: `2026-11-25-self-improving-factory-observations.md`.
+Status: draft v5.14, 2026-11-25. Fork: `mlei06/cezar`, trunk `factory`. Spec owner: the overseer (see the roadmap). Implementation plan: `2026-11-25-self-improving-factory-roadmap.md`. Findings during the build: `2026-11-25-self-improving-factory-observations.md`.
 
 ## TLDR
 
@@ -541,7 +541,8 @@ A manager is the project's lead and the owner's stand-in: accountable for where 
    - **Progress:** per goal, where it stands, updated after each finished outcome.
    - **Open questions:** what only the owner can answer.
    
-   A missing charter is fine (zero config): the manager drafts one from the repository (README, AGENTS.md, docs, open issues and PRs, recent history) and its first conversation with the owner, and opens it as a docs PR. **Vision, goals and non-goals are the owner's:** the manager proposes changes to them, in a PR the owner merges, and never merges those itself. The backlog, progress and open questions are the manager's to edit freely, through ordinary docs PRs (D11.2: no review task). Project facts stay in AGENTS.md; the charter holds direction, not how-to.
+   A missing charter is fine (zero config): the manager drafts one from the repository (README, AGENTS.md, docs, open issues and PRs, recent history) and its first conversation with the owner, and opens it as a docs PR. **Vision, goals and non-goals are the owner's:** the manager proposes changes to them, in a PR the owner merges, and never merges those itself. The backlog, progress and open questions are the manager's to change freely (D11.2: docs, so no review task). **Every project uses `.ai/project.md`,** whatever else the repository keeps: an existing `ROADMAP.md` or issue tracker is linked from it, not adopted or copied. Project facts stay in AGENTS.md, and AGENTS.md never holds backlog or progress; the charter holds direction, not how-to.
+   **Who writes it:** the manager never commits (D11), so the task that delivers an outcome updates the charter's Progress and Backlog lines in its own PR, as part of its brief. The drafting of a missing charter, and a weekly tidy-up, are small low-reasoning tasks.
 2. **Plan and progress live in the charter, not the chat.** Cezar's managers already run short sessions that restart from cezar-owned memory (spec 2026-11-21). The charter is the durable plan those sessions start from: every new session reads it first, and the manager writes progress back before its session ends, so nothing important lives only in a conversation. Manager memory keeps what the owner asked it to remember; the charter keeps the project's direction and state.
 3. **Effort scales with the job.** Before delegating, the manager sizes the work:
    - **small** (a fix, a docs change, a known script): one task, a low-reasoning model where D2's `operate` fits;
@@ -786,7 +787,7 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
   - no switch happens while work is active;
   - scores record `harnessVersion`.
 - **Manager rules (D11):** the shipped `manage-project` skill states every D11 rule; a run's process has a lower CPU priority than the cockpit.
-- **Project lead (D12):** a project without a charter gets a drafted one as a docs PR; a new manager session's first read is the charter; a finished outcome updates its progress; the manager never merges a change to vision, goals or non-goals.
+- **Project lead (D12):** a project without a charter gets a drafted one as a docs PR; a new manager session's first read is the charter; a finished outcome's PR updates its Progress and Backlog; the manager never merges a change to vision, goals or non-goals.
 - **Compatibility:** old run files parse; contract-parity and route-parity tests pass; every new env var is in `.env.example`.
 
 **Acceptance:**
@@ -804,6 +805,7 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
 
 ## Changelog
 
+- **v5.14:** D12: every project keeps `.ai/project.md` (existing roadmaps are linked, not adopted); charter updates ride in the outcome's own PR, since the manager never commits.
 - **v5.13:** D12, the manager as project lead: a committed charter (`.ai/project.md`) holding vision, goals, non-goals, a ranked backlog, progress and open questions; plans in the charter, not the chat; effort scaling; self-contained briefs; ideation within the vision; a progress cadence; role first. Drawn from public orchestrator and manager designs.
 - **v5.12:** principle: the manager stands in for the owner through the same task paths; hand-made tasks stay first-class and get every addition.
 - **v5.11:** D11, manager operating rules, so the rules the harness manager was given during M1 live in the product: ungated by default, reviews only for runtime changes, two review rounds then the manager decides, ambiguities decided and recorded, docs-only trunk commits never force a rebase, shared-machine test limits and a lower CPU priority for runs, brief contents, detached harness releases, a public fork stays generic.
