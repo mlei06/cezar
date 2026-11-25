@@ -8,6 +8,7 @@ import { CodexAppServerRunner } from '../core/codex-app-server-runner.ts';
 import { mergeWriteWorkspaceConfig } from '../workspace/config.ts';
 import { OpencodeServerRunner } from '../core/opencode-server-runner.ts';
 import { ProviderAuthService } from '../core/provider-auth.ts';
+import * as taskPr from '../server/forge/task-pr.ts';
 import { apiRequest } from '../server/loopback-request.testkit.ts';
 import { createApp } from '../server/server.ts';
 import * as templates from './templates.ts';
@@ -157,6 +158,7 @@ describe('graph workflows run through RunManager', () => {
       writeFileSync(join(args[0].cwd, 'agent-change.txt'), 'agent change\n');
       return original.apply(this, args);
     });
+    const publish = vi.spyOn(taskPr, 'createTaskPr');
     try {
       const workflow = await builtin('implement');
       expect(workflow.graph?.nodes.some((node) => node.type === 'gate.human')).toBe(false);
@@ -168,11 +170,14 @@ describe('graph workflows run through RunManager', () => {
       expect(readFileSync(join(cwd, 'a.txt'), 'utf8')).toBe('check-rewrite\n');
       expect(final.graphState?.loops?.retry ?? 0).toBe(needsRepair ? 1 : 0);
       expect(final.graphState?.taken).toContain('check-2.pass->pr');
+      expect(publish).toHaveBeenCalledTimes(1);
+      expect(publish.mock.calls[0]?.[0].draft ?? true).toBe(true);
       expect(final.pullRequestUrl).toBe(url);
       expect(store.readEvents(id).some((event) => event.type === 'ask.requested')).toBe(false);
       const { stdout } = await run('git', ['diff', '--name-only', `${final.baseBranch}...HEAD`], { cwd });
       expect(stdout.trim()).toBe('agent-change.txt');
     } finally {
+      publish.mockRestore();
       launch.mockRestore();
     }
   }, 30_000);
