@@ -280,6 +280,7 @@ The built-in rubrics start as the overseer's tuned drafts from the build (roadma
 - **What it reads:** the rubric, the labels, the metrics, then the full transcript as plain text ("Data model" describes the format).
 - **Too long:** a transcript longer than the judge's window is shortened only in its largest tool outputs, keeping each one's head and tail. A call or message is never dropped.
 - **Its reply:** JSON, validated against the scorer's labels; retried once if invalid, then recorded as an error.
+- **Reaching the model:** whatever runner the judge uses must reach its endpoint. On this machine OpenCode can't verify davy's corporate certificate by itself (observation M0-3), so OpenCode's davy provider goes through a localhost-only TLS relay. A machine without that setup gets a clear judge error on the Factory view, not silent failures.
 
 **A score** holds the label, its score, pass or fail, and reasoning with quoted evidence. **A failing score names 1–3 causes**, the first being the main one:
 
@@ -743,7 +744,7 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
 
 1. **Hard budgets:** should a task at 4× its budget pause until the manager answers?
 2. **Scoring scope:** score tasks the owner starts by hand too (default yes), or only manager and automation tasks?
-3. **Mistral's context window:** confirm `mistral-large-4`'s window on the davy endpoint (measured in roadmap M0.6); it decides how often transcripts need shortening.
+3. ~~**Mistral's context window**~~ answered in M0: 262,144 tokens, so most transcripts fit whole.
 4. **Scoring the managers:** apply the same metrics, scorers and improvement to manager turns, after D6.
 
 ## Changelog
@@ -758,6 +759,7 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
   - Cezar's existing metrics reused;
   - 1–3 routed causes per failure;
   - one-person defaults.
+- **v5.1:** findings from M0: release ids via linked build worktrees, the davy TLS relay, Mistral's 262k window.
 - **v5:**
   - a reuse map of what Cezar already has, part by part;
   - budgets generalize dispatch's `budgetUsd` with park or notify;

@@ -27,7 +27,15 @@ After M3, this log is also the calibration set for the automated judge.
 
 ## Milestone entries
 
-(added from M0 on)
+### M0 (bootstrap, overseer-built)
+
+| # | Observation | Evidence | Class | Decision |
+|---|---|---|---|---|
+| M0-1 | Local self-update installs all get the same id (`<version>+local`), so releasing twice from one version would overwrite the previous release and break rollback | `installId()` in `self-update/layout.ts` | harness | the release script uses `linkCheckout` with a `release/<sha7>` build branch per release; spec D9 updated |
+| M0-2 | The fork's root `.gitignore` ignored `.ai/cezar/` wholesale, so the harness project couldn't commit its own workflows, scorers or benchmarks | `.gitignore` line 11 | repository (harness) | allowlisted in `b4d4ac1ef` |
+| M0-3 | The OpenCode binary ignores every custom-CA setting (`NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `BUN_CA_BUNDLE_PATH`), so it can't verify davy's corporate certificate. Every OpenCode-Mistral task, the planned `operate` workflow and an OpenCode judge would fail on this machine. | `UNABLE_TO_VERIFY_LEAF_SIGNATURE` on `opencode run`; openssl verifies with the same bundle | access (infra) | a localhost-only, fixed-destination TLS relay (`davy-relay` user service, 127.0.0.1:5001) and OpenCode's davy provider pointed at it; spec D5 judge note |
+| M0-4 | `mistral-large-4` on davy has a 262,144-token window; the largest transcript so far (the upgrade task) renders to about 630k characters, roughly 160k tokens, and fits whole | davy `/v1/models` `max_model_len` | none | answers spec open question 3 |
+| M0-5 | A fork with an `upstream` remote could make task PRs target open-mercato/cezar through cezar's fork-parent lookup | AGENTS.md, fork-parent lookup | harness | `gh repo set-default mlei06/cezar`; upstream push disabled |
 
 ## Judge calibration
 
