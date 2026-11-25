@@ -6756,15 +6756,15 @@ export class RunManager {
     }
     const continuationTools = resolveAgentStepTools(state, toolsStep, savedTools);
     this.store.updateStep(runId, stepId, { toolPolicy: continuationTools });
-    // A graph can reopen one session in several nodes. Use its most recent authored step
-    // for the vault allowlist; synthetic continuation rows carry no workflow definition.
-    const secretStep = record?.workflowDef?.graph && sessionId
-      ? record.steps
-          .filter((s) => s.sessionId === sessionId)
-          .sort((a, b) => (b.startedAt ?? '').localeCompare(a.startedAt ?? ''))
-          .map((s) => defSteps?.find((def) => def.id === s.id))
-          .find((step) => step !== undefined) ?? toolsStep
-      : toolsStep;
+    // A fresh Continue has no session id, and subsequent Continues can own only synthetic rows.
+    // Recover the originating policy from the last executed workflow agent in the saved rail.
+    // Use execution time because graph rail order can differ from the path the run took.
+    const secretStep = record?.steps
+      .filter((s) => s.kind === 'agent' && s.sessionId)
+      .reverse()
+      .sort((a, b) => (b.startedAt ?? '').localeCompare(a.startedAt ?? ''))
+      .map((s) => defSteps?.find((def) => def.id === s.id && stepKind(def) === 'agent'))
+      .find((step) => step !== undefined);
     // The temp-directory preflight (#785) rides along with account resolution on resume.
     let continueProfile: Awaited<ReturnType<RunManager['agentEnvForStep']>>;
     try {

@@ -10,6 +10,7 @@ import type { AgentEvent, AgentRunResult, AgentRunSpec, RunnerId } from '../core
 import { createWorktree } from '../git-worktree.ts';
 import { RunStore } from '../runs/store.ts';
 import { mergeWriteAgentAccounts } from '../workspace/agent-accounts.ts';
+import { SecretStore } from '../workspace/secrets.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { compileV1, graphIssues, graphToSteps } from './graph.ts';
 import { READ_ONLY_TOOLS } from './landing.ts';
@@ -116,11 +117,11 @@ describe('switching a task agent', { timeout: 20_000 }, () => {
     });
   }
 
-  async function restart() {
+  async function restart(secrets?: SecretStore) {
     manager.dispose();
     store.flush();
     store = RunStore.open(join(root, '.ai/cezar'), { keepLive: true });
-    manager = new RunManager(store, root, { semaphore });
+    manager = new RunManager(store, root, { semaphore, secrets });
     await manager.recover();
   }
 
@@ -486,6 +487,52 @@ describe('switching a task agent', { timeout: 20_000 }, () => {
     expect(store.getRun(id)?.steps.map((step) => [step.id, step.status])).toEqual([
       ['work', 'done'], ['continue-1', 'cancelled'], ['continue-2', 'running'],
     ]);
+  });
+
+  it.each([
+    { policy: 'restricted', names: ['ALLOWED_KEY'], expected: ['allowed-fixture', undefined] },
+    { policy: 'empty', names: [], expected: [undefined, undefined] },
+    { policy: 'omitted', names: undefined, expected: ['allowed-fixture', 'other-fixture'] },
+  ])('keeps the originating $policy vault policy across switches and restart', async ({ names, expected }) => {
+    const secrets = new SecretStore(process.env, { keychain: async () => null });
+    const vault = { kind: 'workspace' } as const;
+    await secrets.set(vault, 'ALLOWED_KEY', 'allowed-fixture', ['agents']);
+    await secrets.set(vault, 'OTHER_KEY', 'other-fixture', ['agents']);
+    await addWorkAccount('claude');
+    const definition: WorkflowDef = {
+      name: 'partially-executed', source: 'file',
+      steps: [
+        { id: 'origin', prompt: '{{task}}', ...(names === undefined ? {} : { secrets: names }) },
+        { id: 'later', prompt: '{{task}}' },
+      ],
+    };
+    const { id } = store.createRun({
+      title: 'Continue', workflow: definition.name, task: 't', runner: 'claude', worktree: false,
+      steps: definition.steps.map((step) => ({ id: step.id, name: step.id, kind: 'agent' })),
+    });
+    store.updateStep(id, 'origin', { status: 'done', backend: 'claude', sessionId: 'origin-session' });
+    store.updateRun(id, { status: 'done', workflowDef: definition });
+    await restart(secrets);
+
+    const continueWith = async (opts: Parameters<RunManager['continueRun']>[1], resume: boolean) => {
+      const next = sessions.length;
+      expect(manager.continueRun(id, { text: 'Follow up', ...opts })).toEqual({ ok: true });
+      await vi.waitFor(() => expect(sessions).toHaveLength(next + 1), wait);
+      const session = sessions[next]!;
+      expect(session.spec.resume).toBe(resume);
+      session.settle();
+      await vi.waitFor(() => expect(manager.isActive(id)).toBe(false), wait);
+    };
+
+    await continueWith({ agentProfile: 'work' }, false);
+    await restart(secrets);
+    await continueWith({}, true);
+    await continueWith({ runner: 'codex' }, false);
+    await continueWith({}, true);
+    expect(sessions.map(({ spec }) => [spec.env?.ALLOWED_KEY, spec.env?.OTHER_KEY])).toEqual(
+      [expected, expected, expected, expected],
+    );
+    expect(store.getRun(id)?.steps.find((step) => step.id === 'later')?.status).toBe('pending');
   });
 
   it.each([false, true])('switches the account on Continue with the expected model and effort (locked: %s)', async (locked) => {
