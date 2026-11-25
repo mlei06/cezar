@@ -2,7 +2,7 @@
 
 The overseer's resume point for the self-improving factory build. Updated and pushed at every milestone step and every overseer decision, so the work survives a crashed machine or a new session. Read this first, then the roadmap's Progress table and the observation log.
 
-Last updated: 2026-11-25 21:30 UTC.
+Last updated: 2026-11-25 21:50 UTC.
 
 ## Where the build stands
 
@@ -27,10 +27,11 @@ Last updated: 2026-11-25 21:30 UTC.
 - **Services** (user systemd): `cezar` (runs `~/.cezar/bin/cezar`, the released harness), `factory-poller`, `model-relay`.
 - **Config:** `~/.config/factory-overseer.json` (local, never committed).
 - **Tooling and restore steps:** `.ai/factory-overseer/README.md`.
-- **The judge prototype needs the company network:** the model endpoint's internal hostname doesn't resolve off the VPN. Until it does, calibration pauses; it doesn't block the milestones.
+- **The judge prototype needs the VPN:** the judge endpoint only resolves on the internal network.
 
 ## Open overseer items
 
 - The M1 milestone review: metrics, observations into spec, backlog or nothing.
 - Calibration so far: 4 runs, 16 scorer comparisons. Pass/fail agreement is 14/16. The two disagreements: the overseer under-called efficiency once, and the judge can't see spec drift (backlog B19).
-- Public repository hygiene: keep internal hosts, paths, usernames and job names out of everything pushed. Run data stays in the config's `dataDir`.
+- **Public repository hygiene:** the fork holds nothing internal. No provider ids, hosts, paths, usernames, project names, job names or run data. Project-specific notes belong in that project's own repository; machine settings stay in `~/.config/factory-overseer.json`.
+- **History purge, pending:** commits pushed before 2026-11-25 21:45 UTC on `factory`, `feat/manager-autonomy` and the PR branches still contain internal names in older spec text. Rewrite them once M1's PRs are merged and nothing is open: run `git filter-repo --replace-text` over all fork branches, force-push, then delete the stale branches.

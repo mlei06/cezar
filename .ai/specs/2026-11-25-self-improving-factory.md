@@ -26,9 +26,9 @@ Cezar already runs a factory: managers turn outcomes into tasks, tasks run workf
 - Zero config and compatibility
 - Already shipped, Modules, Tests and acceptance, Open questions, Changelog, Sources
 
-## Evidence (open-webui, 2026-11-25)
+## Evidence (first end-to-end test, 2026-11-25)
 
-The first end-to-end test: an autonomous manager on Codex gpt-6.2-sol, asked only "update production".
+The first end-to-end test: an autonomous manager on a frontier model, asked only to deploy a project's new upstream release to production. (Project-specific details live in that project's own repository.)
 
 | What happened | Root causes | Where the fixes live |
 |---|---|---|
@@ -141,7 +141,7 @@ budget: { tokens: 800000, minutes: 20 }
 steps:
   - id: work
     runner: opencode
-    model: davy/mistral-large-4
+    model: low-reasoning   # resolved from the machine's `factory.models.lowReasoning` setting
     prompt: "{{task}}"
 ```
 
@@ -152,29 +152,28 @@ steps:
 | `implement` | codex, gpt-6.2-sol | 3M, 30 min | coding and fixes; ends at a PR |
 | `plan` | codex, gpt-6.2-sol, read-only | 1.5M, 20 min | specs, investigation, design |
 | `review-pr` (exists) | codex, gpt-6.2-sol, read-only | 1.5M, 20 min | PR review |
-| `operate` | opencode, davy/mistral-large-4 | 800k, 20 min | running known workflows or scripts, status, summaries, moving docs |
+| `operate` | the machine's low-reasoning model (`factory.models.lowReasoning`) | 800k, 20 min | running known workflows or scripts, status, summaries, moving docs |
 | `improve-factory` | codex, gpt-6.2-sol | 4M, 45 min | improvement runs (D6); owner-protected |
 
 **`implement` validates with check steps, not with the model.** Its graph is an agent step, then one check step per validation command, with a failing check looping back to the agent (at most twice). Waiting for the tests is then the engine's job. The commands come from the project's existing `.ai/agentic.config.json` (`validation.commands`, which the om-* skills already read), else from the project's `test` script. Guidance in a skill wasn't enough: the M0 warm-up task polled its test run across eight model turns although `factory-work` told it not to (observation M0-6).
 
-The built-in model choices are defaults for this fork's machine. A project overrides a built-in by committing a workflow with the same name. A machine without OpenCode or Mistral falls back to the project's default runner for `operate`, with a note on the task.
+The model `low-reasoning` is an alias that resolves, per machine, to the `factory.models.lowReasoning` setting (a runner and a model). The harness names no provider: a machine points it at whatever cheap or self-hosted model it has. Unset, it resolves to the project's default runner at low effort, with a note on the task. A project overrides a built-in by committing a workflow with the same name.
 
-A project adds its own task workflows. Open-webui's `deploy`, for example:
+A project adds its own task workflows. A deployment project's `deploy`, for example:
 
 ```yaml
 name: deploy
-description: Deploy main to production through Jenkins and verify it.
+description: Deploy main to production through the project's CI and verify it.
 budget: { tokens: 600000, minutes: 60 }
 nodes:
   - { id: start, type: start }
-  - { id: preflight, type: check, command: python3 .ai/skills/jenkins-deploy/scripts/deploy.py preflight }
-  - { id: rollout, type: check, command: python3 .ai/skills/jenkins-deploy/scripts/deploy.py apply }
+  - { id: preflight, type: check, command: python3 .ai/skills/deploy/scripts/deploy.py preflight }
+  - { id: rollout, type: check, command: python3 .ai/skills/deploy/scripts/deploy.py apply }
   - id: report
     type: agent
-    runner: opencode
-    model: davy/mistral-large-4
-    skill: jenkins-deploy
-    secrets: [JENKINS_URL, JENKINS_USER, JENKINS_PASSWORD, DEPLOY_HOST]
+    model: low-reasoning
+    skill: deploy
+    secrets: [CI_URL, CI_USER, CI_TOKEN, DEPLOY_HOST]
     prompt: "Summarize the rollout from {{nodes.rollout.output}} in three sentences."
   - { id: done, type: end, status: success }
 edges:
@@ -204,12 +203,12 @@ The manager picks the workflow with `--workflow`. `--model`, `--skill`, `--secre
 **The capability block.** Cezar writes it into every task's system prompt, capped at 2k characters, after the project and workflow instructions. The model never writes it:
 
 ```
-Workflow: deploy (opencode, davy/mistral-large-4); budget 600k tokens, 60 min active
+Workflow: deploy (low-reasoning model); budget 600k tokens, 60 min active
 Secrets in your environment (values hidden; never print them):
-  JENKINS_URL / JENKINS_USER / JENKINS_PASSWORD: Jenkins API (CA: the project's CA bundle)
+  CI_URL / CI_USER / CI_TOKEN: the CI server's API
   DEPLOY_HOST: production host address
 Other workflows in this project: implement, plan, review-pr, operate
-Attached skill: jenkins-deploy (scripts in its folder)
+Attached skill: deploy (scripts in its folder)
 ```
 
 Over the cap, Cezar trims in this order: other workflows' names, then secret descriptions. Secret names are never dropped, and the cap doesn't apply to them. If the names alone would exceed 2k, they're listed compactly, comma-separated on one line, and the block may run over the cap by that much. It also reports how many entries it omitted, on one short line. That omission line, like the secret names, is mandatory and exempt from the cap: the cap governs only the optional content (descriptions and other workflows). (v5.3, v5.5, both after the manager flagged boundary conflicts.)
@@ -278,12 +277,12 @@ Judge the run against its brief only. Quote the transcript lines your label rest
 The built-in rubrics start as the overseer's tuned drafts from the build (roadmap M0.6 and M3).
 
 **The judge.**
-- **Who:** by default OpenCode with `davy/mistral-large-4`, self-hosted, so transcripts stay on the internal network and scoring costs only time.
+- **Who:** the machine's `factory.judge` setting (a runner and model). Cezar names no provider. Unset, the judge is the project's default runner at low effort. A self-hosted model is the intended choice, so transcripts stay inside the owner's network and scoring costs only time.
 - **How:** the same one-shot call Cezar already makes for commit messages and titles. That's `createRunner` and `runner.run` with no tools, a timeout, and two attempts where the second carries the rejection reason. It's tracked in the usage ledger as a new internal consumer, `scoring`. One call per scorer, never a task, so scoring creates no runs. Calls run one at a time per machine (a small queue).
 - **What it reads:** the rubric, the labels, the metrics, then the full transcript as plain text ("Data model" describes the format).
 - **Too long:** a transcript longer than the judge's window is shortened only in its largest tool outputs, keeping each one's head and tail. A call or message is never dropped.
 - **Its reply:** JSON, validated against the scorer's labels; retried once if invalid, then recorded as an error.
-- **Reaching the model:** whatever runner the judge uses must reach its endpoint. On this machine OpenCode can't verify the endpoint's internal certificate by itself (observation M0-3), so OpenCode's davy provider goes through a localhost-only TLS relay. A machine without that setup gets a clear judge error on the Factory view, not silent failures.
+- **Reaching the model:** the configured runner must reach its endpoint. A runner that can't verify an endpoint's certificate is a machine setup problem: a judge that fails shows a clear error on the Factory view, never silent gaps.
 
 **A score** holds the label, its score, pass or fail, and reasoning with quoted evidence. **A failing score names 1–3 causes**, the first being the main one:
 
@@ -392,7 +391,7 @@ Cezar enforces this. A PR that touches a protected path is marked owner-only, an
 | Scope | docs, agents-md, skills, workflows, code | same |
 | Scorers sampled | all four on every run | same |
 | Task budget | 3M input tokens, 30 active minutes | same |
-| Judge | opencode, davy/mistral-large-4 | same |
+| Judge | the machine's `factory.judge` setting; unset: the project's default runner at low effort | same |
 
 ### D8. Replay and benchmarks
 
@@ -411,7 +410,7 @@ These join the run's existing snapshots of its workflow definition (`workflowDef
 - `--times <n>` (default 1, at most 5).
 
 Replays reuse parallel variants (spec 010):
-- **Grouping:** the original joins a variant group as the baseline, and each replay is a variant labelled with its change (`harness 3a12b69`, `model mistral`, `skill jenkins-deploy`, `brief v2`).
+- **Grouping:** the original joins a variant group as the baseline, and each replay is a variant labelled with its change (`harness 3a12b69`, `model low-reasoning`, `skill deploy`, `brief v2`).
 - **The task list** shows the group as one tile that expands, as it does for variants today. Each replay's row has its own Outcome, Efficiency and main cause.
 - **The Compare view** (`/groups/:groupId`) gains score columns per variant: pass or fail per scorer, tokens, active time and cost. With several replays per variant it also shows the pass rate and averages. It keeps its file and diff comparison; the "choose a winner" action is hidden for replay groups, since they're experiments.
 
@@ -430,17 +429,17 @@ Two extensions to variants make this work:
 
 ```yaml
 # suite.yaml
-description: Deploy-status tasks for open-webui
+description: Deploy-status tasks for a deployment project
 configurations:
-  - { name: mistral, model: davy/mistral-large-4 }
+  - { name: low-reasoning, model: low-reasoning }
   - { name: sol-low, runner: codex, model: gpt-6.2-sol, effort: low }
-tasks: [jenkins-status, prod-health]
+tasks: [ci-status, prod-health]
 scorers: [outcome, efficiency]
 times: 3
 ---
-# tasks/jenkins-status.yaml
+# tasks/ci-status.yaml
 title: Report the last CI and CD builds
-sourceRun: 43299e6b-29eb-450a-8c2e-e38c1ef8a533   # optional
+sourceRun: <run id>   # optional
 workflow: operate
 prompt: Report the last CI and CD builds and their results.
 successCriteria: Both build numbers and results are correct.
@@ -503,7 +502,7 @@ These use Cezar's existing automations and manager jobs:
   - queue sizes and top open causes;
   - improvement PRs merged or waiting, with their before/after.
 - **On a main CI failure:** a `fix-ci` task.
-- **Daily:** a credential health check that every secret a workflow names still works (Jenkins login, PAT expiry, SSH reachability), using check commands a project declares in a `credential-health` workflow. A failure becomes an `access` cause and a note to the owner before it blocks a run.
+- **Daily:** a credential health check that every secret a workflow names still works (CI login, token expiry, SSH reachability), using check commands a project declares in a `credential-health` workflow. A failure becomes an `access` cause and a note to the owner before it blocks a run.
 - **Later:** monitoring webhooks (Sentry/Grafana style) that start an investigation task.
 
 ## Data model and storage
@@ -547,7 +546,7 @@ These use Cezar's existing automations and manager jobs:
 { "scorer": "efficiency", "label": "wasteful", "score": 0, "pass": false,
   "reasoning": "…", "evidence": ["…"],
   "causes": [{ "category": "repository", "target": "docs", "evidence": "…", "fix": "…" }],
-  "judge": { "runner": "opencode", "model": "davy/mistral-large-4", "transcriptChars": 0, "shortened": false },
+  "judge": { "runner": "<runner>", "model": "<model>", "transcriptChars": 0, "shortened": false },
   "harnessVersion": "<sha>", "projectCommit": "<sha>", "at": "…" }
 ```
 
@@ -578,7 +577,8 @@ workflow implement · codex gpt-6.2-sol · started by manager · status done · 
 
 | Key | Default | Project override |
 |---|---|---|
-| `judge.runner`, `judge.model` | `opencode`, `davy/mistral-large-4` | no |
+| `judge.runner`, `judge.model` | unset (the project's default runner at low effort) | no |
+| `models.lowReasoning.runner`, `models.lowReasoning.model` | unset (the project's default runner at low effort) | no |
 | `scoring.enabled` | true | yes |
 | `scoring.sampling.<scorer>` | 100 | yes |
 | `budget.tokens`, `budget.minutes` | 3,000,000, 30 | yes |
@@ -657,7 +657,7 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
 
 ## Zero config and compatibility
 
-- **Nothing is required.** With no files, a project gets the built-in task workflows and scorers and the default settings. Without OpenCode or Mistral on the machine, the judge falls back to the project's default runner and model at low effort, with a note in the Factory view.
+- **Nothing is required.** With no files, a project gets the built-in task workflows and scorers and the default settings. Without a configured judge, it falls back to the project's default runner and model at low effort, with a note in the Factory view.
 - **Default-on features that cost model time,** following AGENTS.md's zero-config rule. These are owner-approved exceptions on this fork, recorded in its AGENTS.md:
   - scoring (`CEZ_SCORING=0` to turn off);
   - self-improvement (`CEZ_SELF_IMPROVEMENT=0`);
@@ -708,7 +708,7 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
   - `operate` falls back on a machine without OpenCode.
 - **Capability block:** names exactly the granted secrets and never a value; lists the workflows and the attached skill; trims in order and stays under the cap.
 - **Budget:** one follow-up per crossing; the next at 2×, then 4×; queued, parked and gate time don't count.
-- **Metrics,** from the replayed open-webui upgrade log: 116 model requests, about 93k average context, the 77k first output among the largest.
+- **Metrics,** from a replayed log of the first end-to-end test's upgrade task: 116 model requests, about 93k average context, the 77k first output among the largest.
 - **Scoring:**
   - every sampled scorer records a valid label, or an error after one retry;
   - a failing score has 1–3 causes, each with evidence found in the transcript or metrics;
@@ -738,7 +738,7 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
 - **Compatibility:** old run files parse; contract-parity and route-parity tests pass; every new env var is in `.env.example`.
 
 **Acceptance:**
-- Rerunning "update production" on open-webui needs no round trip to the owner for access, and its tasks stay within budget.
+- Rerunning the first end-to-end test's deploy request needs no round trip to the owner for access, and its tasks stay within budget.
 - Every finished task shows Outcome and Efficiency within a minute when the judge is up.
 - Within two weeks of D6 shipping, at least one project improvement PR and one harness improvement PR have merged, and the failure rates of their clusters have dropped.
 - The overseer's calibration (roadmap M3) shows the judge agreeing with the overseer on pass/fail for at least 80% of sampled runs, and on the main cause's target for at least 70%.
@@ -747,7 +747,7 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
 
 1. **Hard budgets:** should a task at 4× its budget pause until the manager answers?
 2. **Scoring scope:** score tasks the owner starts by hand too (default yes), or only manager and automation tasks?
-3. ~~**Mistral's context window**~~ answered in M0: 262,144 tokens, so most transcripts fit whole.
+3. ~~**The judge model's context window**~~ answered in M0: 262,144 tokens, so most transcripts fit whole.
 4. **Scoring the managers:** apply the same metrics, scorers and improvement to manager turns, after D6.
 
 ## Changelog
@@ -762,13 +762,14 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
   - Cezar's existing metrics reused;
   - 1–3 routed causes per failure;
   - one-person defaults.
+- **v5.8:** no provider or project-specific names in the harness: the judge and the low-reasoning model (`operate`) are machine settings (`factory.judge`, `factory.models.lowReasoning`); evidence and examples made generic.
 - **v5.7:** render applies the same own-value check (omit), covering older descriptions; still no other scanning.
 - **v5.6:** secret descriptions: refuse one containing its own secret's value at write time; no other scanning or scrubbing.
 - **v5.5:** the capability block's omission-count line is mandatory and exempt from the cap, like secret names.
 - **v5.4:** agent-step secrets on Continue: the resumed step's recorded allowlist, else the intersection of all agent steps' allowlists; never widen on doubt.
 - **v5.3:** the capability block's 2k cap never drops secret names; names alone may exceed it, listed compactly (conflict raised by the harness manager in M1).
 - **v5.2:** `implement` validates with check steps from `.ai/agentic.config.json` (M0 warm-up finding).
-- **v5.1:** findings from M0: release ids via linked build worktrees, the davy TLS relay, Mistral's 262k window.
+- **v5.1:** findings from M0: release ids via linked build worktrees, a TLS relay for a self-hosted endpoint, a 262k-token judge window.
 - **v5:**
   - a reuse map of what Cezar already has, part by part;
   - budgets generalize dispatch's `budgetUsd` with park or notify;
