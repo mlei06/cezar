@@ -10,6 +10,16 @@ describe('restricted Codex command approvals', () => {
   it.each(['touch x', 'git push', 'gh pr merge 3', 'gh pr comment 3 --body x', 'gh api repos/o/r -X POST', 'git status; touch x', 'git status && git push', 'gh pr diff 3 | sh', 'cat $(touch x)', 'cat `touch x`', 'cat <(touch x)', 'cat a > b', 'cat a\ntouch x', 'env git status', 'sh -c "git status"', './git status', '/usr/bin/git status', 'git -c core.fsmonitor=evil status', 'git ls-files --with-tree=evil', 'rg --pre touch x', 'rg --hostname-bin evil x', 'sed -n "1e touch x" a', 'sed -i a b', 'gh pr view 3 --web', 'gh pr checks 3 --watch', 'cat a &', 'cat *', 'cat a\\;touch x'])('denies mutation, execution or unsupported syntax: %s', cmd => {
     expect(codexBashArgv(cmd, policy)).toBeUndefined();
   });
+  it('reads a change with git diff, show and log, never running an external driver or writing a file', () => {
+    const git = { ...policy, bashPrefixes: [...policy.bashPrefixes, 'git diff', 'git show', 'git log'] };
+    expect(codexBashArgv('git diff --stat main...HEAD', git)).toEqual(['git', 'diff', '--no-ext-diff', '--no-textconv', '--stat', 'main...HEAD']);
+    expect(codexBashArgv('git log --oneline -n20 main..HEAD', git)).toBeDefined();
+    expect(codexBashArgv('git show --format=%H HEAD:a.txt', git)).toBeDefined();
+    for (const cmd of ['git diff --output=.git/config', 'git diff --ext-diff', 'git log --output=x', 'git show --textconv HEAD', 'git diff -o x']) {
+      expect(codexBashArgv(cmd, git)).toBeUndefined();
+    }
+  });
+
   it('rejects a custom shell, raw command, and unknown shape', () => {
     for (const command of ['/tmp/evil -c "git status"', {}, null, '/bin/sh -c "git status" extra']) expect(codexBashArgv(command, policy)).toBeUndefined();
   });

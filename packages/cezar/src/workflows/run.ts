@@ -85,6 +85,7 @@ import { readAgentModelProvider } from '../agent-config/models.ts';
 import { loadConfig, type CezConfig } from '../config.ts';
 import { bypassPermissionsBlocked } from '../bypass-permissions.ts';
 import { withoutAgentLogins } from '../workspace/secrets.ts';
+import { preparePrDiff, reviewedPrNumber, type PrDiff } from './pr-diff.ts';
 import { isLifecycleConfigTracked } from '../worktree-lifecycle/config.ts';
 import { generateCommitMessage } from './commit-message.ts';
 import { hasUnlanded, landInPlace, landingPromptPart, READ_ONLY_PROMPT, READ_ONLY_TOOLS, type LandResult } from './landing.ts';
@@ -619,6 +620,8 @@ interface ActiveRun {
   interrupt: () => void;
   /** Where this run's steps execute: the task worktree, or the repo root. */
   cwd: string;
+  /** The reviewed PR's diff, prepared once for every read-only step of this run (pr-diff.ts). */
+  prDiff?: Promise<PrDiff>;
   /** The live session's backend — set when it opens, confirmed by `session.started`; picks a command's variant. */
   sessionBackend?: string;
   /** `skill_missing_in_session` is counted once per ActiveRun, not per agent retry. */
@@ -8955,7 +8958,15 @@ export class RunManager {
     // An attachment-only task (telemetry 18c930de) — the note stands in for the missing text, so a
     // step template (`Review: {{task}}`) still reads as a sentence.
     const taskText = input.task.trim() === '' && attachments.length ? ATTACHMENT_ONLY_TASK : input.task;
-    const rawPrompt = applyTemplate(step.prompt ?? '{{task}}', taskText);
+    let rawPrompt = applyTemplate(step.prompt ?? '{{task}}', taskText);
+    // A read-only step reviewing a PR gets the change from cezar, on any forge (see pr-diff.ts).
+    const reviewed = isReadOnlyStep(step) ? reviewedPrNumber(input.task) : undefined;
+    if (reviewed !== undefined) {
+      const prepared = await (state.prDiff ??= preparePrDiff(this.repoRoot, reviewed, artifactsDir(this.dataDir, runId)));
+      rawPrompt = prepared.ok
+        ? `${rawPrompt}\n\nThe pull request's full diff and commits, prepared by cezar from the forge's merge ref, are in ${prepared.path} (${prepared.files} files). Read that file with Read: it is the change under review. Use \`gh\` only if this is a GitHub repository and you need comments or checks.`
+        : `${rawPrompt}\n\nCezar could not prepare this pull request's diff: ${prepared.reason}. Say so in your report rather than guessing.`;
+    }
     // Install the selected skill and its companions where the agent's own skill lookup looks.
     const provision = await this.provisionTaskSkills(state, {
       stepSkill: step.skill,
@@ -11315,6 +11326,11 @@ async function currentCheckExclusions(dir: string, owned: Map<string, string>): 
 
 async function captureCheckArtifacts(dir: string, owned: Map<string, string>): Promise<void> {
   for (const path of await worktreeChangedPaths(dir)) owned.set(path, fileSnapshot(dir, path));
+}
+
+/** A step that cannot change files: a reviewer, whatever its shell grant reads. */
+function isReadOnlyStep(step: WorkflowStepDef): boolean {
+  return Array.isArray(step.allowedTools) && !step.allowedTools.some((tool) => ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'].includes(tool));
 }
 
 function applyTemplate(template: string, task: string): string {

@@ -9,6 +9,8 @@ const READ_TOOLS = new Set(['Read', 'Grep', 'Glob', 'Bash']);
 export const CODEX_READ_PREFIXES = [
   'gh pr view', 'gh pr diff', 'gh pr checks', 'gh pr list', 'gh issue view', 'gh issue list', 'gh repo view',
   'git status', 'git ls-files', 'git rev-parse', 'git merge-base',
+  // Reading a change without GitHub (an Azure Repos PR, a fetched ref): diffs, commits, file contents.
+  'git diff', 'git show', 'git log',
 ] as const;
 
 export interface CodexRestrictedPolicy {
@@ -45,7 +47,18 @@ const GIT_FLAGS: Readonly<Record<string, ReadonlySet<string>>> = {
   'ls-files': new Set(['--cached', '-c', '--modified', '-m', '--deleted', '-d', '--others', '-o', '--exclude-standard', '--stage', '-s', '--full-name', '--error-unmatch']),
   'rev-parse': new Set(['--show-toplevel', '--git-dir', '--absolute-git-dir', '--is-inside-work-tree', '--abbrev-ref', '--verify', '--symbolic-full-name', '--short']),
   'merge-base': new Set(['--is-ancestor', '--all', '-a', '--octopus', '--independent']),
+  diff: new Set(['--stat', '--name-only', '--name-status', '--numstat', '--shortstat', '--no-color', '--patch', '-p', '--cached', '--staged', '--merge-base', '-w', '--ignore-all-space', '-b', '--ignore-space-change', '-M', '--find-renames', '--no-ext-diff', '--no-textconv']),
+  show: new Set(['--stat', '--name-only', '--name-status', '--numstat', '--shortstat', '--no-color', '--patch', '-p', '--no-patch', '-s', '--oneline', '--no-ext-diff', '--no-textconv']),
+  log: new Set(['--oneline', '--stat', '--name-only', '--name-status', '--no-color', '--patch', '-p', '--first-parent', '--no-merges', '--merges', '--reverse', '--graph', '--decorate', '--all', '--no-ext-diff', '--no-textconv']),
 };
+/** `--flag=value` spellings that only shape output (never `--output=`, which writes a file). */
+const GIT_VALUE_FLAGS: Readonly<Record<string, RegExp>> = {
+  diff: /^(-U\d+|--unified=\d+|--diff-filter=[ACDMRTUXB*]+|--stat=\d+(,\d+)*|--relative(=[^-][^=]*)?)$/,
+  show: /^(-U\d+|--unified=\d+|--format=.*|--pretty=.*|--stat=\d+(,\d+)*)$/,
+  log: /^(-n\d+|-\d+|--max-count=\d+|--format=.*|--pretty=.*|--since=[^-].*|--until=[^-].*|--author=.*|--grep=.*|--skip=\d+)$/,
+};
+/** Inserted after the verb: no configured external diff driver or text converter ever runs. */
+const GIT_NO_EXTERNAL = new Set(['diff', 'show', 'log']);
 function flags(args: readonly string[], bare: ReadonlySet<string>, value: ReadonlySet<string> = new Set()): boolean {
   let operandsOnly = false;
   for (let i = 0; i < args.length; i++) {
@@ -76,7 +89,10 @@ function permittedArgv(argv: readonly string[], policy: CodexRestrictedPolicy): 
     if (!policy.bashPrefixes.includes(prefix)) return false;
     if (program === 'gh') return github(argv);
     const verb = argv[1]!;
-    return !!GIT_FLAGS[verb] && flags(argv.slice(2), GIT_FLAGS[verb]);
+    if (!GIT_FLAGS[verb]) return false;
+    const pattern = GIT_VALUE_FLAGS[verb];
+    const rest = pattern ? argv.slice(2).filter((arg) => !pattern.test(arg)) : argv.slice(2);
+    return flags(rest, GIT_FLAGS[verb]);
   }
 
   return false;
@@ -87,7 +103,9 @@ export function codexBashArgv(command: unknown, policy: CodexRestrictedPolicy): 
   if (typeof command !== 'string' || command.length > 16_000 || /[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(command)) return undefined;
   const parsed = tokenizePlainShell(command);
   if (typeof parsed === 'string' || parsed.length !== 1 || !permittedArgv(parsed[0]!, policy)) return undefined;
-  return parsed[0];
+  const argv = parsed[0]!;
+  if (argv[0] === 'git' && GIT_NO_EXTERNAL.has(argv[1]!)) return ['git', argv[1]!, '--no-ext-diff', '--no-textconv', ...argv.slice(2)];
+  return argv;
 }
 
 /** Called only after argv validation; separates operands from search/filter flag values. */
