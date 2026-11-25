@@ -42,6 +42,15 @@ After M3, this log is also the calibration set for the automated judge.
 | M0-9 | The first warm-up review approved after reading the diff without running tests ("Tests were not run") | review 89c3fffa | task-setup | acceptable for review-pr (read-only); validation belongs in the implement workflow's checks (v5.2) |
 | M0-10 | The warm-up task stayed `running` for about 6 minutes after its PR merged, holding up the release's wait for idle | release log 09:37 to 09:43; task 85efd7a7 | harness | backlog B14: a task whose PR merged should settle promptly; the release's wait should ignore tasks only monitoring a merged PR |
 
+### M1
+
+| # | Observation | Evidence | Class | Decision |
+|---|---|---|---|---|
+| M1-1 | `maxParallel` 2 left a docs-only review queued 23 minutes behind two long implementation tasks | review e7d87e48 queued 09:45 to 10:08 | harness (settings) | workspace `maxParallel` raised to 4 |
+| M1-2 | The manager stopped and raised a real spec conflict (D3's cap against never dropping secret names) instead of deciding it | manager message 09:44 | none (good) | spec v5.3 |
+| M1-3 | All three code tasks so far polled their test runs through the model (8 to 16 turns each), despite the `factory-work` guidance | judge efficiency on 85efd7a7 and 6651d04f | harness | confirms v5.2 (`implement` validates with check steps); M1 item 2 |
+| M1-4 | Implementation tokens are high: 7.2M (secret descriptions), 11.9M (workflow fields), largely from long full-suite waits re-reading context | run records | harness | budgets (M2) and v5.2 checks should cut this; re-measure after M1 |
+
 ## Judge calibration
 
 Blind comparisons: the overseer's verdict is written before Mistral's is read, on every third task and every failing one (roadmap runbook). The spec's targets are 80% agreement on pass/fail and 70% on the main cause's target.
@@ -57,6 +66,11 @@ Blind comparisons: the overseer's verdict is written before Mistral's is read, o
 | cezar 85efd7a7 | efficiency | wasteful (after seeing metrics) | wasteful | yes | yes: workflow | |
 | cezar 85efd7a7 | procedure | followed | followed | yes | n/a | |
 | cezar 85efd7a7 | scope | in-scope | in-scope | yes | n/a | |
+
+| cezar 6651d04f (secret descriptions) | outcome | delivered | delivered | yes | n/a | |
+| cezar 6651d04f | efficiency | lean (blind, from the PR only) | some-waste | yes (both pass) | n/a | the judge saw 16 polling turns during a 17-min test run that the PR didn't show |
+| cezar 6651d04f | procedure | followed | followed | yes | n/a | |
+| cezar 6651d04f | scope | in-scope | in-scope | yes | n/a | |
 
 Rubric revisions: efficiency v2 (2026-11-25), anchored labels after the 43299e6b disagreement. Judge prompt: target definitions added after the same run.
 
