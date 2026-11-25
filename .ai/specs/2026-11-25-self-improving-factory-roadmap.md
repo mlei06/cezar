@@ -1,182 +1,275 @@
 # Roadmap: building the self-improving factory
 
-Companion to `2026-11-25-self-improving-factory.md` (the spec). Status: v1, 2026-11-25.
+Companion to `2026-11-25-self-improving-factory.md` (the spec, v4). Status: v2, 2026-11-25. Findings: `2026-11-25-self-improving-factory-observations.md`.
 
-The factory is built by the factory. After a one-time bootstrap (M0), which the overseer builds by hand, the Cezar fork's own manager implements every later milestone through tasks and pull requests. The overseer prompts it, watches it, intervenes when needed, and turns what goes wrong into changes to the spec and this roadmap. Building the factory is the first real workload the factory learns from.
+The factory is built by the factory. After a one-time bootstrap (M0), which the overseer builds by hand, the Cezar fork's own manager implements every later milestone through tasks and pull requests. The overseer prompts it, watches it, intervenes when needed, and turns what goes wrong into changes to the spec and this roadmap. Building the factory is the first real workload the factory learns from, and the overseer acts as its self-improvement engine until the factory has its own.
+
+## Contents
+
+- Goal and definition of done
+- Who does what
+- Branches and the running harness
+- M0 to M6, each with: goal, deliverables, the prompt, acceptance, what the overseer watches
+- The overseer's runbook
+- Spec revisions and the backlog
+- Risks, timeline, changelog
+
+## Goal and definition of done
+
+The program is done when all of these hold:
+1. Every milestone's acceptance holds on the live cockpit.
+2. Open-webui's "update production" runs end to end with no round trip to the owner for access, within budget, and shows scores on every task.
+3. The factory has merged at least one project improvement PR and one harness improvement PR on its own, and their clusters' failure rates fell.
+4. The harness ships its own releases through `harness-release`, with at least one automatic rollback demonstrated.
+5. The overseer's calibration shows the judge agreeing on pass/fail for at least 80% of sampled runs, and on the main cause's target for at least 70%.
 
 ## Who does what
 
 | Who | What | How |
 |---|---|---|
-| **Owner** (Michael) | sets direction, approves owner-only changes (D6), supplies credentials | talks to the overseer, or directly to any manager |
-| **Overseer** (Claude Code, outside Cezar) | builds M0; after that writes no code. Writes prompts for the harness manager, monitors it and its tasks, reviews milestones, releases the harness until M4, keeps the spec, roadmap and observation log | the cockpit API, the manager's chat (speaking as the owner), git and `gh` for reading, the release script |
-| **Harness manager** (the `cezar` project's manager in Cezar; Codex gpt-6.2-sol, autonomous) | turns each milestone into tasks, briefs them, reviews and merges their PRs, reports | `cez-manager`, with the `manage-project` skill |
+| **Owner** (Michael) | sets direction, approves owner-only changes, supplies credentials | talks to the overseer, or to any manager |
+| **Overseer** (Claude Code, outside Cezar) | builds M0, then writes no code. Prompts the harness manager, monitors it and its tasks, reviews milestones, releases the harness until M4, acts as the judge and improvement engine until the factory has its own, owns the spec, roadmap and observation log | the cockpit API, the manager's chat (as the owner), git and `gh` for reading, the release script, its judge prototype |
+| **Harness manager** (the `cezar` project's manager; Codex gpt-6.2-sol, autonomous) | turns each milestone into tasks, briefs them, reviews and merges their PRs, reports, and after M4 releases the harness | `cez-manager`, with the `manage-project` skill |
 | **Tasks** | implement, test and open PRs on the fork | Cezar workflows on Codex or OpenCode models |
 
 ## Branches and the running harness
 
-- **`factory`** is the fork's working trunk. It starts from `feat/manager-autonomy`, which includes the Azure driver. Every factory PR targets `factory`, and the `cezar` project's base branch is `factory`.
+- **`factory`** is the fork's working trunk, branched from `feat/manager-autonomy` (which includes the Azure driver and everything shipped so far). Every factory PR targets `factory`, and the `cezar` project's base branch is `factory`.
 - **`main`** stays a clean mirror of upstream open-mercato/cezar. **`feat/azure-repos-forge`** stays as the upstream PR branch for #1617.
-- **The running cockpit** is a release built from a `factory` commit (D9), never `~/dev/cezar` itself. The open-webui project keeps working throughout: it's paused, not removed.
+- **The running cockpit** is a release of a `factory` commit (spec D9), installed under `~/.cezar/harness/`. The global `cezar` and `cez` commands also point at the current release, not at the working tree.
+- **Open-webui** stays registered with its manager. Its work is paused until M2 and resumes as the factory's second workload.
 
 ## M0. Bootstrap (overseer builds; the last code the overseer writes)
 
+**Goal:** a safe place for the factory to change its own harness, plus the overseer's tools.
+
 | # | Deliverable | Done when |
 |---|---|---|
-| 0.1 | `factory` trunk on the fork; GitHub PR target `factory` | the branch is pushed and `cezar`'s base branch is `factory` |
-| 0.2 | **Release layout**, `scripts/harness-release.mjs` in the fork. Given a commit, it: (1) exports it to `~/.cezar/harness/releases/<sha>/`; (2) runs `npm ci` and the build; (3) switches the `current` link; (4) restarts the unit; (5) checks `/api/v1/health`; (6) rolls back on failure. Running it with `--rollback` switches to the previous release. The systemd unit runs `current`. | a release from `factory` HEAD serves the cockpit; a rollback restores the previous one; editing `~/dev/cezar` no longer changes the live cockpit |
-| 0.3 | **Wait for idle.** The script refuses to switch while a task or manager turn is active, unless given `--force` | tested with a running dry-run task |
-| 0.4 | **The `cezar` project.** `~/dev/cezar` registered, with its automatic manager configured: Codex gpt-6.2-sol, autonomous, "Cancel or switch any task" on, 15-minute checks. Its goal: the generic project-manager goal plus pointers to the spec, this roadmap and the observation log. | the manager answers a setup check and lists its workflows and skills |
-| 0.5 | **Fork guidance.** A short `.ai/skills/factory-work/SKILL.md`. It covers how to work on the factory spec: which spec section a change implements, the AGENTS.md validation order, the fact that the live cockpit is a release, and to never restart the service. The fork's AGENTS.md is long (about 30k characters), and this skill names the parts that matter. | tasks attach it with `--skill factory-work` |
-| 0.6 | **Observation tooling** for the overseer: a poller that logs manager messages and task state changes, plus the observation log `2026-11-25-self-improving-factory-observations.md` | the poller runs in the background; the log has today's open-webui entries |
-| 0.7 | **Warm-up run.** A small real change through the whole path: the manager briefs a task, the task opens a PR on `factory`, a review task approves, the manager merges, the overseer releases | one merged PR released and healthy, with observations logged |
+| 0.1 | **Trunk.** `factory` branched from `feat/manager-autonomy` and pushed. The `cezar` project's base branch is `factory` (in its local `.ai/cezar/config.json`). | `git ls-remote origin factory` shows it; a task's worktree branches from it |
+| 0.2 | **Hygiene the build depends on.** List `CEZ_MANAGER_AUTONOMOUS_DEFAULT`, `CEZ_AUTO_PROJECT_MANAGERS`, `CEZ_SCORING` and `CEZ_SELF_IMPROVEMENT` in `.env.example`. Record the owner-approved exceptions in AGENTS.md: autonomous managers, a manager per project, `agents` secrets by default, scoring, self-improvement. Add the `.ai/cezar/HARNESS` marker. | the docs check passes; AGENTS.md lists the exceptions |
+| 0.3 | **The release script** `scripts/harness-release.mjs`. Given a commit (default `factory` HEAD), it: (1) exports it to `~/.cezar/harness/releases/<sha>/`; (2) runs `npm ci`, `npm run build`; (3) refuses to continue while a task or manager turn is active, unless `--force`; (4) switches `current`, keeping `previous`; (5) restarts the unit; (6) checks `/api/v1/health` within 60 s; (7) rolls back on failure; (8) appends to `release-log.ndjson`. With `--rollback` it switches to `previous`. It keeps the last 5 releases. | a release from `factory` serves the cockpit; `--rollback` restores the previous one; a forced failure (a bad health URL in a test flag) rolls back by itself |
+| 0.4 | **The unit and global commands use `current`.** The systemd unit's `ExecStart` runs `~/.cezar/harness/current/packages/cezar/dist/index.js`; the global `cezar` and `cez` point there too. | editing `~/dev/cezar` changes nothing live; `cezar --version` reports the release |
+| 0.5 | **The `cezar` project and its manager.** Register `~/dev/cezar` and configure its automatic manager: Codex gpt-6.2-sol, autonomous, "Cancel or switch any task" on, 15-minute checks, the generic project goal plus "the spec, roadmap and observation log in `.ai/specs/` define your work; the owner gives you milestones". | the manager answers a setup check, listing its workflows, skills and secrets |
+| 0.6 | **The `factory-work` skill** `.ai/skills/factory-work/SKILL.md` (about 60 lines). It names what matters in the fork's 62k-character AGENTS.md for this work: the validation order, the contract-first API rule, chained routes, `.env.example`, `ensureDataGitignore`, tests through npm. It also covers how to read the spec (each task implements named decisions), and that the live cockpit is a release, so tasks must never restart the service or edit `~/.cezar/harness`. | tasks attach it with `--skill factory-work` |
+| 0.7 | **The judge prototype** (overseer tooling, outside the fork, in `~/dev/notes/factory-overseer/`): `render.py` turns a run's event log and record into the spec's transcript format and metrics summary; `judge.sh <run> [scorer…]` sends the rendering with a rubric to `opencode run -m davy/mistral-large-4 --format json` and saves the result. **Rubric drafts** for `outcome`, `efficiency`, `procedure` and `scope` go in the fork's `.ai/cezar/scorers/`, as Markdown the overseer edits. They become the built-ins in M3. | judging the open-webui upgrade run (43299e6b) returns valid labels and causes; Mistral's usable context window is measured and recorded |
+| 0.8 | **The poller** (overseer tooling): it logs every manager message and task state change for the `cezar` and `open-webui` projects to `~/dev/notes/factory-overseer/events.log`, and on each task end writes a line the overseer can feed to `judge.sh`. | it runs in the background through a session and survives the cockpit restarts in 0.3 |
+| 0.9 | **Warm-up run.** One small real change through the whole path: add `factory/` to the `ensureDataGitignore` allowlist, with its test (spec "Data model"). The manager briefs a task, the task opens a PR on `factory`, a review task approves, the manager merges, and the overseer releases. | the PR is merged, released and healthy; observations logged; the task judged by the prototype |
 
-**Exit:** the overseer stops writing code. If the factory breaks, the overseer may only roll back a release, or fix the release script if rollback itself is impossible. Either action is logged as an observation.
+**Exit:** the overseer stops writing code. If the factory breaks, the overseer may only roll back a release, or fix the release script if rollback itself fails. Either is logged.
+
+**The M0 warm-up prompt** (0.9), sent to the harness manager:
+
+> Warm-up task, to test the factory path end to end. In packages/cezar, add `factory/` to the `ensureDataGitignore` allowlist as ignored state (spec `.ai/specs/2026-11-25-self-improving-factory.md`, "Data model and storage"), and extend `src/data-gitignore.test.ts` to cover it. One task, `implement` (or `quick-task` until `implement` exists), with `--skill factory-work`; PR against `factory`. Review it with `review-pr`, merge when green, then tell me the PR and the task ids. Don't release: I will.
 
 ## M1. Agents know what they have (spec D2, D3)
 
-The overseer gives the harness manager this milestone as one outcome. The manager splits it, but a sensible split is:
+**Goal:** tasks start with the right workflow, model, skill, secrets and budget, and know what they have.
 
-1. **Task workflow fields:** workflow `budget:` (stored and shown; enforcement is M2) and agent-step `secrets:`, which lifts the load error and narrows the secrets. Tests cover old workflows behaving as before.
-2. **Built-in task workflows:** `implement`, `plan`, `operate` (`improve-factory` comes in M5).
-3. **Capability block** in task system prompts; secret `description` (CLI, API, Settings).
-4. **Manager list commands:** `secrets`, `skills`, `models`, `agents` (and `workflows` gains model and budget); the `manage-project` update (check first; choose a workflow; propose project workflows).
+**Deliverables:**
+1. **Workflow fields:** `budget:` on workflows (stored and shown; enforced in M2); `secrets:` on agent steps (lifts the load error and narrows the secrets; check steps unchanged); contract and validation.
+2. **Built-in task workflows:** `implement`, `plan`, `operate`, with the `operate` fallback when OpenCode is missing.
+3. **The capability block** in every task's system prompt, with the trimming order and cap.
+4. **Secret `description`:** CLI (`--description`, `describe`), API, Settings, and in the block.
+5. **Manager list commands:** `secrets`, `skills`, `models`, `agents`; `workflows` gains model and budget; `task create --secrets`, `--budget-*`.
+6. **`manage-project` update:** check first; choose a workflow; propose project workflows when a kind of task recurs.
+
+**The prompt:**
+
+> Milestone M1 of `.ai/specs/2026-11-25-self-improving-factory-roadmap.md`: implement spec D2 and D3 (`.ai/specs/2026-11-25-self-improving-factory.md`). Split it into tasks the way you judge best; my suggestion is the six deliverables in the roadmap, with 1 first because 2 and 3 depend on it. Brief every task with `--skill factory-work`, the exact spec sections it implements, and its tests. Each PR targets `factory` and passes the AGENTS.md validation order. Use `review-pr` before merging. Don't restart the cockpit or touch `~/.cezar/harness`; I release. If the spec is unclear or wrong somewhere, stop that piece and tell me why instead of deciding yourself. Report when M1's acceptance holds, with the PRs and task ids.
 
 **Acceptance:**
-- the spec's tests for D2 and D3 pass;
-- the full validation order in AGENTS.md is green;
-- live: a task started with `--workflow operate` runs on Mistral and its prompt shows the capability block;
-- `cez-manager secrets` never prints a value.
+- the spec's D2 and D3 tests pass, and the full validation order is green on `factory`;
+- live, after the release: `cez-manager task create --workflow operate "report the cockpit version"` runs on Mistral, and its system prompt contains the capability block;
+- `cez-manager secrets` lists names and descriptions and never a value (the overseer checks the output against the stored values);
+- an old workflow file behaves exactly as before.
+
+**The overseer watches:**
+- the size and split of PRs;
+- whether briefs name spec sections and tests;
+- the first tasks' efficiency against the fork's 62k AGENTS.md, which tests the `factory-work` skill;
+- review churn.
 
 **Release:** the overseer runs `harness-release` after checking the acceptance.
 
-## M2. Bounded and measured (D4, metrics part of D5)
+## M2. Bounded and measured (spec D4, D5 metrics)
 
-1. Budget enforcement: accounting, `budgetExceeded`, manager follow-up, `task budget`, the 2× rule, the amber marker.
-2. `TurnStatsCollector` for task sessions; tool-call durations and output sizes from the event log; the per-run `metrics` summary.
-3. Cockpit: metric fields in the task detail; budget state on the row.
+**Goal:** no task runs away unnoticed, and every run has the numbers scoring needs.
+
+**Deliverables:**
+1. **Budget enforcement:** accounting (input tokens; active time excluding queued, parked and gate time); `budgetExceeded`; the manager follow-up with metrics; `task budget`; the 2× and 4× rule; the amber marker.
+2. **`TurnStatsCollector` for task sessions,** per step.
+3. **The metrics summary:** tool durations and output sizes from the event log; `GET /runs/:id/metrics`.
+4. **Cockpit:** metrics in the task detail; budget state on the row.
+
+**The prompt:**
+
+> Milestone M2: spec D4 and the metrics part of D5. Same rules as M1. Add a test that replays `.ai/cezar/runs` fixtures to check the metrics summary; the overseer will give you the open-webui upgrade log (43299e6b) as a fixture. Report when the acceptance holds.
 
 **Acceptance:**
 - D4 tests pass;
-- the replayed open-webui log yields the expected metrics;
-- live: a task given a tiny budget wakes the manager exactly once at 1×, and again at 2×.
+- the replayed open-webui log gives 116 requests, about 93k average context, and the 77k output among the largest;
+- live: a task given `--budget-tokens 50000` wakes the manager exactly once at 1× and again at 2×;
+- queued and parked time don't count.
 
-## M3. Scoring (D5)
+**The overseer watches** whether the manager uses `task budget` sensibly when woken.
 
-1. Scorer schema and loader (built-ins plus project overrides); `cez factory check` for scorers.
-2. The judge: transcript rendering, shortening to fit, the OpenCode/Mistral call, validation and retry.
-3. Scores with 1–3 causes, storage, `harnessVersion` and project commit; `cez score`.
-4. Routing causes into project and harness queues (storage only; nothing consumes the queues yet).
-5. Cockpit: Outcome, Efficiency and Root cause columns, the Scores panel, the scores API.
+**Release:** the overseer. **After M2,** open-webui work resumes: PR #5's corrections and the v0.13.4 rollout, with the new workflows and budgets. That gives the factory a second, different workload to learn from.
+
+## M3. Scoring (spec D5, D7 scoring defaults)
+
+**Goal:** every finished task is judged, its failures diagnosed and routed.
+
+**Deliverables:**
+1. **Scorers:** the schema, the loader (built-ins from the overseer's tuned rubrics, plus project overrides), and `cez factory check`.
+2. **The judge:** transcript rendering, shortening to fit, the judge queue, the OpenCode call, validation, retry and timeout, the outage handling.
+3. **Scores:** 1–3 causes with the evidence check; storage with `harnessVersion` and project commit; `cez score`; the `score.recorded` event.
+4. **Routing** into the project and harness queues (storage only; nothing consumes them yet); `factory/` state; harness-project detection.
+5. **Cockpit and API:** Outcome, Efficiency and main-cause columns; the Scores panel; the scores routes; the `cez-manager scores` command.
+6. **Settings:** `factory.judge`, `scoring.*`, `CEZ_SCORING`.
+
+**The prompt:**
+
+> Milestone M3: spec D5 scoring and its settings. The built-in rubrics are the overseer's drafts in `.ai/cezar/scorers/`; use them as written, and don't edit their rubric text (owner-protected). Same rules as before.
 
 **Acceptance:**
 - D5 tests pass;
-- live: every task finishing on the fork gets scores within a minute;
-- the overseer compares the judge's scores and causes with their own observations of the same runs, logged as a calibration table in the observation log, and the agreement is good enough to automate on. If it isn't, the rubrics are revised (owner-approved) before M5.
+- live: every task finishing on either project has scores within a minute while the judge is up;
+- turning the davy endpoint off leaves scores pending, then they complete when it's back;
+- **the calibration gate:** on at least 20 runs, the overseer compares the judge with their own blind verdicts and reaches the spec's targets (80% on pass/fail, 70% on the main target). Below that, the overseer revises the rubrics (owner-approved) and re-measures. M5 doesn't start before this passes.
 
-## M4. The harness releases itself (D9)
+**The overseer watches** the judge's causes for invented evidence and over-flagging, and the judge's latency.
 
-1. The `harness-release` workflow in the fork, wrapping the M0 script:
-   - build and install;
-   - staging cockpit with its own `CEZ_HOME` and port;
-   - a dry-run harness benchmark (a few fixed tasks);
-   - comparison with the current release;
-   - wait for idle, switch, health check, rollback.
-2. `harness-release --rollback`.
-3. The minimum benchmark runner needed for item 1 (the rest is M6).
+**Release:** the overseer.
+
+## M4. The harness releases itself (spec D9)
+
+**Goal:** the harness ships through a benchmarked release that rolls back by itself.
+
+**Deliverables:**
+1. **The `harness-release` workflow** in the fork's `.ai/cezar/workflows/`, wrapping the M0 script, with the staging cockpit (own `CEZ_HOME`, own port), the dry-run harness suite, the comparison against tolerance, wait-for-idle with the 15-minute hold, switch, health check, rollback and report.
+2. **The minimum benchmark runner** it needs, and a harness suite of about 5 tasks.
+3. **`harnessVersion`** in scores, wired from the release.
+4. **`harness-release --rollback`,** including opening a revert PR.
+
+**The prompt:**
+
+> Milestone M4: spec D9 and the minimum of D8 that `harness-release` needs. The release script from M0 is `scripts/harness-release.mjs`; wrap it rather than replace it. Test the rollback path deliberately. When this milestone's PRs are merged I will run the first release with the new workflow myself, then hand releases over to you.
 
 **Acceptance:**
-- a deliberately broken release (failing health check) rolls back by itself;
-- a good release switches only when idle.
+- a release with a deliberately failing health check rolls back by itself;
+- a release with a benchmark drop over tolerance stops before the switch;
+- a good release switches only when idle;
+- the release log records all three.
 
-**Handover:** from here the harness manager releases the harness itself after each milestone merges. The overseer stops running releases and only watches them.
+**Handover:** after the first good release through the workflow, the harness manager releases after each milestone. The overseer watches and no longer releases.
 
-## M5. Self-improvement (D6, D7, D10 weekly report)
+## M5. Self-improvement (spec D6, D7, D10 report)
 
-1. Factory settings (global and per project) for thresholds, approval and scope; Settings UI.
-2. The hourly trigger with both guards, manual start ("improve now"), and manager notification.
-3. The `improve-factory` workflow and skill: clustering, reading evidence, redrafts, dismissals and escalations, the PR format.
-4. Bookkeeping: processed, dismissed and escalated causes; cluster-to-PR links; cooldown.
-5. Harness queue inputs: escalations, the cross-project digest, post-release checks.
-6. The weekly factory report job.
+**Goal:** the factory fixes its own recurring failures, in the project or in the harness.
+
+**Deliverables:**
+1. **Settings:** the `factory.improvement.*` settings (global and per project), Settings UI, `CEZ_SELF_IMPROVEMENT`.
+2. **Triggers:** the hourly trigger with both guards; `cez improve`, `cez-manager improve`, "Improve now"; manager notification; the guard reasons shown.
+3. **The `improve-factory` workflow and skill:** batch brief, clustering, evidence reading, redrafts, decisions file, check loop, PR with regressions addressed. The overseer reviews the skill text personally; it's owner-protected.
+4. **Bookkeeping:** processed, dismissed, escalated and deferred causes; failed or closed runs return their causes; the improvement records; cooldown; three-failure pause.
+5. **Harness inputs:** escalations, the cross-project digest, post-release checks.
+6. **Protection:** owner-only paths enforced on merge.
+7. **The weekly report job.**
+
+**The prompt:**
+
+> Milestone M5: spec D6, D7 and the report in D10. The `improve-factory` skill is owner-protected: draft it in its own PR and ask me to review it before anything uses it. Start with the trigger and bookkeeping, then the workflow, then protection, then the report.
 
 **Acceptance:**
 - D6/D7 tests pass;
-- live: open-webui work resumes, and within two weeks one project improvement PR and one harness improvement PR have merged, with their cluster failure rates measured before and after.
+- live: a project queue reaching 5 starts exactly one run;
+- its PR lists regressions addressed, passes the check step, and is merged by the manager after review;
+- a PR touching a scorer is refused for the manager and asks the owner;
+- within two weeks, one project improvement PR and one harness improvement PR have merged, with before/after numbers.
 
-## M6. Benchmarks and proactive triggers (D8, the rest of D10)
+**The overseer's role changes:** from being the improvement engine to auditing it. The overseer compares the improvement runs' clusters with their own log, notes what they miss or get wrong, and feeds that into the `improve-factory` skill through owner-approved revisions.
 
-1. Benchmark suites, matrices and `benchmark add`, plus their use when an improvement run changes a workflow's model.
-2. The Factory view.
-3. Daily credential health; `fix-ci` on main CI failure.
-4. Optional: scoring manager turns (open question 4).
+## M6. Benchmarks and proactive triggers (spec D8, the rest of D10)
+
+**Goal:** changes are compared before they ship, and the factory acts without being asked.
+
+**Deliverables:**
+1. **Benchmarks:** suites and matrices for any workflow; `benchmark add`; used automatically when an improvement run changes a workflow's model.
+2. **The Factory view:** pass rates over time, cost per merged PR, human touchpoints, queues, improvements and benchmark results.
+3. **Proactive triggers:** the daily credential health check (a `credential-health` workflow per project); `fix-ci` on a main CI failure.
+4. **Optional:** scoring manager turns (spec open question 4).
+
+**Acceptance:**
+- a suite comparing Mistral with gpt-6.2-sol on `operate` tasks produces a matrix;
+- an expired credential surfaces as an `access` cause before a run fails on it.
 
 ## Order and dependencies
 
 ```
 M0 ─► M1 ─► M2 ─► M3 ─► M4 ─► M5 ─► M6
-             └─ metrics feed M3   └─ releases needed before the harness edits itself
+             │      │      └─ the harness must roll back before it edits itself
+             │      └─ calibration gate before M5
+             └─ open-webui resumes after M2
 ```
 
-- **M4 comes before M5** because self-improvement on the harness must ship through a release that can roll back.
-- **M3's calibration gates M5:** if the judge disagrees too much with the overseer, automated improvement would amplify noise.
+## The overseer's runbook
 
-## The overseer's protocol
+**At the start of every session:**
+1. Read the memory note `cezar-factory-overseer`, this roadmap's current milestone and backlog, and the latest observations.
+2. Check the cockpit is healthy, and which release is running: `release-log.ndjson`.
+3. Start the poller if it isn't running, and read the event log since the last session.
+4. Check managers and tasks: anything waiting on the owner, running long, or failed.
 
-**Channel.** The overseer speaks to the harness manager only through its chat, as the owner would, and never steers a task directly unless the manager is stopped. The overseer may:
-- cancel tasks, stop or deactivate managers, and reset a manager's session;
-- edit manager settings, goal and memory;
-- manage secrets and settings;
-- roll back releases.
-
-**Each milestone:**
-1. The overseer writes one outcome prompt: the milestone, the spec sections, acceptance, constraints, and "report when done".
-2. The overseer watches continuously: the poller notes every manager message and task state change.
-3. At each task's end, the overseer reviews its brief, workflow and model choice, tokens and time against size, scope, tests run, PR diff and review result, and logs what's notable.
-4. At the milestone's end, the overseer checks the acceptance personally (tests, live checks), then releases (until M4) or watches the release (after M4).
-5. The overseer updates the spec, roadmap and log: what changed, and why.
+**For each milestone:**
+1. Send the milestone prompt (above, adjusted for what changed), as the owner, in the harness manager's chat.
+2. Watch continuously: the poller notes each manager message and task state change.
+3. At each task's end:
+   1. read its brief, workflow and model choice;
+   2. judge it blind first on a sample (every third task, and every failing one): write a verdict before reading Mistral's;
+   3. run `judge.sh`, compare, and log disagreements;
+   4. review the PR diff and review result;
+   5. log what's notable.
+4. Intervene by the ladder (below).
+5. At the end, check the acceptance personally, then release (M0–M3) or watch the release (M4 on).
+6. Review the milestone:
+   - its metrics (below);
+   - the observations, each turned into a spec revision, a backlog item, a manager change, a repository change, or nothing;
+   - spec and roadmap changelog entries.
 
 **Intervention ladder** (lowest first; each step logged):
 
 | Level | When | Action |
 |---|---|---|
 | 1. Note | an inefficiency or small mistake that doesn't threaten the outcome | log it; raise it at the milestone review |
-| 2. Correct | wrong direction, wrong scope, a wrong model or workflow for the work, a misread spec | a message to the manager, as the owner |
+| 2. Correct | wrong direction, scope, model or workflow; a misread spec | a message to the manager, as the owner |
 | 3. Cancel | a task far over budget, looping, or doing out-of-scope or risky work | cancel it with a reason, then tell the manager |
 | 4. Reset | the manager is confused, stuck, or repeating a mistake after correction | stop it, reset its session, restart with a fresh prompt |
 | 5. Roll back | a release breaks the cockpit or a running factory | `harness-release --rollback` |
 
 **What the overseer may change:**
-- the spec, this roadmap and the observation log (committed to `factory` directly, docs only);
+- the spec, this roadmap, the observation log and the rubric drafts (committed to `factory` directly; docs only);
 - manager configuration;
 - settings and secrets;
-- releases.
+- releases until M4;
+- its own tooling outside the fork.
 
-Not code, after M0's exit.
+Not harness code, after M0's exit.
 
-**Turning observations into improvements.** Each observation is logged with evidence and classified like a root cause (harness, task setup, repository, access, model, requirements, external). Then the overseer decides one of:
-- a **spec amendment** (a new decision or feature), recorded in the spec's changelog;
-- a **roadmap change** (order, split, acceptance);
-- a **manager change** (goal, memory, settings);
-- a **repository change** for the harness manager to make (AGENTS.md, a skill), given as a prompt;
-- **nothing**, with a reason.
-
-Until M3 and M5 exist, this is the manual version of scoring and self-improvement, and the overseer is the judge. After they exist, the overseer's log becomes the calibration set for the automated judge.
-
-**What the overseer measures per milestone:**
-- tasks and their total tokens, cost and active time;
-- review rounds per PR;
+**Metrics per milestone,** recorded at its review:
+- tasks, and total tokens, cost and active time;
+- PRs, and review rounds per PR;
 - interventions by level;
-- regressions found after a release;
-- how many observations became spec changes.
+- regressions found after the release;
+- observations, and how many became spec revisions or backlog items;
+- judge agreement (from M0.7 on).
 
-These numbers are the baseline the factory should improve on over later milestones.
+These are the baseline the factory should improve on over later milestones.
 
 ## Spec revisions and the backlog
 
 The build is itself a source of findings. Whatever goes wrong or turns out missing while the manager implements the spec is diagnosed by the overseer: what failed, its root cause and where the fix belongs. Each finding then becomes one of:
-- **a spec revision,** when it conflicts with or changes something the spec decides. The overseer edits the spec and records it in the spec's changelog. If the affected milestone is in progress, the overseer tells the manager.
-- **a backlog item,** when it's a new feature or improvement that doesn't change current decisions. It goes into the backlog below, with its evidence, and is scheduled into a milestone, or a later one, at the next milestone review.
+- **a spec revision,** when it conflicts with or changes something the spec decides. The overseer edits the spec and records it in its changelog. If the affected milestone is in progress, the overseer tells the manager.
+- **a backlog item,** when it's a new feature or improvement that doesn't change current decisions. It goes into the backlog below, with its evidence, and is scheduled at the next milestone review.
 - **a manager change** (goal, memory, settings), or **a repository change** given to the manager as a prompt (AGENTS.md, a skill, a workflow).
 - **nothing,** with the reason logged.
 
@@ -184,25 +277,51 @@ The build is itself a source of findings. Whatever goes wrong or turns out missi
 
 ## Backlog
 
-New features and improvements found during the build, not yet scheduled. Each entry: what, why (evidence), and the milestone it's proposed for.
+New features and improvements found so far, not yet scheduled into a milestone. Each has its evidence and a proposed milestone.
 
 | # | Item | Evidence | Proposed for |
 |---|---|---|---|
-| | (empty) | | |
+| B1 | **Finish open-webui's deploy workflow** (PR #5 corrections: stored secret names, password SSH, a real preflight, Mistral summaries, generic skill) and roll out v0.13.4 without the inline-PDF fix | the paused open-webui work; observations 5–6 | after M2 |
+| B2 | **Cap review rounds:** at most 2 review tasks per PR head before asking the owner | 7 review runs on PRs #4 and #5 | M1 (`manage-project`) |
+| B3 | **Isolate testing:** tasks must test against a staging cockpit with its own `CEZ_HOME`, never register projects or start runs on the live one; add a guard or skill rule | task 295bd9f4 registered throwaway projects on the live cockpit (observation 9) | M1 (`factory-work`), harness guard M4 |
+| B4 | **Raise the manager's session-reset thresholds** (55 min idle, 100k context) for long jobs | the open-webui session restarts mid-work | M2 |
+| B5 | **One summary at the end,** not a stream of updates, from managers | the open-webui chat | M1 (`manage-project`) |
+| B6 | **Azure parity for PR actions:** `github.pr-comment`, `pr-update` and `issue-comment` still call `gh` | the Azure driver's known gap | M4 or later |
+| B7 | **Slim the fork's AGENTS.md** (62k characters) for harness tasks, or split it into routed files | measured in M0 | after M3, using M3's efficiency scores |
+| B8 | **Hard budgets:** pause at 4× until the manager answers | spec open question 1 | after M3 |
+| B9 | **Score manager turns** | spec open question 4 | M6 |
+| B10 | **Monitoring webhooks** that start investigation tasks | spec D10 | after M6 |
+| B11 | **Upstream #1617:** wait for the maintainers' reply, then open the Azure PR from `feat/azure-repos-forge` | the upstream thread | when they reply |
+| B12 | **Rotate the credentials pasted into chat** (production VM, Jenkins VM, Jenkins login, Azure PAT) | they were pasted on 2026-11-25 | owner, now |
 
 ## Risks
 
 | Risk | Mitigation |
 |---|---|
-| A task edits the live harness | M0 release layout; tasks work in worktrees; restarts only through the release script |
+| A task edits the live harness | M0 release layout; worktrees; restarts only through the release script; the `factory-work` skill |
 | The manager merges a broken change | full validation in the brief; review tasks; release health check and rollback; the overseer checks acceptance |
-| Large, sprawling PRs | the manager splits milestones; the overseer corrects at level 2 |
-| Context bloat from the fork's 30k AGENTS.md | the `factory-work` skill names what to read; the overseer watches the first tasks' efficiency |
-| The judge is miscalibrated | M3's calibration gate before M5 |
+| Large, sprawling PRs | milestone splits; correction at level 2; the `scope` scorer later |
+| Context bloat from the fork's 62k AGENTS.md | the `factory-work` skill names what to read; the overseer watches the first tasks; B7 |
+| The judge is miscalibrated | blind sampling from M0.7; M3's calibration gate before M5 |
+| The judge (davy) is slow or down | scoring never blocks runs; scores wait and retry |
 | Cost | budgets from M2; Mistral for low-reasoning work; the overseer cancels runaway tasks |
-| Upstream drift | `main` stays a mirror; fork-only and upstreamable labels on PRs |
+| The overseer anchors on the judge | blind verdicts first, on every third task and every failure |
+| Upstream drift | `main` stays a mirror; `fork-only` and `upstreamable` labels |
+
+## Timeline (rough, in working sessions)
+
+| Milestone | Estimate | Note |
+|---|---|---|
+| M0 | 1 session | overseer-built |
+| M1 | 1–2 sessions | six small PRs |
+| M2 | 1 session | |
+| M3 | 2 sessions | plus calibration over about 20 runs |
+| M4 | 1–2 sessions | |
+| M5 | 2–3 sessions | plus two weeks for its acceptance |
+| M6 | 2 sessions | |
 
 ## Changelog
 
 - v1 (2026-11-25): first plan.
-- v1.1 (2026-11-25): spec revisions and the backlog (owned by the overseer).
+- v1.1: spec revisions and the backlog, owned by the overseer.
+- v2: the full M0 (hygiene, release script and unit, judge prototype, rubric drafts, poller, warm-up prompt); goals, deliverables, prompts, acceptance and watch points per milestone; the overseer's runbook with blind calibration; definition of done; backlog B1–B12; timeline.

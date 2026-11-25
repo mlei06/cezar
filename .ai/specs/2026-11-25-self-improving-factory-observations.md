@@ -22,7 +22,18 @@ After M3, this log is also the calibration set for the automated judge.
 | 9 | Throwaway test projects got automatic managers | managers deploy-model-cezar, webui-deploy-cockpit | harness | fixed `6f8519c88` |
 | 10 | The manager told a task to read the manager skill and `ponytail` | task 295bd9f4 brief | task-setup | `manage-project` brief template forbids it |
 | 11 | Judgement was good: risk identified, production protected, clean stop with evidence | the whole run | none | keep |
+| 12 | New `CEZ_*` variables shipped without `.env.example` entries, against AGENTS.md's env rule: the overseer's own harness changes | `CEZ_MANAGER_AUTONOMOUS_DEFAULT`, `CEZ_AUTO_PROJECT_MANAGERS` missing from `.env.example` | harness (procedure) | roadmap M0.2 |
+| 13 | The fork's AGENTS.md is 62k characters, about the size of open-webui's oversized reading list, and every harness task will be pointed at it | `wc -c AGENTS.md` | repository (harness project) | `factory-work` skill (M0.6); backlog B7 |
 
 ## Milestone entries
 
 (added from M0 on)
+
+## Judge calibration
+
+Blind comparisons: the overseer's verdict is written before Mistral's is read, on every third task and every failing one (roadmap runbook). The spec's targets are 80% agreement on pass/fail and 70% on the main cause's target.
+
+| Run | Scorer | Overseer | Judge | Agree on pass/fail | Agree on main target | Note |
+|---|---|---|---|---|---|---|
+
+Rubric revisions made from disagreements are listed under the run that prompted them.
