@@ -16,11 +16,15 @@ Last updated: 2026-11-25 21:50 UTC.
 
 ## Standing instructions given to the harness manager
 
+Since 2026-11-25 17:25 the manager runs the harness project on its own (owner decision); the overseer audits afterwards instead of gating.
+
 - **Every task:** `--skill factory-work`, targets `factory`, follows the spec's reuse map.
-- **Reviews:** at most two review rounds per PR head before asking the owner. Under the M1 criterion, secret-narrowing edge cases are defense in depth: fix once, then merge if nothing outside that edge remains, and list further cases as follow-ups. Correctness, data loss, value leaks and other security issues still block.
+- **Reviews:** only runtime PRs (`packages/`, `scripts/`, build and test config) get a Codex review. Docs, skills, specs and `.ai/factory-overseer/` merge after the manager's own diff check.
+- **Review rounds:** after two rounds the manager decides by the M1 merge rule (correctness, data loss, value leaks and security block; edge cases become follow-ups) and reports the decision.
+- **Spec ambiguities:** the manager decides, records them under "Spec decisions" in the PR and as a line in the observation log; the overseer reviews afterwards.
+- **Releases:** the manager releases merged runtime PRs itself, batched, with `harness-release.mjs` detached through `systemd-run --user` (a restart kills the cockpit's own process tree), starts nothing while it runs, and checks the journal and release log after waking. A rollback means fix forward or revert.
 - **Before merging:** the PR head must include current `factory`. Commits that only touch documentation or agent guidance (`.ai/specs/`, `.ai/skills/`, `.ai/factory-overseer/`, `*.md` outside `packages/`) don't force a rebase or revalidation.
-- **After a runtime merge:** hold new starts until the overseer confirms the release (until M4's `harness-release` can hold starts itself).
-- **Pushes:** a task's force-with-lease push to its own `cez/*` branch is approved by the manager itself. Never `factory` or `main`.
+- **Pushes:** a task's force-with-lease push to its own `cez/*` branch is fine. Never `factory` or `main`.
 - **Test resources (M1-8):** never override Vitest's worker cap, at most one full `npm test` per task at a time, rerun timing failures alone before reporting them.
 
 ## Machine state the overseer depends on

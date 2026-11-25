@@ -35,8 +35,8 @@ The program is done when all of these hold:
 | Who | What | How |
 |---|---|---|
 | **Owner** | sets direction, approves owner-only changes, supplies credentials | talks to the overseer, or to any manager |
-| **Overseer** (Claude Code, outside Cezar) | builds M0, then writes no code. Prompts the harness manager, monitors it and its tasks, reviews milestones, releases the harness until M4, acts as the judge and improvement engine until the factory has its own, owns the spec, roadmap and observation log | the cockpit API, the manager's chat (as the owner), git and `gh` for reading, the release script, its judge prototype |
-| **Harness manager** (the `cezar` project's manager; Codex gpt-6.2-sol, autonomous) | turns each milestone into tasks, briefs them, reviews and merges their PRs, reports, and after M4 releases the harness | `cez-manager`, with the `manage-project` skill |
+| **Overseer** (Claude Code, outside Cezar) | builds M0, then writes no code. Prompts the harness manager, monitors it and its tasks, reviews milestones, releases the harness until M1's end (the manager took it over then), audits the manager's decisions afterwards instead of gating them, acts as the judge and improvement engine until the factory has its own, owns the spec, roadmap and observation log | the cockpit API, the manager's chat (as the owner), git and `gh` for reading, the release script, its judge prototype |
+| **Harness manager** (the `cezar` project's manager; Codex gpt-6.2-sol, autonomous) | turns each milestone into tasks, briefs them, reviews runtime PRs and merges all PRs, decides review stalemates and spec ambiguities (recorded for the overseer), releases the harness with the release script (until M4 automates it), and reports | `cez-manager`, with the `manage-project` skill |
 | **Tasks** | implement, test and open PRs on the fork | Cezar workflows on Codex or OpenCode models |
 
 ## Branches and the running harness
@@ -342,6 +342,7 @@ New features and improvements found so far, not yet scheduled into a milestone. 
 
 ## Changelog
 
+- v2.3 (2026-11-25, owner decision): the manager runs the harness project on its own. It releases merged runtime PRs itself (detached through `systemd-run`), decides after two review rounds, settles spec ambiguities and records them, and reviews only runtime PRs. The overseer audits instead of gating. M4 still automates the release.
 - v1 (2026-11-25): first plan.
 - v1.1: spec revisions and the backlog, owned by the overseer.
 - v2.2: aligned with spec v5's reuse map:
