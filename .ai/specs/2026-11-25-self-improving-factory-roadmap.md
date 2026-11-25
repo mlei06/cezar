@@ -19,7 +19,7 @@ The factory is built by the factory. After a one-time bootstrap (M0), which the 
 | Milestone | Status | Notes |
 |---|---|---|
 | M0 | done 2026-11-25 | release `0.21.0+release-735fc84` live; warm-up PR #1 merged and released; judge prototype calibrated on 2 runs; observations M0-1 to M0-10 |
-| M1 | in progress | |
+| M1 | in progress | PRs #2, #3, #4 merged; release blocked by a typecheck failure on `factory` (B17), fix delegated; remaining: built-in workflows, capability block, list commands, manage-project |
 
 ## Goal and definition of done
 
@@ -304,6 +304,9 @@ New features and improvements found so far, not yet scheduled into a milestone. 
 | B12 | **Seed the queues by re-scoring earlier runs** with `cez score` when M3 ships (both projects, including the open-webui upgrade task), so improvement starts from real evidence | the queues would otherwise start empty; point 3 of the definition of done needs failures to accumulate | M3 |
 | B13 | **Global skills read by every task** (graphify and others) add noise to first reads; consider a per-project skill allowlist, or keeping tool-specific skills out of the global folders | M0-8 | after M3, using efficiency scores |
 | B14 | **Tasks linger after their PR merges** (about 6 minutes `running`), delaying releases | M0-10 | M4 (`harness-release` wait-for-idle) |
+| B15 | **Secret-narrowing edge cases left after PR #4:** Claude error or signal exits can record an unstarted session; OpenCode 2.x can silently start fresh with the resumed session's grants; no coverage for completion without startup events | PR #4 final review | after M2 |
+| B16 | **Azure ready transition** can mark an unrelated PR ready: it uses a stored PR URL without checking the PR's source branch belongs to the task (pre-existing) | PR #4 final review | M2 |
+| B17 | **Merged PRs broke `factory`'s typecheck together** (#3 + #4); the manager must check a PR is rebased on current `factory` before merging, and the release's typecheck caught it | release of 7de5499 failed safely | M1 (manager rule), M4 (CI-like check before merge) |
 
 ## Risks
 
