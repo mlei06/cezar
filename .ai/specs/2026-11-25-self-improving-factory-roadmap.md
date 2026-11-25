@@ -1,6 +1,6 @@
 # Roadmap: building the self-improving factory
 
-Companion to `2026-11-25-self-improving-factory.md` (the spec, v4). Status: v2, 2026-11-25. Findings: `2026-11-25-self-improving-factory-observations.md`.
+Companion to `2026-11-25-self-improving-factory.md` (the spec). Resume point: `2026-11-25-self-improving-factory-overseer-state.md`. Status: v2, 2026-11-25. Findings: `2026-11-25-self-improving-factory-observations.md`.
 
 The factory is built by the factory. After a one-time bootstrap (M0), which the overseer builds by hand, the Cezar fork's own manager implements every later milestone through tasks and pull requests. The overseer prompts it, watches it, intervenes when needed, and turns what goes wrong into changes to the spec and this roadmap. Building the factory is the first real workload the factory learns from, and the overseer acts as its self-improvement engine until the factory has its own.
 
@@ -19,7 +19,7 @@ The factory is built by the factory. After a one-time bootstrap (M0), which the 
 | Milestone | Status | Notes |
 |---|---|---|
 | M0 | done 2026-11-25 | release `0.21.0+release-735fc84` live; warm-up PR #1 merged and released; judge prototype calibrated on 2 runs; observations M0-1 to M0-10 |
-| M1 | in progress | PRs #2, #3, #4 merged; release blocked by a typecheck failure on `factory` (B17), fix delegated; remaining: built-in workflows, capability block, list commands, manage-project |
+| M1 | in progress | merged #2–#5, #8, #9; #6 and #7 in review; live release b29db47 has #1–#5; see the overseer state file |
 
 ## Goal and definition of done
 

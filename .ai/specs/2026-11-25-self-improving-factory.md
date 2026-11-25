@@ -32,7 +32,7 @@ The first end-to-end test: an autonomous manager on Codex gpt-6.2-sol, asked onl
 
 | What happened | Root causes | Where the fixes live |
 |---|---|---|
-| A round trip to the user for SSH access the agents already had (`PROD_VM_*`) | agents weren't told their secrets | harness: capability block (D3) |
+| A round trip to the user for SSH access the agents already had (`DEPLOY_*` host) | agents weren't told their secrets | harness: capability block (D3) |
 | The upgrade task ran 25+ min: 116 model calls averaging 93k tokens of context (10.7M input in all), with 62% of the time spent in the model | a 77k-character first read (docs) carried by every call; a brief that said "read the docs"; builds polled through the model | project: a shorter required reading list; the manager's brief; harness: budget (D4) |
 | The task rebuilt backup and staging scripts that already existed | the helpers sat in an ignored folder, invisible to task worktrees | project: helpers inside a committed skill |
 | A workflow task invented secret names and grew the scope | no list of secrets; a loose brief | harness: D2/D3; project: a deploy workflow |
@@ -174,7 +174,7 @@ nodes:
     runner: opencode
     model: davy/mistral-large-4
     skill: jenkins-deploy
-    secrets: [JENKINS_URL, JENKINS_USER, JENKINS_PASSWORD, PROD_VM_HOST]
+    secrets: [JENKINS_URL, JENKINS_USER, JENKINS_PASSWORD, DEPLOY_HOST]
     prompt: "Summarize the rollout from {{nodes.rollout.output}} in three sentences."
   - { id: done, type: end, status: success }
 edges:
@@ -206,8 +206,8 @@ The manager picks the workflow with `--workflow`. `--model`, `--skill`, `--secre
 ```
 Workflow: deploy (opencode, davy/mistral-large-4); budget 600k tokens, 60 min active
 Secrets in your environment (values hidden; never print them):
-  JENKINS_URL / JENKINS_USER / JENKINS_PASSWORD: Jenkins API (CA: Michael/certs/ca-bundle.pem)
-  PROD_VM_HOST: production Node1 address
+  JENKINS_URL / JENKINS_USER / JENKINS_PASSWORD: Jenkins API (CA: the project's CA bundle)
+  DEPLOY_HOST: production host address
 Other workflows in this project: implement, plan, review-pr, operate
 Attached skill: jenkins-deploy (scripts in its folder)
 ```
@@ -278,12 +278,12 @@ Judge the run against its brief only. Quote the transcript lines your label rest
 The built-in rubrics start as the overseer's tuned drafts from the build (roadmap M0.6 and M3).
 
 **The judge.**
-- **Who:** by default OpenCode with `davy/mistral-large-4`, self-hosted, so transcripts stay on the company network and scoring costs only time.
+- **Who:** by default OpenCode with `davy/mistral-large-4`, self-hosted, so transcripts stay on the internal network and scoring costs only time.
 - **How:** the same one-shot call Cezar already makes for commit messages and titles. That's `createRunner` and `runner.run` with no tools, a timeout, and two attempts where the second carries the rejection reason. It's tracked in the usage ledger as a new internal consumer, `scoring`. One call per scorer, never a task, so scoring creates no runs. Calls run one at a time per machine (a small queue).
 - **What it reads:** the rubric, the labels, the metrics, then the full transcript as plain text ("Data model" describes the format).
 - **Too long:** a transcript longer than the judge's window is shortened only in its largest tool outputs, keeping each one's head and tail. A call or message is never dropped.
 - **Its reply:** JSON, validated against the scorer's labels; retried once if invalid, then recorded as an error.
-- **Reaching the model:** whatever runner the judge uses must reach its endpoint. On this machine OpenCode can't verify davy's corporate certificate by itself (observation M0-3), so OpenCode's davy provider goes through a localhost-only TLS relay. A machine without that setup gets a clear judge error on the Factory view, not silent failures.
+- **Reaching the model:** whatever runner the judge uses must reach its endpoint. On this machine OpenCode can't verify the endpoint's internal certificate by itself (observation M0-3), so OpenCode's davy provider goes through a localhost-only TLS relay. A machine without that setup gets a clear judge error on the Factory view, not silent failures.
 
 **A score** holds the label, its score, pass or fail, and reasoning with quoted evidence. **A failing score names 1–3 causes**, the first being the main one:
 
@@ -442,7 +442,7 @@ times: 3
 title: Report the last CI and CD builds
 sourceRun: 43299e6b-29eb-450a-8c2e-e38c1ef8a533   # optional
 workflow: operate
-prompt: Report the last chatbot/build-push and chatbot/deploy builds and their results.
+prompt: Report the last CI and CD builds and their results.
 successCriteria: Both build numbers and results are correct.
 startCommit: 97d817021174027d647df63c890423771ef9d330
 ```
@@ -649,7 +649,7 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
 ## Security and privacy
 
 - **What the judge sees:** transcripts are rendered with every value redacted that Cezar redacts today (host and run secrets, token shapes, `agents` and `checks` secret values), before they reach the judge.
-- **Where the judge runs:** the default judge is self-hosted, so transcripts stay on the company network. Choosing a hosted judge model is a settings change with a warning in Settings.
+- **Where the judge runs:** the default judge is self-hosted, so transcripts stay on the internal network. Choosing a hosted judge model is a settings change with a warning in Settings.
 - **Scores:** reasoning and evidence quote transcripts, so the same redaction applies before storing them.
 - **Improvement runs** are ordinary tasks, with the project's secrets and grants. They can't widen secrets or permissions without the owner (D6).
 - **Benchmarks** never push, merge or deploy, and skip check steps marked with side effects.
