@@ -27,16 +27,26 @@ AGENTS.md is long (about 62k characters). Don't print it whole. Read these secti
 
 ## Validate before the PR
 
-Run these in order, through npm, never `npx vitest`:
+For changes that require the test suite, run these in order through npm. Never use `npx vitest`.
 
 ```bash
 npm run typecheck
-npm test -- <the directories you touched>   # then the full `npm test` before the PR
+npm test -- <the directories you touched>
+npm test
 npm run test:unit
 npm run build
 ```
 
 Add a test that fails without your change. Keep old run files, workflows and config parsing exactly as before.
+
+### Vitest resource limits
+
+Include these rules in every factory task brief.
+
+1. Use the repository's Vitest defaults. Never pass `--maxWorkers` or `--pool`.
+2. Run at most one full `npm test` per task at a time. Wait for it to finish within a single command. If you abandon a run, stop it before starting a replacement.
+3. Prefer focused runs for the affected directories first. When a full suite is needed, run it once before opening the PR.
+4. Treat timing failures seen while other suites are running as suspect. Rerun the failing file by itself before reporting the failure.
 
 ### Known host test failures
 
