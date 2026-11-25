@@ -8,7 +8,7 @@ const USAGE = 'Usage: cezar secrets list | get <NAME> | env | set <NAME> [--audi
   '  get prints one value (project first, then workspace); env prints `export NAME=…` lines for every agents-audience secret.\n' +
   '  set reads the value from stdin (pipe it in, or type it at the hidden prompt) — never from argv.\n' +
   '  Descriptions are public metadata, up to 200 characters. Pass an empty string to clear.\n' +
-  '  Use --description=<text> for text that looks like an option.\n' +
+  '  For option-like text, use --description=<text> with set or describe <NAME> -- <text>.\n' +
   '  --workspace addresses the user\'s own secrets, shared by every project; the default is this project\'s.\n' +
   `  --audience names who may read the secret (${SECRET_AUDIENCES.join(', ')}); the default is checks,agents.`;
 
@@ -144,6 +144,10 @@ function parseArgs(args: string[]): ParsedArgs | undefined {
   let description: string | undefined;
   for (let i = 0; i < rest.length; ) {
     const flag = rest[i];
+    if (flag === '--') {
+      rest.splice(i, 1);
+      break;
+    }
     if (flag === '--workspace') {
       workspace = true;
       rest.splice(i, 1);
@@ -152,7 +156,7 @@ function parseArgs(args: string[]): ParsedArgs | undefined {
       rest.splice(i, 1);
     } else if (flag === '--repo' || flag === '--audience' || flag === '--description') {
       const value = rest[i + 1];
-      if (value === undefined || (flag !== '--description' && value === '')) return undefined;
+      if (value === undefined || value === '--' || (flag !== '--description' && value === '')) return undefined;
       if (flag === '--repo') repo = value;
       else if (flag === '--description') {
         if (['--workspace', '--repo', '--audience', '--description'].includes(value) || value.startsWith('--description=')) return undefined;

@@ -24,7 +24,7 @@ describe('cezar secrets (spec 2026-10-10-project-secrets-vault-options)', () => 
   });
 
   const cli = (args: string[], value?: string) =>
-    runSecretsCommand([...args, '--repo', root], {
+    runSecretsCommand(['--repo', root, ...args], {
       log: (line) => lines.push(line),
       error: (line) => errors.push(line),
       ...(value === undefined ? {} : { readValue: async () => value }),
@@ -110,6 +110,18 @@ describe('cezar secrets (spec 2026-10-10-project-secrets-vault-options)', () => 
     expect(await cli(['set', 'KEY', '--description', ''], 'project-value')).toBe(0);
     expect((await store.list(project)).secrets[0]).not.toHaveProperty('description');
     expect((await store.read(workspace)).values.KEY).toMatchObject({ description: 'Shared key', value: 'workspace-value' });
+  });
+
+  it('treats an option after the describe boundary as text without changing scope', async () => {
+    const { id } = await registerProject(root);
+    const project = { kind: 'project', projectId: id, root } as const;
+    const workspace = { kind: 'workspace' } as const;
+    await store.set(project, 'KEY', 'project-value', ['checks'], 'Project key');
+    await store.set(workspace, 'KEY', 'workspace-value', ['checks'], 'Shared key');
+
+    expect(await cli(['describe', 'KEY', '--', '--workspace'])).toBe(0);
+    expect((await store.read(project)).values.KEY).toMatchObject({ value: 'project-value', description: '--workspace' });
+    expect((await store.read(workspace)).values.KEY).toMatchObject({ value: 'workspace-value', description: 'Shared key' });
   });
 
   it('prints a value with get (project over workspace) and agents secrets as exports with env', async () => {

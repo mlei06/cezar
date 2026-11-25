@@ -95,6 +95,8 @@ describe('Secrets settings', () => {
   })
 
   it.each(['project', 'workspace'] as const)('clears a %s description and refreshes without sending a value', async (scope) => {
+    setApiScope('demo-project')
+    const listPath = scope === 'project' ? '/api/v1/p/demo-project/secrets' : '/api/v1/workspace/secrets'
     const calls = setup({ scope })
     expect(await screen.findByText('Staging deploy token')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Edit description for STAGING_TOKEN' }))
@@ -108,10 +110,12 @@ describe('Secrets settings', () => {
       expect(screen.queryByText('Staging deploy token')).toBeNull()
     })
     expect(screen.getByText('STAGING_TOKEN')).toBeTruthy()
-    expect(calls.filter((c) => c.method === 'GET')).toHaveLength(2)
+    expect(calls.map(({ method, url }) => [method, url])).toEqual([
+      ['GET', listPath],
+      ['PATCH', `${listPath}/STAGING_TOKEN`],
+      ['GET', listPath],
+    ])
     const patch = calls.find((c) => c.method === 'PATCH')!
-    expect(patch.url).toMatch(/\/secrets\/STAGING_TOKEN$/)
-    expect(patch.url.includes('/workspace/')).toBe(scope === 'workspace')
     expect(JSON.parse(patch.body!)).toEqual({ description: '' })
     expect(calls.some((call) => call.method === 'PUT')).toBe(false)
   })
