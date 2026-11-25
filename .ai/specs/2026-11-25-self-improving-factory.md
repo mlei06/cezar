@@ -214,7 +214,7 @@ Attached skill: jenkins-deploy (scripts in its folder)
 
 Over the cap, Cezar trims in this order: other workflows' names, then secret descriptions. Secret names are never dropped, and the cap doesn't apply to them. If the names alone would exceed 2k, they're listed compactly, comma-separated on one line, and the block may run over the cap by that much. It also reports how many entries it omitted, on one short line. That omission line, like the secret names, is mandatory and exempt from the cap: the cap governs only the optional content (descriptions and other workflows). (v5.3, v5.5, both after the manager flagged boundary conflicts.)
 
-**Secret descriptions.** A secret gains an optional `description` (at most 200 characters, never secret, never redacted). It's set with `cezar secrets set NAME --description "…"`, `cezar secrets describe NAME "…"`, in Settings, or by a manager.
+**Secret descriptions.** A secret gains an optional `description` (at most 200 characters, never secret, never redacted). A description is user-written metadata. The only guard is at write time: a description that contains its own secret's value is refused. There is no scanning of descriptions against other secrets or host credentials, and prompts render descriptions as stored. (v5.6, settled after review rounds kept extending description scrubbing.) It's set with `cezar secrets set NAME --description "…"`, `cezar secrets describe NAME "…"`, in Settings, or by a manager.
 
 ### D4. One run budget, for every run
 
@@ -762,6 +762,7 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
   - Cezar's existing metrics reused;
   - 1–3 routed causes per failure;
   - one-person defaults.
+- **v5.6:** secret descriptions: refuse one containing its own secret's value at write time; no other scanning or scrubbing.
 - **v5.5:** the capability block's omission-count line is mandatory and exempt from the cap, like secret names.
 - **v5.4:** agent-step secrets on Continue: the resumed step's recorded allowlist, else the intersection of all agent steps' allowlists; never widen on doubt.
 - **v5.3:** the capability block's 2k cap never drops secret names; names alone may exceed it, listed compactly (conflict raised by the harness manager in M1).
