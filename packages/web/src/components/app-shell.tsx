@@ -39,8 +39,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Sheet, SheetTrigger } from '@/components/ui/sheet'
 import { activeNavItem, activeNavPath, visibleNavItems, type NavItem } from '@/components/nav-items'
-import { useActiveForge } from '@/lib/active-forge'
-import type { TrackerKind } from '@open-mercato/cezar-api-client'
+import type { ForgeInfo, TrackerKind } from '@open-mercato/cezar-api-client'
 import { FOLD_ARIA_KEYS, SidebarDrawer, SidebarFoldButton, SidebarFrame, useDesktopShell, useSidebarFolded, useSidebarWidth, type SidebarResize } from '@/components/sidebar-frame'
 import { cn } from '@/lib/utils'
 import { exitSidebarRail, useSidebarRail } from '@/lib/sidebar-rail'
@@ -124,6 +123,8 @@ export type AppShellProps = {
    *  Defaults to shown so the presentational shell stays renderable alone; the container
    *  passes the health payload's truth. */
   forgeAvailable?: boolean
+  /** Which forge the project is on, so its tab carries the forge's own name (spec 2026-11-24-azure-repos-forge-driver). */
+  forgeKind?: ForgeInfo['kind']
   /** Inbox gating (#471): `false` drops the Inbox nav item and its badge — the global inbox is
    *  opt-in via `CEZ_FOLLOWUPS=1`. Defaults to shown for the same reason as `forgeAvailable`. */
   inboxAvailable?: boolean
@@ -274,6 +275,7 @@ export const AppShell = React.memo(function AppShell({
   phonesLink,
   phonesRail,
   forgeAvailable = true,
+  forgeKind,
   inboxAvailable = true,
   automationsAvailable = true,
   terminalAvailable = false,
@@ -292,7 +294,6 @@ export const AppShell = React.memo(function AppShell({
   managerHeads,
   projectSwitcher = null,
 }: AppShellProps) {
-  const activeForge = useActiveForge()
   const { pathname, search } = useLocation()
   // The nav's area rules reason about the flat route map — strip any `/p/:projectId` prefix
   // (multi-project spec, step 3.2) so `/p/cezar/git/commits` still lights Git.
@@ -361,13 +362,13 @@ export const AppShell = React.memo(function AppShell({
   const items = React.useMemo(
     () => visibleNavItems({
       forge: forgeAvailable,
-      forgeKind: activeForge?.kind,
+      forgeKind,
       inbox: inboxAvailable,
       automations: automationsAvailable,
       terminal: terminalAvailable,
       tracker,
     }),
-    [forgeAvailable, activeForge?.kind, inboxAvailable, automationsAvailable, terminalAvailable, tracker],
+    [forgeAvailable, forgeKind, inboxAvailable, automationsAvailable, terminalAvailable, tracker],
   )
 
   const nav = {

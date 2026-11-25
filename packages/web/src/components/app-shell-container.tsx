@@ -307,6 +307,7 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
         // Shown whenever the remote is a recognized forge, like each project group's tab (#698);
         // a cold or failed probe is the GitHub page's to explain and retry (#1412).
         forgeAvailable={activeForge != null}
+        forgeKind={activeForge?.kind}
         // Hidden unless health reports the opt-in inbox (#471) — same honesty rule as above:
         // the nav must not offer an Inbox this server will never fill.
         inboxAvailable={inboxAvailable}
