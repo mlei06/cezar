@@ -178,6 +178,8 @@ async function release() {
     runLoud('npm', ['ci', '--no-audit', '--no-fund'], dir);
     if (!flag('skip-checks')) runLoud('npm', ['run', 'typecheck'], dir);
     runLoud('npm', ['run', 'build'], dir);
+    // The global `cezar`/`cez` (and the launchers) exec this entry: keep it executable.
+    spawnSync('chmod', ['+x', join(packageRoot, 'dist', 'index.js')]);
   } else {
     say(`build ${sha7} already exists`);
   }
