@@ -46,7 +46,7 @@ import {
   validateWorkflowGraph,
 } from '@/api/client'
 import { queryKeys, useSkills, useWorkflowNodes, useWorkflows } from '@/api/queries'
-import { RUNNER_IDS, type WorkflowGraph, type WorkflowGraphNode } from '@open-mercato/cezar-api-client'
+import { RUNNER_IDS, type WorkflowBudget, type WorkflowGraph, type WorkflowGraphNode } from '@open-mercato/cezar-api-client'
 import { resolveNodeId } from './node-id'
 import { CenteredState } from '@/components/centered-state'
 import {
@@ -264,6 +264,7 @@ function WorkflowGraphEditor() {
 
   const [graph, setGraph] = useState<WorkflowGraph>(blankGraph)
   const [name, setName] = useState('')
+  const [budget, setBudget] = useState<WorkflowBudget>()
   const [description, setDescription] = useState('')
   const [dirty, setDirty] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -326,6 +327,7 @@ function WorkflowGraphEditor() {
     // A built-in is a template: its canvas saves as your own copy unless you rename it back.
     setName(def ? (def.source === 'built-in' ? `${def.name}-copy` : def.name) : '')
     setDescription(def?.description ?? '')
+    setBudget(def?.budget)
     setDirty(false)
     setSelectedId(null)
     setSim(null)
@@ -573,7 +575,11 @@ function WorkflowGraphEditor() {
 
   const save = useMutation({
     mutationFn: (overwrite: boolean) => {
-      const head = { name: name.trim(), ...(description.trim() ? { description: description.trim() } : {}) }
+      const head = {
+        name: name.trim(),
+        ...(description.trim() ? { description: description.trim() } : {}),
+        ...(budget ? { budget } : {}),
+      }
       // A pure stack of skills stays in the portable compact form (spec 012); anything richer is
       // a `version: 2` graph.
       const stack = skillStackOfGraph(graph)
@@ -605,6 +611,7 @@ function WorkflowGraphEditor() {
       edit(() => graphForWorkflow(parsed))
       setName(parsed.name)
       setDescription(parsed.description ?? '')
+      setBudget(parsed.budget)
       setImportText('')
       pendingFit.current = true
     },
@@ -641,7 +648,7 @@ function WorkflowGraphEditor() {
 
   // Export is the canvas as it stands — unsaved edits included — in the file the server would write.
   const exportYaml = () => {
-    const url = URL.createObjectURL(new Blob([graphYaml(name, description, graph)], { type: 'application/yaml;charset=utf-8' }))
+    const url = URL.createObjectURL(new Blob([graphYaml(name, description, graph, budget)], { type: 'application/yaml;charset=utf-8' }))
     const link = document.createElement('a')
     link.href = url
     link.download = graphYamlFilename(name)
@@ -1003,6 +1010,12 @@ function WorkflowGraphEditor() {
                   }}
                 />
               </Field>
+              {budget && (
+                <div className="text-muted-foreground">
+                  Budget · {[budget.tokens === undefined ? null : `${budget.tokens.toLocaleString()} tokens`,
+                    budget.minutes === undefined ? null : `${budget.minutes.toLocaleString()} minutes`].filter(Boolean).join(' · ')}
+                </div>
+              )}
               {(issues.length > 0 || unwired.length > 0) && (
                 <div className="space-y-1.5">
                   {issues.map((i) => (
@@ -1023,7 +1036,7 @@ function WorkflowGraphEditor() {
                     type="button"
                     className="hover:text-foreground"
                     onClick={() =>
-                      void writeClipboard(graphYaml(name, description, graph)).catch(() =>
+                      void writeClipboard(graphYaml(name, description, graph, budget)).catch(() =>
                         toast('Copy failed — select the YAML to copy it.', { tone: 'danger' }),
                       )
                     }
@@ -1032,7 +1045,7 @@ function WorkflowGraphEditor() {
                   </button>
                 </div>
                 <pre className="max-h-64 overflow-auto rounded-md bg-muted/40 p-2 text-micro leading-relaxed">
-                  {graphYaml(name, description, graph)}
+                  {graphYaml(name, description, graph, budget)}
                 </pre>
               </div>
               <Field label="import YAML (v1 or v2)">

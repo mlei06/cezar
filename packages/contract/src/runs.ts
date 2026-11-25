@@ -10,7 +10,7 @@ import { runParkedSchema } from './agent-login.ts';
 import { referenceStatusSchema } from './github.ts';
 // The chain shapes belong to the workflows family; the run record embeds one, so this file
 // consumes them rather than redeclaring. One-way on purpose — see the header of `./workflows.ts`.
-import { workflowDefSchema, workflowStepDefSchema } from './workflows.ts';
+import { agentStepSecretsSchema, workflowDefSchema, workflowStepDefSchema } from './workflows.ts';
 import { taskAskRecordSchema } from './questions.ts';
 
 /** `GET /runs` query: `full=1` keeps each run's `workflowDef` (about 1.3 MB per run), which the list omits by default. */
@@ -124,6 +124,9 @@ export type StepStatus = z.infer<typeof stepStatusSchema>;
 const usageCounterSchema = z.number().finite().nonnegative();
 
 /** Effective grants captured at launch, including nested/synthetic steps. Optional on old records. */
+/** Present after launch. An empty object records the omitted allowlist. */
+export const sessionSecretPolicySchema = z.object({ names: agentStepSecretsSchema.optional() });
+
 export const stepToolPolicySchema = z.object({
   allowedTools: z.array(z.string()),
   bashAllowlist: z.array(z.string()).optional(),
@@ -172,6 +175,7 @@ export const stepStateSchema = z.object({
    *  selection. Absent on records written before accounts existed. */
   profileId: z.string().optional(),
   toolPolicy: stepToolPolicySchema.optional(),
+  sessionSecretPolicy: sessionSecretPolicySchema.optional(),
   /** Canonical provider/model identity resolved for this step; absent for auto-model steps and
    *  records written before per-step attribution existed. */
   modelIdentity: z.string().optional(),

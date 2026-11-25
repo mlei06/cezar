@@ -1,5 +1,5 @@
 import dagre from '@dagrejs/dagre'
-import type { WorkflowGraph, WorkflowGraphNode, WorkflowStepDef } from '@open-mercato/cezar-api-client'
+import type { WorkflowBudget, WorkflowGraph, WorkflowGraphNode, WorkflowStepDef } from '@open-mercato/cezar-api-client'
 
 import type { RunClosure } from './attention'
 
@@ -317,11 +317,11 @@ export function compileSteps(steps: readonly WorkflowStepDef[]): WorkflowGraph {
   const nodes: WorkflowGraphNode[] = [{ id: startId, type: 'start' }]
   const out = (s: WorkflowStepDef) => `${s.id}.${s.command ? 'pass' : 'done'}`
   steps.forEach((s, i) => {
-    const { onFail, command, ...rest } = s
+    const { onFail, command, secrets, ...rest } = s
     nodes.push(
       command
-        ? { ...rest, type: 'check', command, ...(onFail?.retryOn ? { retryOn: onFail.retryOn } : {}) }
-        : { ...rest, type: 'agent' },
+        ? { ...rest, type: 'check', command, ...(secrets ? { secrets } : {}), ...(onFail?.retryOn ? { retryOn: onFail.retryOn } : {}) }
+        : { ...rest, type: 'agent', ...(secrets ? { secrets: secrets.filter((name) => typeof name === 'string') } : {}) },
     )
     edges.push({ from: i === 0 ? `${startId}.next` : out(steps[i - 1]!), to: s.id })
     if (command && onFail) {
@@ -727,7 +727,10 @@ function yamlScalar(v: unknown): string {
 
 function yamlField(key: string, value: unknown, pad: string): string[] {
   if (value === undefined) return []
-  if (Array.isArray(value)) return [`${pad}${key}: [${value.map(yamlScalar).join(', ')}]`]
+  if (Array.isArray(value)) {
+    const entries = value.map((item) => item && typeof item === 'object' ? JSON.stringify(item) : yamlScalar(item))
+    return [`${pad}${key}: [${entries.join(', ')}]`]
+  }
   if (value && typeof value === 'object') {
     return [`${pad}${key}:`, ...Object.entries(value).flatMap(([k, v]) => yamlField(k, v, `${pad}  `))]
   }
@@ -744,9 +747,10 @@ function yamlField(key: string, value: unknown, pad: string): string[] {
 
 /** The file the YAML tab previews and Export downloads — what Save writes: the compact `skills:`
  *  form for a pure skill stack, a `version: 2` graph otherwise (same keys the server writes). */
-export function graphYaml(name: string, description: string, graph: WorkflowGraph): string {
+export function graphYaml(name: string, description: string, graph: WorkflowGraph, budget?: WorkflowBudget): string {
   const head = [`name: ${yamlScalar(name.trim() || 'my-workflow')}`]
   if (description.trim()) head.push(...yamlField('description', description.trim(), ''))
+  if (budget) head.push(...yamlField('budget', budget, ''))
   const stack = skillStackOfGraph(graph)
   if (stack) return `${[...head, 'skills:', ...stack.map((s) => `  - ${yamlScalar(s)}`)].join('\n')}\n`
   const lines = ['version: 2', ...head]

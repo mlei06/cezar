@@ -101,6 +101,44 @@ describe('the workflow graph API', () => {
     expect(loaded?.graph).toMatchObject({ nodes: GRAPH.nodes, edges: GRAPH.edges });
   });
 
+  it.each([1, 2])('round-trips a v%i budget and agent allowlist through YAML, API and catalog', async (version) => {
+    const budget = { tokens: 800_000, minutes: 20 };
+    const steps = [
+      { id: 'work', skill: 'build', prompt: '{{task}}', secrets: [] },
+      { id: 'review', skill: 'review', prompt: '{{task}}', secrets: ['REVIEW_KEY'] },
+    ];
+    const graph = {
+      nodes: [{ id: 'start', type: 'start' }, ...steps.map((step) => ({ ...step, type: 'agent' }))],
+      edges: GRAPH.edges.slice(0, 2),
+    };
+    const input = { name: 'Budgeted', budget, ...(version === 2 ? { graph } : { steps }) };
+    const created = await post(version === 2 ? '/api/v1/workflows/graph' : '/api/v1/workflows', input);
+    expect(created.status).toBe(201);
+    const { path } = await created.json() as { path: string };
+    const yaml = readFileSync(path, 'utf8');
+    expect(parseYaml(yaml)).toMatchObject({ budget, ...(version === 2 ? { nodes: graph.nodes } : { steps }) });
+
+    const imported = await post('/api/v1/workflows/parse', { yaml });
+    expect(imported.status).toBe(200);
+    expect(await imported.json()).toMatchObject({ budget, steps });
+    const catalog = await (await apiRequest(app(), '/api/v1/workflows')).json() as {
+      workflows: { name: string }[];
+    };
+    expect(catalog.workflows.find((workflow) => workflow.name === input.name)).toMatchObject({ budget, steps });
+  });
+
+  it.each([{}, { tokens: 0 }, { tokens: 1.5 }, { minutes: -1 }, { minutes: '20' }, { usd: 1 }])(
+    'rejects invalid workflow budget %j in both formats',
+    async (budget) => {
+      const name = 'bad-budget';
+      expect((await post('/api/v1/workflows', { name, skills: ['build'], budget })).status).toBe(400);
+      expect((await post('/api/v1/workflows/graph', { name, graph: GRAPH, budget })).status).toBe(400);
+      for (const doc of [{ name, skills: ['build'], budget }, { name, version: 2, ...GRAPH, budget }]) {
+        expect((await post('/api/v1/workflows/parse', { yaml: stringifyYaml(doc) })).status).toBe(400);
+      }
+    },
+  );
+
   it('refuses to save an unsound graph', async () => {
     const res = await post('/api/v1/workflows/graph', { name: 'bad', graph: { ...GRAPH, nodes: GRAPH.nodes.slice(1) } });
     expect(res.status).toBe(400);

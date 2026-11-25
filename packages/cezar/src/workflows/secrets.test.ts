@@ -155,11 +155,12 @@ describe('project and workspace secrets in check steps', () => {
     ]));
   }, 30_000);
 
-  it('refuses secrets: on an agent step at load time — YAML cannot route a secret to a backend', () => {
+  it('accepts agent secret names and empty lists while preserving check binding validation', () => {
     expect(workflowStepSchema.safeParse({ id: 'verify', command: 'true', secrets: ['E2E_KEY'] }).success).toBe(true);
-    const refused = workflowStepSchema.safeParse({ id: 'implement', prompt: '{{task}}', secrets: ['E2E_KEY'] });
-    expect(refused.success).toBe(false);
-    expect(JSON.stringify(refused.error?.issues)).toContain('check step only');
+    const agent = { id: 'implement', prompt: '{{task}}' };
+    expect(workflowStepSchema.safeParse({ ...agent, secrets: ['E2E_KEY'] }).success).toBe(true);
+    expect(workflowStepSchema.safeParse({ ...agent, secrets: [] }).success).toBe(true);
+    expect(workflowStepSchema.safeParse({ ...agent, secrets: [{ name: 'E2E_KEY', as: 'OTHER_KEY' }] }).success).toBe(false);
     expect(workflowStepSchema.safeParse({ id: 'verify', command: 'true', secrets: ['PATH'] }).success).toBe(false);
     expect(workflowStepSchema.safeParse({ id: 'verify', command: 'true', secrets: [] }).success).toBe(false);
   });
@@ -170,11 +171,54 @@ describe('project and workspace secrets in check steps', () => {
     await secrets.set(scope, 'ANTHROPIC_API_KEY', 'sk-ant-api03-agentloginagentloginagentlogin');
     await secrets.set(scope, 'CHECK_ONLY', 'check-only-value', ['checks']);
     const run = store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [{ id: 'work', name: 'work', kind: 'agent' }] });
-    const { env } = await (manager as unknown as { agentEnvForStep(id: string, backend: string): Promise<{ env: Record<string, string> }> }).agentEnvForStep(run.id, 'claude');
+    const agentEnv = (secretNames?: string[]) => manager['agentEnvForStep'](run.id, 'claude', { secretNames });
+    const { env } = await agentEnv();
     expect(env).toMatchObject({ NODE_SSH_USER: 'deploy-user', JENKINS_TOKEN: 'jenkins-token-value' });
     expect(env.ANTHROPIC_API_KEY).toBeUndefined();
     expect(env.CHECK_ONLY).toBeUndefined();
+
+    const restricted = (await agentEnv(['JENKINS_TOKEN', 'CHECK_ONLY', 'ANTHROPIC_API_KEY', 'MISSING_KEY'])).env;
+    expect(restricted.JENKINS_TOKEN).toBe('jenkins-token-value');
+    for (const name of ['NODE_SSH_USER', 'CHECK_ONLY', 'ANTHROPIC_API_KEY', 'MISSING_KEY']) {
+      expect(restricted[name]).toBeUndefined();
+    }
+    const empty = (await agentEnv([])).env;
+    expect(empty.NODE_SSH_USER).toBeUndefined();
+    expect(empty.JENKINS_TOKEN).toBeUndefined();
   });
+
+  it('applies each allowlist at agent launch and keeps check bindings independent', async () => {
+    await secrets.set(scope, 'SHARED_KEY', 'fixture-value', ['agents', 'checks']);
+    const launches: (string | undefined)[] = [];
+    const resolveEnv = manager['agentEnvForStep'].bind(manager);
+    manager['agentEnvForStep'] = async (...args) => {
+      const profile = await resolveEnv(...args);
+      launches.push(profile.env.SHARED_KEY);
+      return profile;
+    };
+    const budget = { minutes: 5 };
+    const record = manager.startRun({
+      name: 'scoped',
+      source: 'file',
+      budget,
+      steps: [
+        { id: 'first', prompt: '{{task}}', secrets: ['SHARED_KEY'] },
+        { id: 'second', prompt: '{{task}}', secrets: [] },
+        { id: 'verify', command: 'test "$VERIFY_KEY" = fixture-value', secrets: [{ name: 'SHARED_KEY', as: 'VERIFY_KEY' }] },
+      ],
+    }, { task: 'mock:done go', worktree: false });
+    await settle(record.id);
+
+    expect(store.getRun(record.id)?.status).toBe('done');
+    expect(launches).toEqual(['fixture-value', undefined]);
+    store.flush();
+    expect(RunStore.open(join(repoRoot, '.ai/cezar')).getRun(record.id)?.workflowDef?.budget).toEqual(budget);
+
+    expect(manager.continueRun(record.id, { text: 'mock:done follow up' })).toEqual({ ok: true });
+    await vi.waitFor(() => expect(launches).toHaveLength(3), { timeout: 10_000 });
+    expect(launches[2]).toBeUndefined();
+    await settle(record.id);
+  }, 30_000);
 
   it('never leaks a secret into the server process env', async () => {
     const key = 'sk-ant-api03-checkonlycheckonlycheckonly';

@@ -8,8 +8,10 @@ import * as bypassPolicy from '../bypass-permissions.ts';
 import { AGENT_MODELS_LOCKED_ENV } from '../core/agent-model-policy.ts';
 import type { AgentEvent, AgentRunResult, AgentRunSpec, RunnerId } from '../core/agent-runner.ts';
 import { createWorktree } from '../git-worktree.ts';
+import { AgentTempDirError } from '../runs/agent-tmpdir.ts';
 import { RunStore } from '../runs/store.ts';
 import { mergeWriteAgentAccounts } from '../workspace/agent-accounts.ts';
+import { SecretStore } from '../workspace/secrets.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { compileV1, graphIssues, graphToSteps } from './graph.ts';
 import { READ_ONLY_TOOLS } from './landing.ts';
@@ -23,7 +25,10 @@ const sessions = vi.hoisted(() => [] as Array<{
   interrupt: () => void;
   hardStop: () => void;
   settle: () => void;
+  fail: (error: Error) => void;
 }>);
+
+const unconfirmedLaunches = vi.hoisted(() => new Set<number>());
 
 vi.mock('../core/runner-factory.ts', () => ({
   createRunner: (backend: RunnerId) => ({
@@ -31,14 +36,16 @@ vi.mock('../core/runner-factory.ts', () => ({
     startSession(spec: AgentRunSpec, emit: (event: AgentEvent) => void) {
       let open = true;
       let resolve!: (result: AgentRunResult) => void;
-      const promise = new Promise<AgentRunResult>((done) => { resolve = done; });
+      let reject!: (error: Error) => void;
+      const promise = new Promise<AgentRunResult>((done, fail) => { resolve = done; reject = fail; });
       const settle = () => {
         open = false;
         resolve({ text: '', tokensUsed: 0, toolCalls: [] });
       };
       const interrupt = vi.fn();
       const hardStop = vi.fn(settle);
-      sessions.push({ backend, spec, emit, interrupt, hardStop, settle });
+      if (spec.sessionId && !unconfirmedLaunches.has(sessions.length)) emit({ type: 'session', sessionId: spec.sessionId });
+      sessions.push({ backend, spec, emit, interrupt, hardStop, settle, fail: (error) => { open = false; reject(error); } });
       return { get open() { return open; }, result: promise, sendMessage: vi.fn(() => true), end: settle, interrupt, hardStop };
     },
   }),
@@ -71,6 +78,7 @@ describe('switching a task agent', { timeout: 20_000 }, () => {
   beforeEach(() => {
     vi.stubEnv('CEZ_DRY_RUN', '1');
     sessions.length = 0;
+    unconfirmedLaunches.clear();
     root = mkdtempSync(join(tmpdir(), 'cez-agent-switch-'));
     vi.stubEnv('CEZ_HOME', join(root, 'home'));
     execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: root });
@@ -116,11 +124,11 @@ describe('switching a task agent', { timeout: 20_000 }, () => {
     });
   }
 
-  async function restart() {
+  async function restart(secrets?: SecretStore) {
     manager.dispose();
     store.flush();
     store = RunStore.open(join(root, '.ai/cezar'), { keepLive: true });
-    manager = new RunManager(store, root, { semaphore });
+    manager = new RunManager(store, root, { semaphore, secrets });
     await manager.recover();
   }
 
@@ -486,6 +494,184 @@ describe('switching a task agent', { timeout: 20_000 }, () => {
     expect(store.getRun(id)?.steps.map((step) => [step.id, step.status])).toEqual([
       ['work', 'done'], ['continue-1', 'cancelled'], ['continue-2', 'running'],
     ]);
+  });
+
+  it.each([
+    { policy: 'recorded names', recorded: { names: ['ALLOWED_KEY'] }, expected: ['allowed-fixture', undefined] },
+    { policy: 'recorded empty', recorded: { names: [] }, expected: [undefined, undefined] },
+    { policy: 'recorded omission', recorded: {}, expected: ['allowed-fixture', 'other-fixture'] },
+    { policy: 'legacy ambiguity', recorded: undefined, expected: [undefined, undefined] },
+  ])('applies $policy when the selected graph session differs from execution order', async ({ recorded, expected }) => {
+    const secrets = new SecretStore(process.env, { keychain: async () => null });
+    const vault = { kind: 'workspace' } as const;
+    await secrets.set(vault, 'ALLOWED_KEY', 'allowed-fixture', ['agents']);
+    await secrets.set(vault, 'OTHER_KEY', 'other-fixture', ['agents']);
+    await addWorkAccount('claude');
+    const graph = compileV1([
+      { id: 'later-execution', prompt: '{{task}}', secrets: ['OTHER_KEY'] },
+      { id: 'selected', prompt: '{{task}}', secrets: ['ALLOWED_KEY'] },
+      { id: 'pending', prompt: '{{task}}' },
+    ]);
+    const definition: WorkflowDef = { name: 'graph', source: 'file', graph, steps: graphToSteps(graph) };
+    const { id } = store.createRun({
+      title: 'Continue', workflow: definition.name, task: 't', runner: 'claude', worktree: false,
+      steps: definition.steps.map((step) => ({ id: step.id, name: step.id, kind: 'agent' })),
+    });
+    store.updateStep(id, 'later-execution', {
+      status: 'done', backend: 'claude', sessionId: 'later-session', startedAt: '2026-11-25T10:01:00Z',
+      sessionSecretPolicy: { names: ['OTHER_KEY'] },
+    });
+    store.updateStep(id, 'selected', {
+      status: 'done', backend: 'claude', sessionId: 'selected-session', startedAt: '2026-11-25T10:00:00Z',
+      sessionSecretPolicy: recorded,
+    });
+    store.updateRun(id, { status: 'done', workflowDef: definition });
+    await restart(secrets);
+
+    const continueWith = async (opts: Parameters<RunManager['continueRun']>[1], resume: boolean, grants: (string | undefined)[]) => {
+      const next = sessions.length;
+      expect(manager.continueRun(id, { text: 'Follow up', ...opts })).toEqual({ ok: true });
+      await vi.waitFor(() => expect(sessions).toHaveLength(next + 1), wait);
+      const session = sessions[next]!;
+      expect(session.spec.resume).toBe(resume);
+      expect([session.spec.env?.ALLOWED_KEY, session.spec.env?.OTHER_KEY]).toEqual(grants);
+      session.settle();
+      await vi.waitFor(() => expect(manager.isActive(id)).toBe(false), wait);
+    };
+
+    await continueWith({}, true, expected);
+    expect(sessions[0]?.spec.sessionId).toBe('selected-session');
+    await restart(secrets);
+    await continueWith({}, true, expected);
+    await continueWith({ agentProfile: 'work' }, false, [undefined, undefined]);
+    await continueWith({ runner: 'codex' }, false, [undefined, undefined]);
+    await restart(secrets);
+    await continueWith({}, true, [undefined, undefined]);
+  });
+
+  it('keeps the launched policy when a later agent step fails preflight', async () => {
+    const secrets = new SecretStore(process.env, { keychain: async () => null });
+    const vault = { kind: 'workspace' } as const;
+    await secrets.set(vault, 'ALLOWED_KEY', 'allowed-fixture', ['agents']);
+    await secrets.set(vault, 'OTHER_KEY', 'other-fixture', ['agents']);
+    await restart(secrets);
+    const resolveEnv = manager['agentEnvForStep'].bind(manager);
+    manager['agentEnvForStep'] = async (...args) => {
+      if (args[2]?.secretNames?.includes('OTHER_KEY')) throw new AgentTempDirError(root, 'synthetic preflight failure');
+      return resolveEnv(...args);
+    };
+
+    const { id } = manager.startRun({
+      name: 'preflight', source: 'file',
+      steps: [
+        { id: 'launched', prompt: '{{task}}', secrets: ['ALLOWED_KEY'] },
+        { id: 'blocked', prompt: '{{task}}', secrets: ['OTHER_KEY'] },
+      ],
+    }, { task: 't', worktree: false });
+    await vi.waitFor(() => expect(sessions).toHaveLength(1), wait);
+    sessions[0]!.settle();
+    await vi.waitFor(() => expect(manager.isActive(id)).toBe(false), wait);
+    expect(store.getRun(id)?.steps.find((step) => step.id === 'blocked')).toMatchObject({ status: 'failed' });
+    expect(store.getRun(id)?.steps.find((step) => step.id === 'blocked')?.sessionId).toBeUndefined();
+
+    await restart(secrets);
+    expect(store.getRun(id)?.steps.find((step) => step.id === 'launched')?.sessionSecretPolicy).toEqual({ names: ['ALLOWED_KEY'] });
+    expect(manager.continueRun(id, { text: 'Follow up' })).toEqual({ ok: true });
+    await vi.waitFor(() => expect(sessions).toHaveLength(2), wait);
+    expect(sessions[1]?.spec).toMatchObject({
+      resume: true, sessionId: sessions[0]?.spec.sessionId, env: { ALLOWED_KEY: 'allowed-fixture' },
+    });
+    expect(sessions[1]?.spec.env?.OTHER_KEY).toBeUndefined();
+    sessions[1]!.settle();
+  });
+
+  it('keeps the confirmed session selectable after asynchronous startup fails', async () => {
+    const secrets = new SecretStore(process.env, { keychain: async () => null });
+    await secrets.set({ kind: 'workspace' }, 'ALLOWED_KEY', 'allowed-fixture', ['agents']);
+    await restart(secrets);
+    unconfirmedLaunches.add(1);
+    const { id } = manager.startRun({
+      name: 'failed-startup', source: 'file',
+      steps: [
+        { id: 'launched', prompt: '{{task}}', secrets: ['ALLOWED_KEY'] },
+        { id: 'unstarted', prompt: '{{task}}' },
+      ],
+    }, { task: 't', worktree: false });
+    await vi.waitFor(() => expect(sessions).toHaveLength(1), wait);
+    sessions[0]!.settle();
+    await vi.waitFor(() => expect(sessions).toHaveLength(2), wait);
+    const error = new Error('synthetic asynchronous spawn failure');
+    sessions[1]!.emit({ type: 'error', message: error.message });
+    sessions[1]!.fail(error);
+    await vi.waitFor(() => expect(manager.isActive(id)).toBe(false), wait);
+    await restart(secrets);
+    expect(store.getRun(id)?.steps.find((step) => step.id === 'unstarted')).toMatchObject({ status: 'failed' });
+    expect(store.getRun(id)?.steps.find((step) => step.id === 'unstarted')?.sessionId).toBeUndefined();
+    expect(manager.continueRun(id, { text: 'Follow up' })).toEqual({ ok: true });
+    await vi.waitFor(() => expect(sessions).toHaveLength(3), wait);
+    expect(sessions[2]?.spec).toMatchObject({
+      resume: true, sessionId: sessions[0]?.spec.sessionId, env: { ALLOWED_KEY: 'allowed-fixture' },
+    });
+    sessions[2]!.settle();
+  });
+
+  it.each([
+    { route: 'Continue', lists: [['ALLOWED_KEY', 'SHARED_KEY'], ['OTHER_KEY', 'SHARED_KEY'], undefined], expected: ['SHARED_KEY'] },
+    { route: 'Continue', lists: [['ALLOWED_KEY', 'SHARED_KEY'], [], undefined], expected: [] },
+    { route: 'Continue', lists: [undefined, undefined, undefined], expected: undefined },
+    { route: 'graph', lists: [['ALLOWED_KEY', 'SHARED_KEY'], ['OTHER_KEY', 'SHARED_KEY'], undefined], expected: ['SHARED_KEY'] },
+  ])('rebuilds the $route fallback env and recorded policy for intersection $expected', async ({ route, lists, expected }) => {
+    const secrets = new SecretStore(process.env, { keychain: async () => null });
+    const keys = ['ALLOWED_KEY', 'OTHER_KEY', 'SHARED_KEY'];
+    for (const key of keys) await secrets.set({ kind: 'workspace' }, key, key.toLowerCase(), ['agents']);
+    await restart(secrets);
+    const steps = lists.map((names, index) => ({
+      id: `agent-${index}`, prompt: '{{task}}', ...(names === undefined ? {} : { secrets: names }),
+    }));
+    let id: string;
+    let resumeIndex: number;
+    unconfirmedLaunches.add(route === 'graph' ? 1 : 0);
+    if (route === 'graph') {
+      const graph = compileV1(steps);
+      const next = graph.nodes.find((node) => node.id === 'agent-1');
+      if (next?.type !== 'agent') throw new Error('fixture is missing the resume node');
+      next.session = { continue: 'agent-0' };
+      ({ id } = manager.startRun({ name: 'fallback-graph', source: 'file', graph, steps: graphToSteps(graph) },
+        { task: 't', worktree: false }));
+      await vi.waitFor(() => expect(sessions).toHaveLength(1), wait);
+      sessions[0]!.settle();
+      resumeIndex = 1;
+    } else {
+      ({ id } = store.createRun({
+        title: 'Continue', workflow: 'fallback', task: 't', runner: 'claude', worktree: false,
+        steps: steps.map((step) => ({ id: step.id, name: step.id, kind: 'agent' })),
+      }));
+      store.updateRun(id, { status: 'done', workflowDef: { name: 'fallback', source: 'file', steps } });
+      // A legacy/current snapshot can carry a recorded policy that differs from the definition.
+      store.updateStep(id, 'agent-0', {
+        status: 'done', backend: 'claude', sessionId: 'confirmed-session',
+        sessionSecretPolicy: { names: ['ALLOWED_KEY', 'SHARED_KEY'] },
+      });
+      expect(manager.continueRun(id, { text: 'Follow up' })).toEqual({ ok: true });
+      resumeIndex = 0;
+    }
+    await vi.waitFor(() => expect(sessions).toHaveLength(resumeIndex + 1), wait);
+    const resumed = sessions[resumeIndex]!;
+    expect(resumed.spec).toMatchObject({ resume: true, env: { ALLOWED_KEY: 'allowed_key' } });
+    resumed.fail(new Error(`No conversation found with session ID: ${resumed.spec.sessionId}`));
+    await vi.waitFor(() => expect(sessions).toHaveLength(resumeIndex + 2), wait);
+    const fresh = sessions[resumeIndex + 1]!;
+    expect(fresh.spec.resume).toBe(false);
+    expect(keys.filter((key) => fresh.spec.env?.[key])).toEqual(expected ?? keys);
+    fresh.emit({ type: 'session', sessionId: 'fresh-confirmed-session' });
+    const stepId = route === 'graph' ? 'agent-1' : 'continue-1';
+    store.flush();
+    const saved = RunStore.open(join(root, '.ai/cezar'), { keepLive: true }).getRun(id);
+    expect(saved?.steps.find((step) => step.id === stepId)).toMatchObject({
+      sessionId: 'fresh-confirmed-session', sessionSecretPolicy: expected === undefined ? {} : { names: expected },
+    });
+    if (expected === undefined) expect(saved?.steps.find((step) => step.id === stepId)?.sessionSecretPolicy?.names).toBeUndefined();
+    fresh.settle();
   });
 
   it.each([false, true])('switches the account on Continue with the expected model and effort (locked: %s)', async (locked) => {

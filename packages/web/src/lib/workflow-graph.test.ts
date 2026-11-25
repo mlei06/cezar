@@ -172,6 +172,17 @@ describe('opening workflows', () => {
 })
 
 describe('graphYaml', () => {
+  it('exports budget and preserves agent allowlists and check bindings from a v1 chain', () => {
+    const graph = compileSteps([
+      { id: 'work', skill: 'build', secrets: [] },
+      { id: 'verify', command: 'true', secrets: [{ name: 'CHECK_KEY', as: 'VERIFY_KEY' }] },
+    ])
+    const yaml = graphYaml('Flow', '', graph, { tokens: 800_000, minutes: 20 })
+    expect(yaml).toContain('budget:\n  tokens: 800000\n  minutes: 20')
+    expect(yaml).toContain('secrets: []')
+    expect(yaml).toContain('secrets: [{"name":"CHECK_KEY","as":"VERIFY_KEY"}]')
+  })
+
   it('emits the version: 2 shape with nested session and block prompts', () => {
     const yaml = graphYaml('Flow', '', {
       nodes: [
