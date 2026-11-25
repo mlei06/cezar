@@ -3,7 +3,7 @@
  * them to tell routing from lookups (spec 2026-11-21-manager-short-sessions-and-memory § 2.3).
  */
 
-export const MANAGER_COMMANDS = ['status', 'attention', 'tasks', 'prs', 'task', 'workflows', 'merge', 'automation', 'job', 'propose-action', 'rename', 'memory', 'history'] as const;
+export const MANAGER_COMMANDS = ['status', 'attention', 'tasks', 'prs', 'task', 'workflows', 'secrets', 'skills', 'models', 'agents', 'merge', 'automation', 'job', 'propose-action', 'rename', 'memory', 'history'] as const;
 export const MANAGER_TASK_SUBCOMMANDS = ['create', 'say', 'switch', 'cancel', 'retry', 'follow', 'unfollow'] as const;
 export const MANAGER_JOB_SUBCOMMANDS = ['add', 'list', 'remove'] as const;
 export const MANAGER_MEMORY_SUBCOMMANDS = ['list', 'set', 'remove'] as const;

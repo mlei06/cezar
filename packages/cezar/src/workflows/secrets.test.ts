@@ -243,16 +243,8 @@ describe('project and workspace secrets in check steps', () => {
     process.env.CEZ_REDACT_SECRETS = '0';
     await secrets.set(workspace, 'SHARED_KEY', 'workspace-fixture-value', ['agents'], 'Workspace description');
     await secrets.set(scope, 'SHARED_KEY', 'project-fixture-value', ['agents'], 'Project description');
-    await secrets.set(scope, 'LEAKY_DESCRIPTION', 'synthetic-own-fixture-value', ['agents'],
-      'Copied: synthetic-own-fixture-value');
-    await secrets.set(scope, 'CROSS_DESCRIPTION', 'synthetic-granted-value', ['agents'],
-      'Copied another value: check-fixture-value');
-    await secrets.set(scope, 'NORMALIZED_DESCRIPTION', 'synthetic-other-granted-value', ['agents'],
-      'Copied a short value: x   y');
-    await secrets.set(scope, 'SHORT_ONLY', 'x y', ['checks']);
-    await secrets.set(scope, 'MARKER_ONLY', '[REDACTED]', ['checks']);
-    await secrets.set(scope, 'MARKER_DESCRIPTION', 'synthetic-marker-granted-value', ['agents'],
-      'Copied exactly: [REDACTED]');
+    const description = 'Operator  metadata: check-fixture-value';
+    await secrets.set(scope, 'OPERATOR_KEY', 'synthetic-operator-value', ['agents'], description);
     await secrets.set(scope, 'CHECK_ONLY', 'check-fixture-value', ['checks']);
     await secrets.set(scope, 'UNLISTED', 'unlisted-fixture-value', ['agents']);
     await secrets.set(scope, 'OPENAI_API_KEY', 'login-fixture-value', ['agents']);
@@ -266,7 +258,7 @@ describe('project and workspace secrets in check steps', () => {
       source: 'file',
       budget: { tokens: 300_000, minutes: 30 },
       steps: [
-        { id: 'work', prompt: '{{task}}', skill: 'fixture-skill', secrets: ['SHARED_KEY', 'LEAKY_DESCRIPTION', 'CROSS_DESCRIPTION', 'NORMALIZED_DESCRIPTION', 'MARKER_DESCRIPTION', 'CHECK_ONLY', 'OPENAI_API_KEY', 'MISSING'] },
+        { id: 'work', prompt: '{{task}}', skill: 'fixture-skill', secrets: ['SHARED_KEY', 'OPERATOR_KEY', 'CHECK_ONLY', 'OPENAI_API_KEY', 'MISSING'] },
         { id: 'verify', command: 'true' },
       ],
     };
@@ -279,53 +271,23 @@ describe('project and workspace secrets in check steps', () => {
     const block = capabilityBlock(opening);
     expect(block).toBeDefined();
     expect(opening).toContain(`${instructions}\n\n---\n\n${block}\n\n---\n\n`);
-    expect(block?.split('\n').filter((line) => line.startsWith('  '))).toEqual(['  CROSS_DESCRIPTION', '  LEAKY_DESCRIPTION', '  MARKER_DESCRIPTION', '  NORMALIZED_DESCRIPTION', '  SHARED_KEY: Project description']);
+    expect(block?.split('\n').filter((line) => line.startsWith('  '))).toEqual([`  OPERATOR_KEY: ${description}`, '  SHARED_KEY: Project description']);
     expect(block).toContain('Workflow: capability-fixture (claude); budget 300000 tokens, 30 min active');
     expect(block).toContain('Other workflows in this project: ');
     expect(block).toContain('quick-task');
     expect(block).toContain('Attached skill: fixture-skill');
-    expect(opening).not.toContain('fixture-value');
+    expect(opening).not.toContain('project-fixture-value');
+    expect(opening).not.toContain('synthetic-operator-value');
     store.flush();
     expect(RunStore.open(join(repoRoot, '.ai/cezar')).getRun(record.id)?.steps[0]?.capabilityPrompt).toBe(block);
 
     await secrets.describe(scope, 'SHARED_KEY', 'Updated project description');
-    await secrets.unset(scope, 'LEAKY_DESCRIPTION');
+    await secrets.unset(scope, 'OPERATOR_KEY');
     expect(manager.continueRun(record.id, { text: 'mock:done continue' })).toEqual({ ok: true });
     await vi.waitFor(() => {
-      expect(capturedPrompts().map(capabilityBlock)).toContain(block?.replace('  LEAKY_DESCRIPTION\n', '').replace('Project description', 'Updated project description'));
+      expect(capturedPrompts().map(capabilityBlock)).toContain(block?.replace(`  OPERATOR_KEY: ${description}\n`, '').replace('Project description', 'Updated project description'));
     }, { timeout: 10_000 });
     await settle(record.id);
-  }, 30_000);
-
-  it.each(['outgoing vault', 'host environment'])('keeps a copied %s value out of prompts and snapshots', async (source) => {
-    const value = 'synthetic ordinary credential value';
-    const oldPassword = process.env.DATABASE_PASSWORD;
-    process.env.CEZ_REDACT_SECRETS = '0';
-    try {
-      if (source === 'host environment') process.env.DATABASE_PASSWORD = value;
-      await secrets.set(scope, 'FIXTURE_KEY',
-        source === 'outgoing vault' ? value : 'synthetic-vault-value', ['agents'], `Copied: ${value}`);
-      if (source === 'outgoing vault') {
-        await secrets.set(scope, 'FIXTURE_KEY', 'synthetic-rotated-value', ['agents']);
-      }
-
-      const record = manager.startRun({
-        name: 'description-fixture',
-        source: 'file',
-        steps: [{ id: 'work', prompt: '{{task}}', secrets: ['FIXTURE_KEY'] }, { id: 'verify', command: 'true' }],
-      }, { task: 'mock:done inspect capabilities', worktree: false });
-      await settle(record.id);
-      const [prompt] = capturedPrompts();
-      expect(prompt).toContain('  FIXTURE_KEY');
-      expect(prompt).not.toContain(value);
-      store.flush();
-      const saved = RunStore.open(join(repoRoot, '.ai/cezar')).getRun(record.id)?.steps[0]?.capabilityPrompt;
-      expect(saved).toContain('  FIXTURE_KEY');
-      expect(saved).not.toContain(value);
-    } finally {
-      if (oldPassword === undefined) delete process.env.DATABASE_PASSWORD;
-      else process.env.DATABASE_PASSWORD = oldPassword;
-    }
   }, 30_000);
 
   it('refreshes actual OpenCode 1.x resume prompts after a vault grant is revoked', async () => {

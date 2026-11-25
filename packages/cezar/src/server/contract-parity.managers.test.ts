@@ -5,6 +5,7 @@ import type { z } from 'zod';
 import type {
   createManagerInputSchema,
   managerActionDecisionInputSchema,
+  managerAgentsResponseSchema,
   managerActivityInputSchema,
   managerActivityResponseSchema,
   managerCancelTaskInputSchema,
@@ -63,6 +64,7 @@ describe('src/contract/managers.ts matches the managers routes exactly', () => {
     Assert<Mutual<z.infer<typeof managerMemoryResponseSchema>, InferResponseType<One['memory'][':key']['$put'], 200>>>,
     Assert<Mutual<z.infer<typeof managerMemoryResponseSchema>, InferResponseType<One['memory'][':key']['$delete'], 200>>>,
     Assert<Mutual<Ok, InferResponseType<One['actions'][':actionId']['decision']['$post'], 200>>>,
+    Assert<Mutual<z.infer<typeof managerAgentsResponseSchema>, InferResponseType<One['agents']['$get'], 200>>>,
     Assert<Mutual<z.infer<typeof managerSnapshotSchema>, InferResponseType<One['snapshot']['$get'], 200>>>,
     Assert<Mutual<z.infer<typeof managerTaskDetailSchema>, InferResponseType<One['task']['$get'], 200>>>,
     Assert<Mutual<z.infer<typeof managerCreateTaskResponseSchema>, InferResponseType<One['tasks']['$post'], 201>>>,

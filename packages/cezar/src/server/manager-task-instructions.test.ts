@@ -1,11 +1,16 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentRunSpec, AgentSession } from '../core/agent-runner.ts';
 import { ClaudeCliRunner } from '../core/claude-cli-runner.ts';
 import { CodexAppServerRunner } from '../core/codex-app-server-runner.ts';
+import { runManagerCommand } from '../managers/manager-cli.ts';
+import { RunnerModelCatalog } from '../core/runner-model-catalog.ts';
+import { mergeWriteAgentAccounts } from '../workspace/agent-accounts.ts';
+import { registerProject } from '../workspace/projects.ts';
+import { SecretStore } from '../workspace/secrets.ts';
 import type { ManagerEngine } from '../managers/engine.ts';
 import { RunStore } from '../runs/store.ts';
 import { mergeWriteWorkspaceConfig } from '../workspace/config.ts';
@@ -14,6 +19,7 @@ import { composeDispatchPrompt } from '../dispatch/prompts.ts';
 import { RunManager } from '../workflows/run.ts';
 import * as pullRequests from './pr.ts';
 import { createApp } from './server.ts';
+import { apiRequest } from './loopback-request.testkit.ts';
 
 const GLOBAL = 'Do not run the full test suite. Run only focused tests.';
 const PROJECT = 'Keep the project API compatible.';
@@ -28,6 +34,8 @@ describe('manager task instruction propagation through the HTTP API and workflow
   let engine: ManagerEngine;
   let app: ReturnType<typeof createApp>;
   let specs: AgentRunSpec[];
+  let semaphore: WorkspaceSemaphore;
+  let bootProjectId: string;
   let sessions: AgentSession[];
 
   const request = (path: string, body: unknown) => app.request(path, {
@@ -38,9 +46,10 @@ describe('manager task instruction propagation through the HTTP API and workflow
     root = mkdtempSync(join(tmpdir(), 'cez-manager-instructions-'));
     vi.stubEnv('CEZ_HOME', join(root, 'home'));
     vi.stubEnv('CEZ_DRY_RUN', '1');
+    vi.stubEnv('CEZ_SINGLE_PROJECT', '0');
     vi.stubEnv('CEZ_AUTONAME', '0');
     vi.stubEnv('CEZ_DISPATCH', '1');
-    vi.stubEnv('CEZ_API_URL', 'http://127.0.0.1:4321');
+    vi.stubEnv('CEZ_API_URL', 'http://127.0.0.1:4399');
     vi.stubEnv('CEZ_AUTOMATIONS', '0');
     execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: root, timeout: 10_000 });
     writeFileSync(join(root, 'file.txt'), 'base\n');
@@ -50,7 +59,7 @@ describe('manager task instruction propagation through the HTTP API and workflow
     mkdirSync(join(root, '.ai/cezar/workflows'), { recursive: true });
     mkdirSync(join(root, '.ai/skills/instruction-check'), { recursive: true });
     writeFileSync(join(root, '.ai/skills/instruction-check/SKILL.md'), `---\nname: instruction-check\n---\n${SKILL}\n`);
-    writeFileSync(join(root, '.ai/cezar/config.json'), JSON.stringify({ systemPrompt: PROJECT }));
+    writeFileSync(join(root, '.ai/cezar/config.json'), JSON.stringify({ systemPrompt: PROJECT, skillsRepos: [] }));
     writeFileSync(join(root, '.ai/cezar/workflows/instructions.yaml'), [
       'name: instructions', 'steps:', '  - id: first', '    skill: instruction-check', '    prompt: "{{task}}"',
       '    runner: codex', '  - id: second', '    prompt: "{{task}}"', '    runner: claude',
@@ -69,8 +78,17 @@ describe('manager task instruction propagation through the HTTP API and workflow
       });
     }
     store = RunStore.open(join(root, '.ai/cezar'));
-    runs = new RunManager(store, root, { semaphore: new WorkspaceSemaphore({ initial: { maxParallel: 2 } }) });
-    app = createApp({ repoRoot: root, version: 'test', store, manager: runs, onManagerEngine: (built) => { engine = built; } });
+    bootProjectId = (await registerProject(root)).id;
+    const secrets = new SecretStore(process.env, { keychain: async () => null });
+    semaphore = new WorkspaceSemaphore({ initial: { maxParallel: 2 } });
+    const modelCatalog = new RunnerModelCatalog({ adapters: {
+      codex: { discover: async () => [{
+        id: 'gpt-5.1-codex', label: 'Codex fixture', description: '',
+        reasoningEfforts: [{ id: 'low', description: '' }, { id: 'high', description: '' }],
+      }] },
+    } });
+    runs = new RunManager(store, root, { projectId: bootProjectId, secrets, semaphore });
+    app = createApp({ repoRoot: root, version: 'test', store, manager: runs, bootProjectId, secrets, semaphore, modelCatalog, onManagerEngine: (built) => { engine = built; } });
   });
 
   afterEach(async () => {
@@ -99,6 +117,206 @@ describe('manager task instruction propagation through the HTTP API and workflow
     const task = await response.json() as { runId: string };
     return { ...task, managerId: manager.id, projectId };
   }
+
+  it('discovers task capabilities and applies CLI overrides through the manager and run APIs', async () => {
+    writeFileSync(join(root, '.ai/cezar/workflows/override.yaml'), [
+      'name: override', 'budget: { tokens: 500, minutes: 20 }', 'steps:',
+      '  - id: agent', '    runner: claude', '    model: sonnet',
+      '    secrets: [WORKFLOW_TOKEN]', '    prompt: "{{task}}"',
+    ].join('\n'));
+    const managerOnly = join(process.env.CEZ_HOME!, 'manager-skills', 'private-playbook');
+    mkdirSync(managerOnly, { recursive: true });
+    writeFileSync(join(managerOnly, 'SKILL.md'), '---\nname: private-playbook\n---\nManager playbook');
+    symlinkSync(managerOnly, join(root, '.ai/skills/private-playbook'), process.platform === 'win32' ? 'junction' : 'dir');
+
+    const outside = join(root, 'outside');
+    mkdirSync(outside);
+    execFileSync('git', ['init', '-q'], { cwd: outside, timeout: 10_000 });
+    const outsideProject = await registerProject(outside);
+    const profile = (id: string) => ({ id, provider: 'codex' as const, label: id, configDir: root, addedAt: '' });
+    await mergeWriteAgentAccounts((settings) => ({ ...settings, accounts: [profile('held'), profile('deleted')] }));
+    const created = await request(BASE, {
+      instructions: 'Help with tasks', projects: [bootProjectId], cronMinutes: 0,
+      taskAgents: [{ runner: 'claude', agentProfile: 'default' },
+        { runner: 'codex', agentProfile: 'held' }, { runner: 'codex', agentProfile: 'deleted' }],
+    });
+    expect(created.status).toBe(201);
+    const manager = await created.json() as { id: string; connectedProjectIds: string[] };
+    expect(manager.connectedProjectIds).toEqual([bootProjectId]);
+    await engine.update(manager.id, { followUp: false, notify: false });
+    await mergeWriteAgentAccounts((settings) => ({ ...settings, accounts: [profile('held')] }));
+    const until = Date.now() + 120_000;
+    vi.spyOn(semaphore, 'accountHolds').mockReturnValue({
+      deadlines: new Map([['codex:held', until]]), deadline: new Set(['codex:held']), inFlight: new Set(),
+    });
+    const projectId = bootProjectId;
+    const prefix = `/api/v1/p/${projectId}`;
+    for (const [path, description, audiences] of [
+      [`${prefix}/secrets/CLI_TOKEN`, 'Task test token', ['agents']],
+      ['/api/v1/workspace/secrets/WORKFLOW_TOKEN', 'Workflow token', ['agents']],
+      ['/api/v1/workspace/secrets/CHECK_TOKEN', 'Check token', ['checks']],
+      ['/api/v1/workspace/secrets/SHADOWED_TOKEN', 'Workspace agent token', ['agents']],
+      [`${prefix}/secrets/SHADOWED_TOKEN`, 'Project check token', ['checks']],
+    ] as const) {
+      const response = await apiRequest(app, path, {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ value: 'synthetic-value-123', description, audiences }),
+      });
+      expect(response.status).toBe(204);
+    }
+
+    const cli = async (args: string[], status = 0) => {
+      const output: string[] = [];
+      const errors: string[] = [];
+      const code = await runManagerCommand(args, { CEZ_API_URL: 'http://127.0.0.1:4399', CEZ_MANAGER_ID: manager.id }, {
+        fetch: (input, init) => {
+          const url = new URL(String(input));
+          return apiRequest(app, url.pathname + url.search, init);
+        },
+        log: (line) => output.push(line), error: (line) => errors.push(line),
+      });
+      expect(code, errors.join('\n')).toBe(status);
+      return output.join('\n');
+    };
+    const flags = ['--project', projectId, '--json'];
+    const secretJson = await cli(['secrets', ...flags]);
+    expect(secretJson).not.toContain('synthetic-value-123');
+    expect(JSON.parse(secretJson).secrets).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'CLI_TOKEN', description: 'Task test token', audiences: ['agents'], scope: 'project' }),
+      expect.objectContaining({ name: 'WORKFLOW_TOKEN', scope: 'workspace' }),
+    ]));
+    const skills = JSON.parse(await cli(['skills', ...flags])).skills;
+    expect(skills.map((skill: { name: string }) => skill.name)).toContain('instruction-check');
+    expect(skills.map((skill: { name: string }) => skill.name)).not.toContain('private-playbook');
+    expect(JSON.parse(await cli(['models', ...flags, '--runner', 'codex'])).catalogs).toEqual([
+      expect.objectContaining({ runner: 'codex', models: [expect.objectContaining({
+        id: 'gpt-5.1-codex', reasoningEfforts: [expect.objectContaining({ id: 'low' }), expect.objectContaining({ id: 'high' })],
+      })] }),
+    ]);
+    expect(await cli(['models', '--runner', 'codex', '--project', projectId])).toContain('codex  gpt-5.1-codex  low, high');
+    expect(JSON.parse(await cli(['models', ...flags, '--runner', 'gemini'])).catalogs).toEqual([
+      expect.objectContaining({ runner: 'gemini', source: 'presets', models: expect.arrayContaining([
+        expect.objectContaining({ id: 'gemini-3.5-flash' }),
+      ]) }),
+    ]);
+    expect(await cli(['models', '--runner', 'gemini', '--project', projectId])).toContain('gemini  gemini-3.5-flash  -');
+    expect(await cli(['models', '--runner', 'claude', '--project', projectId])).toContain('claude  sonnet  low, medium, high, max');
+    expect(await cli(['models', '--runner', 'pi', '--project', projectId])).toContain('pi  no model catalog');
+    expect(JSON.parse(await cli(['agents', ...flags])).accounts).toEqual([
+      { runner: 'claude', agentProfile: 'default', account: 'default', label: 'default account' },
+      { runner: 'codex', agentProfile: 'held', account: 'held', label: 'held', outOfLimitsUntil: new Date(until).toISOString() },
+    ]);
+    expect(await cli(['agents', '--project', projectId])).toContain(`codex  held  held  out of limits until ${new Date(until).toISOString()}`);
+    expect(await cli(['workflows', '--project', projectId])).toMatch(/override.*model: claude\/sonnet.*500 tokens, 20 min/);
+    expect(JSON.parse(await cli(['workflows', ...flags])).workflows).toContainEqual(expect.objectContaining({
+      name: 'override', budget: { tokens: 500, minutes: 20 }, capabilities: expect.any(Object),
+    }));
+
+    const createPath = `${BASE}/${manager.id}/tasks`;
+    const task = { projectId, workflow: 'override', task: 'Report status mock:done', runner: 'claude' };
+    expect((await request(createPath, { ...task, budget: { tokens: 1.5 } })).status).toBe(400);
+    expect((await request(createPath, { ...task, secrets: ['CHECK_TOKEN'] })).status).toBe(400);
+    expect((await request(`${prefix}/runs`, { ...task, budget: { minutes: -1 } })).status).toBe(400);
+    expect((await apiRequest(app, `${BASE}/${manager.id}/agents?projectId=${outsideProject.id}`)).status).toBe(403);
+    await cli(['agents', '--project', outsideProject.id], 1);
+    for (const path of [createPath, `${prefix}/runs`]) {
+      expect((await request(path, { ...task, secrets: ['SHADOWED_TOKEN'] })).status).toBe(400);
+    }
+    await cli(['task', 'create', '--budget-tokens', '0', 'Invalid'], 1);
+    expect(store.listRuns()).toHaveLength(0);
+
+    const output = await cli(['task', 'create', '--project', projectId, '--workflow', 'override', '--runner', 'claude',
+      '--secrets', 'CLI_TOKEN', '--budget-tokens', '800', '--budget-usd', '0.5', task.task]);
+    const runId = /\[\[task:[^/]+\/([^\]]+)\]\]/.exec(output)?.[1];
+    expect(runId).toBeTruthy();
+    const record = () => store.getRun(runId!);
+    await expect.poll(() => record()?.status, { timeout: 20_000 }).toMatch(/done|review/);
+    const persisted = await apiRequest(app, `${prefix}/runs/${runId}`);
+    expect(await persisted.json()).toMatchObject({ secretNames: ['CLI_TOKEN'], budget: { tokens: 800, minutes: 20, usd: 0.5 } });
+    const launch = specs.at(-1);
+    expect(launch?.env?.CLI_TOKEN).toBe('synthetic-value-123');
+    expect(launch?.env?.WORKFLOW_TOKEN).toBeUndefined();
+    expect(launch?.env?.CHECK_TOKEN).toBeUndefined();
+    expect(launch?.systemPrompt).toContain('  CLI_TOKEN: Task test token');
+    expect(launch?.systemPrompt).toContain('budget 800 tokens, 20 min active, $0.5');
+    expect(launch?.systemPrompt).not.toMatch(/WORKFLOW_TOKEN|CHECK_TOKEN|synthetic-value-123/);
+    expect(launch?.systemPrompt).toContain(record()!.steps[0]!.capabilityPrompt!);
+
+
+    expect((await request(`${BASE}/${manager.id}/task-message`, { projectId, runId, text: 'Continue mock:done' })).status).toBe(200);
+    await expect.poll(() => specs.at(-1), { timeout: 20_000 }).not.toBe(launch);
+    expect(specs.at(-1)?.env?.CLI_TOKEN).toBe('synthetic-value-123');
+    expect(specs.at(-1)?.env?.WORKFLOW_TOKEN).toBeUndefined();
+    expect(specs.at(-1)?.systemPrompt).toContain('  CLI_TOKEN: Task test token');
+    expect(specs.at(-1)?.systemPrompt).not.toMatch(/WORKFLOW_TOKEN|CHECK_TOKEN|synthetic-value-123/);
+
+
+    for (const flags of [[], ['--secrets', '']]) {
+      const text = await cli(['task', 'create', '--project', projectId, '--workflow', 'override', '--runner', 'claude', ...flags, task.task]);
+      const id = /\[\[task:[^/]+\/([^\]]+)\]\]/.exec(text)?.[1];
+      expect(id).toBeTruthy();
+      await expect.poll(() => store.getRun(id!)?.status, { timeout: 20_000 }).toMatch(/done|review/);
+      const expected = flags.length ? undefined : 'synthetic-value-123';
+      const original = specs.at(-1);
+      expect(original?.env?.WORKFLOW_TOKEN).toBe(expected);
+      expect(original?.systemPrompt).toContain(flags.length
+        ? 'Secrets in your environment: none.'
+        : '  WORKFLOW_TOKEN: Workflow token');
+
+      expect((await request(`${BASE}/${manager.id}/task-message`, { projectId, runId: id, text: 'Continue mock:done' })).status).toBe(200);
+      await expect.poll(() => specs.at(-1), { timeout: 20_000 }).not.toBe(original);
+      expect(specs.at(-1)?.env?.WORKFLOW_TOKEN).toBe(expected);
+    }
+
+    // Corrupt the synthetic ciphertext while preserving discoverable metadata.
+    const vaultPath = join(process.env.CEZ_HOME!, 'secrets', 'workspace.json');
+    const vault = JSON.parse(readFileSync(vaultPath, 'utf8'));
+    vault.secrets.WORKFLOW_TOKEN.tag = Buffer.alloc(16).toString('base64');
+    writeFileSync(vaultPath, JSON.stringify(vault));
+    expect(await cli(['secrets', ...flags])).toContain('Workflow token');
+    for (const path of [createPath, `${prefix}/runs`]) {
+      expect((await request(path, { ...task, secrets: ['WORKFLOW_TOKEN'] })).status).toBe(400);
+    }
+  }, 60_000);
+
+  it('refuses managed grants on an unselected workflow runner and rechecks the account on Continue', async () => {
+    const created = await request(BASE, {
+      instructions: 'Help with tasks', projects: [bootProjectId], cronMinutes: 0,
+      taskAgents: [{ runner: 'claude', agentProfile: 'default' }],
+    });
+    expect(created.status).toBe(201);
+    const { id } = await created.json() as { id: string };
+    await engine.update(id, { followUp: false, notify: false });
+    const prefix = `/api/v1/p/${bootProjectId}`;
+    expect((await apiRequest(app, `${prefix}/secrets/TASK_TOKEN`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ value: 'synthetic-task-token', audiences: ['agents'] }),
+    })).status).toBe(204);
+    const create = async (workflow: string) => {
+      const response = await request(`${BASE}/${id}/tasks`, {
+        projectId: bootProjectId, task: 'Check policy mock:done', workflow, secrets: ['TASK_TOKEN'],
+      });
+      expect(response.status).toBe(201);
+      return (await response.json() as { runId: string }).runId;
+    };
+    const blocked = await create('instructions'); // The first step pins Codex.
+    await expect.poll(() => store.getRun(blocked)?.status, { timeout: 20_000 }).toBe('failed');
+    expect(store.getRun(blocked)?.error).toMatch(/manager's account selection.*codex account default/);
+    expect(specs).toHaveLength(0);
+
+    const allowed = await create('quick-task');
+    await expect.poll(() => store.getRun(allowed)?.status, { timeout: 20_000 }).toMatch(/done|review/);
+    expect(specs.at(-1)?.env?.TASK_TOKEN).toBe('synthetic-task-token');
+    await mergeWriteAgentAccounts((settings) => ({
+      ...settings, accounts: [{ id: 'other', provider: 'claude', label: 'Other', configDir: root, addedAt: '' }],
+    }));
+    await engine.update(id, { taskAgents: [{ runner: 'claude', agentProfile: 'other' }] });
+    const launches = specs.length;
+    expect((await request(`${prefix}/runs/${allowed}/continue`, { text: 'Continue mock:done' })).status).toBe(200);
+    await expect.poll(() => store.getRun(allowed)?.status, { timeout: 20_000 }).toBe('failed');
+    expect(store.getRun(allowed)?.error).toMatch(/manager's account selection.*claude account default/);
+    expect(specs).toHaveLength(launches);
+  }, 60_000);
 
   it.each([undefined, 'https://github.com/open-mercato/demo/pull/42'])(
     'answers the built-in review gate via task say before publishing (existing PR: %s)', async (existing) => {

@@ -64,6 +64,19 @@ describe('SecretStore (spec 2026-10-10-project-secrets-vault-options)', () => {
     expect((await store.list(project)).secrets.map((s) => s.name)).toEqual(['ALPHA']);
   });
 
+  it('refuses a description containing its own value on set, rotation, and describe', async () => {
+    const scope = { kind: 'workspace' } as const;
+    const value = 'synthetic-own-value';
+    const refused = 'A description must not contain its own secret value.';
+    await expect(store.set(scope, 'GUARD_KEY', value, ['agents'], `Copied: ${value}`)).rejects.toThrow(refused);
+    expect((await store.list(scope)).secrets).toEqual([]);
+
+    await store.set(scope, 'GUARD_KEY', value, ['agents'], 'Synthetic description');
+    await expect(store.describe(scope, 'GUARD_KEY', `Copied: ${value}`)).rejects.toThrow(refused);
+    await expect(store.set(scope, 'GUARD_KEY', 'Synthetic description', ['agents'])).rejects.toThrow(refused);
+    expect((await store.read(scope)).values.GUARD_KEY).toMatchObject({ value, description: 'Synthetic description' });
+  });
+
   it('preserves a readable vault when a description would exceed the UTF-8 file limit', async () => {
     const path = join(home, 'secrets', 'workspace.json');
     const maxBytes = 1024 * 1024;
@@ -355,13 +368,15 @@ it.each(['malformed', 'unsafe-mode'])('degrades %s keychain markers on reads but
     await expect(restarted.set(scope, 'OTHER', 'must-not-write')).rejects.toThrow();
     expect(writes).toBe(1);
     expect(await readFile(file, 'utf8')).toBe(ciphertext);
-    expect(await restarted.describe(scope, 'KEY', 'Deployment credential')).toBe(true);
+    await expect(restarted.describe(scope, 'KEY', 'Deployment credential')).rejects.toThrow('unavailable');
+    expect(await readFile(file, 'utf8')).toBe(ciphertext);
     await expect(restarted.list(scope)).resolves.toEqual({
-      secrets: [{ name: 'KEY', audiences: ['checks', 'agents'], description: 'Deployment credential', updatedAt: expect.any(String) }],
+      secrets: [{ name: 'KEY', audiences: ['checks', 'agents'], updatedAt: expect.any(String) }],
       skipped: expect.any(String),
     });
     await expect(stat(join(home, 'secrets', '.key'))).rejects.toMatchObject({ code: 'ENOENT' });
     await writeFile(marker, identity); await chmod(marker, 0o600);
-    expect((await new SecretStore({ CEZ_HOME: home }, { keychain }).read(scope)).values.KEY?.value).toBe('synthetic-secret');
+    expect(await restarted.describe(scope, 'KEY', 'Deployment credential')).toBe(true);
+    expect((await restarted.read(scope)).values.KEY).toMatchObject({ value: 'synthetic-secret', description: 'Deployment credential' });
   } finally { await rm(home, { recursive: true, force: true }); }
 });

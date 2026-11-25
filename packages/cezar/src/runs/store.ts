@@ -1,4 +1,4 @@
-import { RUN_PR_REF_RANK, sessionSecretPolicySchema, stepToolPolicySchema, deferredBindingSchema, modelUsageSchema, queueWaitReasonSchema, runAgentSwitchSchema, taskAskRecordSchema, trackerAccessSchema, type QuestionClosed, type QuestionStale, type TaskAskRecord } from '@open-mercato/cezar-contract';
+import { RUN_PR_REF_RANK, runRecordSchema as runRecordContract, sessionSecretPolicySchema, stepToolPolicySchema, deferredBindingSchema, modelUsageSchema, queueWaitReasonSchema, runAgentSwitchSchema, taskAskRecordSchema, trackerAccessSchema, type QuestionClosed, type QuestionStale, type TaskAskRecord } from '@open-mercato/cezar-contract';
 import { EventEmitter } from 'node:events';
 import { runLifecycleSnapshot, type RunLifecycleObserver, type RunLifecycleSnapshot } from './lifecycle.ts';
 import { randomUUID } from 'node:crypto';
@@ -396,6 +396,8 @@ export const runRecordSchema = z.object({
     .catch(undefined),
   /** The PR head came from a fork the automation admitted (`allowForkHeads`): untrusted code, so
    *  its check steps never receive any secrets. */
+  secretNames: runRecordContract.shape.secretNames,
+  budget: runRecordContract.shape.budget,
   untrustedHead: z.boolean().optional().catch(undefined),
   /**
    * Exact deadline at which a run stopped by a provider USAGE LIMIT resumes itself

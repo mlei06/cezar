@@ -169,6 +169,7 @@ import {
   eligibleFallbackCandidates,
   fallbackConsentCurrent,
   managerFallbackPolicy,
+  managerSecretAccountAllowed,
   getAgentFallbackPolicySync,
   loadFallbackAccounts,
   type AgentFallbackPolicy,
@@ -802,6 +803,7 @@ function continuationSession(run: RunRecord | undefined, excludeStepId?: string,
 
 function continuationSecretNames(run: RunRecord | undefined, owner?: StepState): string[] | undefined {
   if (owner?.sessionSecretPolicy) return owner.sessionSecretPolicy.names;
+  if (run?.secretNames !== undefined) return run.secretNames;
   const workflow = run?.workflowDef;
   const steps = workflow?.graph
     ? workflow.graph.nodes.filter((node) => node.type === 'agent')
@@ -1136,6 +1138,8 @@ function formatWakeInstant(at: Date): string {
 }
 
 export interface StartRunInput {
+  secrets?: RunRecord['secretNames'];
+  budget?: RunRecord['budget'];
   /** Internal scheduled launch identity, persisted before any naming or execution side effect. */
   scheduledLaunch?: { id: string; provenance: NonNullable<RunRecord['automationTrigger']>; binding: NonNullable<RunRecord['deferredBinding']> };
   /** Internal child admission: inherit the launch guard without the scheduler's run identity. */
@@ -2059,8 +2063,9 @@ export class RunManager {
       ? options.workflowAgent.agentProfile
       : backend === (run?.runner ?? 'claude') ? run?.agentProfile : undefined);
     const resolved = await resolveProfileEnvForRoot(this.repoRoot, backend, profileId);
-    if ((options.workflowAgent?.replaced ?? (run?.agentSwitch && backend === run.runner))
-      && profileId !== undefined && profileId !== resolved.profile.id) {
+    const accountPinned = options.workflowAgent?.replaced ?? (run?.agentSwitch && backend === run.runner);
+    const managedGrant = run?.startedByManager && run.secretNames?.length;
+    if ((accountPinned || managedGrant) && profileId !== undefined && profileId !== resolved.profile.id) {
       throw new AgentAccountUnavailableError(`The selected ${backend} account no longer exists (${profileId}). Switch the task to an available account.`);
     }
     const bound = run?.deferredBinding?.accounts.find(a => a.runner === backend);
@@ -2173,7 +2178,7 @@ export class RunManager {
       }
     } : undefined;
     const baseEnv = { ...this.agentEnv(runId, options.generateFollowups), ...resolved.env, ...trackerEnv };
-    const { values, secrets } = await this.agentVaultEnv(runId, options.secretNames, baseEnv);
+    const { values, secrets } = await this.agentVaultEnv(runId, options.secretNames, backend, resolved.profile.id, baseEnv);
     return {
       env: { ...values, ...baseEnv },
       secrets,
@@ -2185,33 +2190,48 @@ export class RunManager {
     };
   }
 
-  private async agentVaultEnv(runId: string, secretNames: WorkflowStepDef['secrets'], baseEnv: Record<string, string>) {
-    // Resolve values and prompt metadata together so a project override or a failed
-    // decryption affects both in exactly the same way.
-    const resolved = this.store.getRun(runId)?.untrustedHead === true || secretNames?.length === 0
-      ? undefined
-      : await this.secrets.resolve(this.projectId ? { projectId: this.projectId, root: this.repoRoot } : undefined, 'agents').catch(() => undefined);
-    let values = withoutAgentLogins(resolved?.values ?? {});
-    if (secretNames?.length) {
+  private async agentVaultEnv(
+    runId: string, secretNames: WorkflowStepDef['secrets'], backend: RunnerId, profileId: string,
+    baseEnv: Record<string, string>,
+  ) {
+    const run = this.store.getRun(runId);
+    if (run?.untrustedHead || secretNames?.length === 0 || run?.secretNames?.length === 0) {
+      return { values: {} as Record<string, string>, secrets: [] };
+    }
+    const project = this.projectId ? { projectId: this.projectId, root: this.repoRoot } : undefined;
+    const requested = run?.secretNames;
+    const managed = requested !== undefined;
+    if (managed && run?.startedByManager && !await managerSecretAccountAllowed(
+      run.startedByManager.id, { provider: backend, profileId }, this.repoRoot,
+    )) {
+      throw new AgentAccountUnavailableError(`The manager's account selection does not allow explicit secrets on ${backend} account ${profileId}.`);
+    }
+    // Resolve values and metadata in the same read, using the explicit grant policy when present.
+    const resolved = await (managed
+      ? this.secrets.resolveAgentGrants(project, requested)
+      : this.secrets.resolve(project, 'agents')).catch(() => undefined);
+    let values = resolved?.values ?? {};
+    if (!managed) values = withoutAgentLogins(values);
+    if (!managed && secretNames?.length) {
       const names = new Set(secretNames);
       values = Object.fromEntries(Object.entries(values).filter(([name]) => names.has(name)));
     }
-    // Keep the legacy Azure CLI alias for unrestricted steps; restricted steps use the listed names.
-    const azureAlias = secretNames === undefined && values.AZURE_DEVOPS_PAT && !values.AZURE_DEVOPS_EXT_PAT;
+    // Keep the legacy Azure CLI alias for unrestricted steps.
+    const azureAlias = !managed && secretNames === undefined && values.AZURE_DEVOPS_PAT && !values.AZURE_DEVOPS_EXT_PAT;
     if (azureAlias) values.AZURE_DEVOPS_EXT_PAT = values.AZURE_DEVOPS_PAT!;
     this.store.registerRunSecrets(runId, Object.values(values).filter((value) => value.length >= MIN_SECRET_LEN));
     const secrets = Object.keys(values).filter((name) => !Object.hasOwn(baseEnv, name)).map((name) => ({
       name,
-      description: resolved?.descriptions?.[azureAlias && name === 'AZURE_DEVOPS_EXT_PAT' ? 'AZURE_DEVOPS_PAT' : name],
+      description: resolved?.descriptions[azureAlias && name === 'AZURE_DEVOPS_EXT_PAT' ? 'AZURE_DEVOPS_PAT' : name],
     }));
     return { values, secrets };
   }
 
   private async freshContinuationProfile(
-    runId: string, run: RunRecord | undefined, profile: Awaited<ReturnType<RunManager['agentEnvForStep']>>,
+    runId: string, run: RunRecord | undefined, backend: RunnerId, profile: Awaited<ReturnType<RunManager['agentEnvForStep']>>,
   ) {
     const names = continuationSecretNames(run);
-    const { values, secrets } = await this.agentVaultEnv(runId, names, profile.baseEnv);
+    const { values, secrets } = await this.agentVaultEnv(runId, names, backend, profile.profileId, profile.baseEnv);
     return { names, profile: { ...profile, env: { ...values, ...profile.baseEnv }, secrets } };
   }
 
@@ -2229,8 +2249,8 @@ export class RunManager {
         workflow: run?.workflow ?? 'task',
         runner,
         model,
-        budget: run?.workflowDef?.budget,
-        budgetUsd: run?.dispatch?.budgetUsd,
+        budget: run?.budget ?? run?.workflowDef?.budget,
+        budgetUsd: run?.budget?.usd ?? run?.dispatch?.budgetUsd,
         secrets: secrets.filter(({ name }) => !envOverrides || !Object.hasOwn(envOverrides, name)),
         workflows,
         skill,
@@ -2299,8 +2319,11 @@ export class RunManager {
     });
     // Persist the full definition so a queued run survives a restart (#367) —
     // ad-hoc "(planned)" chains exist nowhere else to re-resolve from.
+    const budget = workflow.budget ?? input.budget;
     this.store.updateRun(run.id, {
       workflowDef: workflow,
+      ...(input.secrets !== undefined ? { secretNames: input.secrets } : {}),
+      ...(budget !== undefined ? { budget: { ...budget, ...input.budget } } : {}),
       ...(input.startedByManager ? { startedByManager: input.startedByManager } : {}),
     });
     // On the record, not only the input: restart recovery rebuilds the run from it.
@@ -7005,7 +7028,7 @@ export class RunManager {
           this.attachmentsDir(runId),
         );
         await trackFallbackOutcome(async () => {
-          const { profile, names } = await this.freshContinuationProfile(runId, record, continueProfile);
+          const { profile, names } = await this.freshContinuationProfile(runId, record, continueBackend, continueProfile);
           if (state.cancelled || this.active.get(runId) !== state) throw new Error('cancelled');
           session = launch(freshId, false, context, profile, names);
           for (const content of replay) session.sendMessage(content);
@@ -9161,7 +9184,7 @@ export class RunManager {
     );
     const secretNames = graphHooks?.resumeSessionId || graphHooks?.continuing || resumeStep || checkFailure !== null
       ? continuationSecretNames(launchRecord, resumedOwner)
-      : step.secrets?.filter((name) => typeof name === 'string');
+      : launchRecord?.secretNames ?? step.secrets?.filter((name) => typeof name === 'string');
     const reasoningEffort = agentModelsLocked(this.repoRoot)
       ? undefined
       : resolveStepReasoningEffort(step, taskBackend, input.reasoningEffort);
@@ -9641,7 +9664,7 @@ export class RunManager {
         emit({ type: 'note', stepId: step.id, message: MISSING_SESSION_NOTE });
         const context = freshContinuationContext(record, this.store.readEvents(runId), this.attachmentsDir(runId));
         result = await trackFallbackOutcome(async () => {
-          const { profile, names } = await this.freshContinuationProfile(runId, record, stepProfile);
+          const { profile, names } = await this.freshContinuationProfile(runId, record, stepBackend, stepProfile);
           if (state.cancelled || this.active.get(runId) !== state) throw new Error('cancelled');
           session = attach(launch(freshId, false, `${context}\n\n---\n\n## New user instruction\n${userPrompt}`, profile, names), false);
           for (const content of replay) session.sendMessage(content);
@@ -9843,7 +9866,7 @@ export class RunManager {
           ? Object.values(scheduled.workflowDef.graph.nodes).find(node => node.type === 'agent')
           : scheduled.workflowDef?.steps.find(s => stepKind(s) === 'agent');
         const runner = first?.runner ?? scheduled.runner ?? 'claude';
-        const profile = await this.agentEnvForStep(runId, runner, { namingOnly: true, secretNames: first?.secrets });
+        const profile = await this.agentEnvForStep(runId, runner, { namingOnly: true, secretNames: scheduled.secretNames ?? first?.secrets });
         execution = { runner, env: profile.env, onUsageWindows: profile.onUsageWindows, ...(profile.planUsageAccount ? { planUsageAccount: profile.planUsageAccount } : {}) };
       }
       const result = await generateRunName(this.repoRoot, { task, skillName, skillDescription, ...live, nameBranch: !live }, execution,
