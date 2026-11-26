@@ -965,7 +965,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
             if (!parsed.success) return
             const id = parsed.data.runId
             void queryClient.invalidateQueries({
-              predicate: ({ queryKey }) => queryKey[1] === 'groups' ||
+              predicate: ({ queryKey }) => queryKey[1] === 'groups' || queryKey[1] === 'factory' ||
                 (queryKey[1] === 'runs' && queryKey[2] === 'scores' && queryKey[3] === id),
             })
           } catch {

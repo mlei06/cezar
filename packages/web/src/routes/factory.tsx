@@ -52,6 +52,8 @@ export function FactoryRoute() {
 
   const { current, previous, improvements, report, weekly } = summary.data
   const scorers = [...new Set([...current.groups, ...previous].map(({ key }) => key))].sort()
+  const pending = current.groups.reduce((total, group) => total + group.pending, 0)
+  const errors = current.groups.reduce((total, group) => total + group.errors, 0)
   return <main data-route="factory" className="mx-auto flex w-full max-w-6xl flex-col gap-5 p-4 md:p-6">
     <header className="flex flex-wrap items-center justify-between gap-3">
       <h1 className="text-xl font-semibold">Factory</h1>
@@ -64,6 +66,9 @@ export function FactoryRoute() {
     <div className="grid gap-5 lg:grid-cols-2">
       <Card className={section}>
         <h2 className="font-semibold">Scorer pass rates</h2>
+        {pending + errors > 0 && <p role="status" aria-label="Scoring progress" className="text-sm text-muted-foreground">
+          Pending scores {pending} · Scoring errors {errors}
+        </p>}
         {scorers.length ? <table className="w-full text-sm">
           <thead><tr><th scope="col" className={header}>Scorer</th><th scope="col" className={header}>Prior 7 days</th><th scope="col" className={header}>Last 7 days</th></tr></thead>
           <tbody>{scorers.map((key) => <tr key={key}>
