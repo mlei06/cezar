@@ -315,6 +315,13 @@ The built-in rubrics start as the overseer's tuned drafts from the build (roadma
   "fix": "the concrete change that would have prevented it" }
 ```
 
+**What each target means** (the place the fix belongs, so blind labels and the judge read the same):
+- `harness`: Cezar itself, including its sandbox, tool grants, runners, built-in workflows and built-in skills, and anything a task ran into because of how Cezar set it up.
+- `manager-skill`: the manager's playbook (`manage-project`, `manage-harness`).
+- `workflow`, `skill`, `agents-md`, `docs`, `code`: the project's own files of that kind.
+- `brief`: what the task was told, by the manager or the owner.
+- `infra`: outside Cezar and the repository: the machine, the network or VPN, external services and their credentials.
+
 A cause without quoted evidence is dropped, and so is a cause whose evidence isn't found in the transcript or the metrics (Cezar checks it with a substring match). Three is the cap: it covers the multi-cause failures seen so far without letting the judge pad the list.
 
 **Re-scoring.** `cez score <run> [--scorer s]` re-scores a run on demand, replacing that scorer's result. A rubric change does not re-score old runs automatically.
@@ -834,6 +841,7 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
 
 ## Changelog
 
+- **v5.29:** D5 defines each cause target, after calibration showed blind labels putting Cezar's own sandbox, grants and built-in workflows under `infra` or `workflow` instead of `harness`.
 - **v5.28:** D8 uses the original Codex profile for authenticated alternate-version agent replay. Input attachments stay limited to the recorded task, and staged execution returns usage data for comparison. Durable scoring remains outside the scratch cockpit.
 - **v5.27:** D8 reuses the Codex broker and the replay check sandbox for isolated agent edits. Alternate harness checks retain their diff after the scratch cockpit closes.
 - **v5.26:** D8 restricts replay check reads to the worktree and minimal runtime, blocks Git administration and skips autosave and external checkout filters.
