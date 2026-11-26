@@ -55,6 +55,7 @@ import {
   managerCancelTaskInputSchema,
   managerRetryTaskInputSchema,
   managerSwitchTaskInputSchema,
+  managerTaskBudgetInputSchema,
   runsListQuerySchema,
   managerAttachmentParamSchema,
   sendManagerMessageInputSchema,
@@ -155,6 +156,9 @@ import {
   type AttachmentInput,
   continueInputSchema,
   switchRunAgentInputSchema,
+  runBudgetSchema,
+  type RunBudgetExceededEvent,
+  runBudgetUsd,
   cancelRunInputSchema,
   createRunInputSchema,
   type ContinueResponse,
@@ -313,6 +317,7 @@ import {
   type DeleteDraftResponse,
 } from '@open-mercato/cezar-contract';
 import { resolveTaskModelAliases, setFallbackProviderCheck, toPastedContent, type PastedContent, type RunManager } from '../workflows/run.ts';
+import { checkTaskBudget } from '../workflows/task-budget.ts';
 import {
   foldedLength,
   imageChars,
@@ -920,6 +925,7 @@ export type WorkspaceEventName =
   | 'manager-change'
   | 'manager-message'
   | 'manager-delta'
+  | 'budget.exceeded'
   | 'phone-pairing'
   /** The attention list may have changed (spec 2026-11-23-needs-you-triage): payload `{}`, re-read it. */
   | 'attention-change';
@@ -5637,6 +5643,7 @@ export function createApp(deps: ServerDeps) {
         ...(modelRoutePinned ? { modelRouteNotes: selection.notes, modelRoutePinned: true } : {}),
         secrets: parsed.data.secrets,
         budget: parsed.data.budget,
+        onBudget: parsed.data.onBudget,
         images,
         systemPrompt: parsed.data.systemPrompt,
         ...(parsed.data.startedByManager ? { startedByManager: parsed.data.startedByManager } : {}),
@@ -5682,7 +5689,28 @@ export function createApp(deps: ServerDeps) {
       const { store } = c.get('project');
       const { id } = c.req.valid('param');
       const run = store.getRun(id);
-      return run ? c.json(summarizeRunMetrics(run, store.readEvents(id))) : c.json({ error: 'not found' }, 404);
+      if (!run) return c.json({ error: 'not found' }, 404);
+      const now = Date.now();
+      const activeMs = run.activeMs === undefined ? undefined : store.activeWorkMs(id, now);
+      return c.json(summarizeRunMetrics(run, store.readEvents(id), now, activeMs));
+    })
+
+    .patch('/runs/:id/budget', paramZodValidator(runIdParamSchema), jsonZodValidator(runBudgetSchema), (c) => {
+      const { store } = c.get('project');
+      const { id } = c.req.valid('param');
+      const run = store.getRun(id);
+      if (!run) return c.json({ error: 'not found' }, 404);
+      const requested = c.req.valid('json');
+      const current = { ...run.budget, usd: runBudgetUsd(run) };
+      if ((['usd', 'tokens', 'minutes'] as const).some((metric) =>
+        requested[metric] !== undefined && requested[metric]! < (current[metric] ?? 0))) {
+        return c.json({ error: 'A budget update can only raise a ceiling.' }, 409);
+      }
+      const budget = { ...run.budget, ...requested };
+      const releaseBrake = run.dispatch?.overBudget && !checkTaskBudget({ ...run, budget }, store.activeWorkMs(id), new Date().toISOString()).park;
+      store.updateRun(id, { budget, ...(releaseBrake ? { dispatch: { ...run.dispatch!, overBudget: undefined } } : {}) });
+      store.flush();
+      return c.json({ budget });
     })
 
     .get(
@@ -9529,7 +9557,16 @@ export function createApp(deps: ServerDeps) {
     engine: managerEngine,
     enabled: () => capabilities().managers !== false,
   });
-  const watchProject = (project: ProjectContext) => [watchReports(project), watchTasks(project)];
+  const watchProject = (project: ProjectContext) => {
+    const publishBudget = (runId: string, threshold: RunBudgetExceededEvent['threshold']) => {
+      void Promise.resolve(project === bootContext ? resolveBootProject() : project.id).then((projectId) => {
+        const payload: RunBudgetExceededEvent = { projectId, runId, threshold };
+        workspaceEvents.emit('budget.exceeded', payload);
+      }).catch((error: unknown) => console.warn('[cezar] budget event:', error));
+    };
+    project.store.on('budget.exceeded', publishBudget);
+    return [watchReports(project), watchTasks(project), () => project.store.off('budget.exceeded', publishBudget)];
+  };
   const offReports = watchProject(bootContext);
   for (const id of contexts.ids()) {
     const ctx = contexts.peek(id);
@@ -9678,6 +9715,10 @@ export function createApp(deps: ServerDeps) {
     .post('/workspace/managers/:id/task-cancel', paramZodValidator(managerIdParamSchema), jsonZodValidator(managerCancelTaskInputSchema), async (c) => {
       const cancelled = await managerEngine.cancelTask(c.req.valid('param').id, c.req.valid('json'));
       return 'error' in cancelled ? c.json({ error: cancelled.error }, cancelled.status) : c.json(cancelled);
+    })
+    .post('/workspace/managers/:id/task-budget', paramZodValidator(managerIdParamSchema), jsonZodValidator(managerTaskBudgetInputSchema), async (c) => {
+      const result = await managerEngine.raiseTaskBudget(c.req.valid('param').id, c.req.valid('json'));
+      return 'error' in result ? c.json({ error: result.error }, result.status) : c.json(result);
     })
     .post('/workspace/managers/:id/task-switch', paramZodValidator(managerIdParamSchema), jsonZodValidator(managerSwitchTaskInputSchema), async (c) => {
       const switched = await managerEngine.switchTask(c.req.valid('param').id, c.req.valid('json'));

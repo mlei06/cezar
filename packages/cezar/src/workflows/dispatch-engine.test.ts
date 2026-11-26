@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { PENDING_ASK_MAX_QUESTIONS, type DispatchInput, type RunDispatch } from '@open-mercato/cezar-contract';
 import { runRecordSchema, RunStore, type RunRecord } from '../runs/store.ts';
+import { measuredRunInputTokens } from '../runs/task-metrics.ts';
 import { WorkspaceSemaphore, type WorkspaceResourceLimits } from '../workspace/semaphore.ts';
 import { RunManager } from './run.ts';
 import type { WorkflowDef } from './types.ts';
@@ -182,7 +183,7 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
       const child = store.getRun(created.id);
       expect(child?.title).toBe('Take the left flank');
       expect(child?.dispatch).toEqual({ rootRunId: parent.id, parentRunId: parent.id });
-      expect(child?.budget).toEqual({ usd: 2.5 });
+      expect(child?.budget).toMatchObject({ usd: 2.5, tokens: expect.any(Number), minutes: expect.any(Number) });
       expect(child?.autonomous).toBe(true);
       // The child forks off the PARENT's branch, which is what `execute()` reads.
       expect(child?.baseBranch).toBe(store.getRun(parent.id)?.branch);
@@ -280,6 +281,22 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
       expect(remainder).toBeGreaterThan(0.5);
       expect(remainder).toBeLessThanOrEqual(1);
       expect(refusal(parent.id, order('nothing left'))).toContain('no budget left');
+    }, 40_000);
+
+    it('carves token and active-minute ceilings without blocking the other child slots', async () => {
+      reboot({ maxParallel: 1, maxMonitoringSessions: 0 });
+      const parent = await parkedRoot();
+      const usage = measuredRunInputTokens(store.getRun(parent.id)!) ?? 0;
+      const activeMs = store.activeWorkMs(parent.id);
+      store.updateRun(parent.id, {
+        budget: { tokens: usage + 40000, minutes: activeMs / 60_000 + 8 },
+      });
+      const first = dispatchOk(parent.id, order('first', { title: 'first' }));
+      const second = dispatchOk(parent.id, order('second', { title: 'second' }));
+      expect(store.getRun(first.id)?.budget?.tokens).toBe(10000);
+      expect(store.getRun(second.id)?.budget?.tokens).toBe(10000);
+      expect(store.getRun(first.id)?.budget?.minutes).toBeCloseTo(2);
+      expect(store.getRun(second.id)?.budget?.minutes).toBeCloseTo(2);
     }, 40_000);
 
     it('releases a settled child’s unspent budget to the parent', async () => {
@@ -711,12 +728,34 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
 
   // ---- brakes -------------------------------------------------------------------------------
 
+  it('records top-level input-token thresholds while letting the run continue', async () => {
+    const record = start('mock:monitoring keep going', undefined, { budget: { tokens: 100 }, autonomous: true });
+    await waitFor(record.id, (r) => r?.activity === 'monitoring');
+    const measured = store.getRun(record.id);
+    expect(measured?.status).toBe('running');
+    expect(measured?.onBudget).toBe('notify');
+    expect(measured?.budgetExceeded?.map(({ metric, multiple }) => [metric, multiple]))
+      .toEqual([['tokens', 1], ['tokens', 2], ['tokens', 4]]);
+  }, 40_000);
+
+  it('parks a task explicitly set to park on its input-token ceiling', async () => {
+    const record = start('mock:monitoring keep going', undefined, {
+      budget: { tokens: 100 }, onBudget: 'park', autonomous: true,
+    });
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+    expect(store.getRun(record.id)?.budgetExceeded?.map(({ metric, multiple }) => [metric, multiple]))
+      .toEqual([['tokens', 1]]);
+    expect(activeState(record.id)?.monitoringWakeTimer).toBeUndefined();
+  }, 40_000);
+
   it.each([
     ['legacy zero ceiling', rootOf('m6', 0), undefined],
     ['run budget', rootOf('m6'), { usd: 0.001 }],
   ] as const)('parks a run at its %s — no autonomous nudge, no wake timer', async (_label, dispatch, budget) => {
     reboot({ maxParallel: 1, maxMonitoringSessions: 0 });
-    const record = start('mock:monitoring keep going', dispatch, { autonomous: true, budget });
+    const record = start('mock:monitoring keep going', dispatch, {
+      autonomous: true, budget, ...(budget ? { onBudget: 'park' } : {}),
+    });
     await waitFor(record.id, (r) => r?.status === 'waiting');
     expect(store.getRun(record.id)?.dispatch?.overBudget).toBe(true);
     expect(store.getRun(record.id)?.activity).toBeUndefined();

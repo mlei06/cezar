@@ -24,6 +24,7 @@ import {
 import type { ApiRun } from '@open-mercato/cezar-api-client'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { TitleEditInput, useTitleEditor, type TitleEditor } from '@/components/editable-title'
+import { TaskBudgetMarker } from '@/components/task-budget-marker'
 import { TOGGLE_ON_ICON_CLASS } from '@/components/pin-toggle'
 import { Pill } from '@/components/pill'
 import { ReferenceChip } from '@/components/reference-chip'
@@ -727,6 +728,7 @@ function EditableTitle({ run, beginRename }: { run: ApiRun; beginRename: RefObje
       <h1 className="min-w-0 truncate text-lead font-semibold" title={run.task}>
         {title}
       </h1>
+      <TaskBudgetMarker run={run} />
       <button
         type="button"
         aria-label="Rename task"

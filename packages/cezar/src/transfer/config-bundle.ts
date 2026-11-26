@@ -55,6 +55,7 @@ export const WORKSPACE_EXCLUDED: Record<string, string> = {
 };
 
 export const PROJECT_EXCLUDED: Record<string, string> = {
+  factory: 'per-project factory policy is configured locally',
   worktreeLifecycle: 'local-only hook scripts',
   maxParallel: 'workspace-wide now (resources)',
   memoryLimitMb: 'workspace-wide now (resources)',

@@ -428,10 +428,23 @@ describe('cez manager', () => {
       expect(calls).toHaveLength(before);
     });
 
+    it('raises a task budget through the scoped manager route', async () => {
+      const { run, calls, errors } = harness();
+      expect(await run('task', 'budget', 'r1', '--project', 'alpha', '--tokens', '75000', '--minutes', '2.5')).toBe(0);
+      expect(calls.at(-1)).toMatchObject({
+        url: 'http://x/api/v1/workspace/managers/m1/task-budget',
+        body: { projectId: 'alpha', runId: 'r1', budget: { tokens: 75000, minutes: 2.5 } },
+      });
+      const before = calls.length;
+      expect(await run('task', 'budget', 'r1', '--project', 'alpha', '--tokens', '1.5')).toBe(1);
+      expect(errors.at(-1)).toContain('whole number');
+      expect(calls).toHaveLength(before);
+    });
+
     it('an unknown subcommand fails instead of being read as a run id', async () => {
       const { run, calls, errors } = harness();
       expect(await run('task', 'foo')).toBe(1);
-      expect(errors.at(-1)).toContain("unknown subcommand 'foo' for 'task'. Valid: create, say, switch, cancel, retry, follow, unfollow, or a run id");
+      expect(errors.at(-1)).toContain("unknown subcommand 'foo' for 'task'. Valid: create, say, switch, cancel, retry, budget, follow, unfollow, or a run id");
       expect(await run('job', 'frob')).toBe(1);
       expect(errors.at(-1)).toContain("unknown subcommand 'frob' for 'job'. Valid: add, list, remove");
       expect(calls).toEqual([]);

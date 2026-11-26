@@ -2023,6 +2023,68 @@ describe('RunStore — read receipts (#unread-done-items)', () => {
   });
 });
 
+it('writes one rebuildable metrics snapshot when a run settles and deletes it with the run', async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'cez-metrics-snapshot-'));
+  try {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 'example', workflow: 'fixture', task: 't', steps: [] });
+    const file = join(dataDir, 'runs', `${run.id}.metrics.json`);
+    store.appendEvent(run.id, { type: 'tool-call', stepId: 'work', id: 'tool', tool: 'Read' });
+    store.appendEvent(run.id, { type: 'tool-result', stepId: 'work', toolCallId: 'tool', result: 'example' });
+    store.updateRun(run.id, { status: 'done', finishedAt: new Date().toISOString() });
+    await vi.waitFor(() => expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({
+      runId: run.id,
+      toolResultChars: 7,
+      outcome: { status: 'done' },
+    }));
+    store.deleteRun(run.id);
+    expect(existsSync(file)).toBe(false);
+    store.flush();
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+describe('RunStore active work', () => {
+  it('counts running steps across waits and restarts', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'cez-active-work-'));
+    const start = Date.parse('2026-10-05T10:00:00.000Z');
+    vi.useFakeTimers({ toFake: ['Date'], now: start });
+    try {
+      const store = RunStore.open(dataDir);
+      const run = store.createRun({ title: 't', workflow: 'fixture', task: 't', steps: [{ id: 'work', name: 'Work', kind: 'agent' }] });
+      const later = (ms: number) => vi.setSystemTime(start + ms);
+      later(4_000);
+      store.updateRun(run.id, { status: 'running', currentStepId: 'work' });
+      store.updateStep(run.id, 'work', { status: 'running' });
+      later(5_000);
+      store.updateRun(run.id, { activity: 'monitoring' });
+      later(12_000);
+      store.updateRun(run.id, { activity: undefined });
+      later(12_500);
+      store.suspendActiveWork(run.id, true);
+      later(20_000);
+      store.suspendActiveWork(run.id, false);
+      later(20_400);
+      store.updateRun(run.id, { status: 'waiting' });
+      later(30_000);
+      store.flush();
+      expect(store.activeWorkMs(run.id)).toBe(1900);
+
+      const reopened = RunStore.open(dataDir, { keepLive: true });
+      expect(reopened.activeWorkMs(run.id)).toBe(1900);
+      reopened.updateRun(run.id, { status: 'running' });
+      later(30_100);
+      reopened.updateStep(run.id, 'work', { status: 'done' });
+      expect(reopened.activeWorkMs(run.id)).toBe(2000);
+      reopened.flush();
+    } finally {
+      vi.useRealTimers();
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('RunStore — waitingSince', () => {
   let dataDir: string;
   const AT = '2026-10-05T10:00:00.000Z';

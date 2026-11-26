@@ -1,3 +1,4 @@
+import { TaskBudgetMarker } from '@/components/task-budget-marker'
 import { ScheduledTasks } from '@/components/scheduled-tasks'
 import { useScheduledTasksGate } from '@/lib/scheduled-tasks-gate'
 import { runModelLine, titleWithModel } from '@/lib/actual-model'
@@ -1550,6 +1551,7 @@ function TitleCell({
         {quiet ? <StatusDescription id={statusId} attention={deriveAttention(run)} /> : null}
         {unread ? <UnreadMarker /> : null}
       </Link>
+      <TaskBudgetMarker run={run} />
       {/* What a DISPATCHED row is for — `review` or `implement` — so a tester can tell a child
           from a task a person typed without opening it. Null on every root. */}
       {dispatchKindLabel(run) ? (
@@ -1715,6 +1717,7 @@ const TaskCard = React.memo(function TaskCard({
       )}
     >
       {runTitle(run)}
+      <TaskBudgetMarker run={run} />
       {quiet ? <StatusDescription id={statusId} attention={attention} /> : null}
       {unread ? <UnreadMarker /> : null}
     </Link>

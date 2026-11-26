@@ -43,7 +43,7 @@ describe('task metrics', () => {
         toolCalls: 0, toolResultChars: 0, cacheReadTokens: 13 },
     });
     expect(runMetricsSchema.parse(summarizeRunMetrics(run, []))).toMatchObject({
-      requests: 3, contextAvg: 93_000, contextPeak: 100_000, tokens: { cacheRead: 13 },
+      requests: 3, contextAvg: 93_000, contextPeak: 100_000, tokens: { input: 279_000, cacheRead: 13 },
     });
   });
 });

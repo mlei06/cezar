@@ -1,6 +1,8 @@
-import { RUN_PR_REF_RANK, runRecordSchema as runRecordContract, sessionSecretPolicySchema, stepToolPolicySchema, deferredBindingSchema, modelUsageSchema, queueWaitReasonSchema, runAgentSwitchSchema, taskAskRecordSchema, trackerAccessSchema, type QuestionClosed, type QuestionStale, type TaskAskRecord } from '@open-mercato/cezar-contract';
+import { RUN_PR_REF_RANK, runRecordSchema as runRecordContract, sessionSecretPolicySchema, stepToolPolicySchema, runIdParamSchema, deferredBindingSchema, modelUsageSchema, queueWaitReasonSchema, runAgentSwitchSchema, taskAskRecordSchema, trackerAccessSchema, type QuestionClosed, type QuestionStale, type TaskAskRecord } from '@open-mercato/cezar-contract';
 import { EventEmitter } from 'node:events';
 import { runLifecycleSnapshot, type RunLifecycleObserver, type RunLifecycleSnapshot } from './lifecycle.ts';
+import { summarizeRunMetrics } from './task-metrics.ts';
+import { atomicWriteJsonSync } from '../workspace/config.ts';
 import { randomUUID } from 'node:crypto';
 import { threadId } from 'node:worker_threads';
 import { hostname, uptime } from 'node:os';
@@ -401,6 +403,9 @@ export const runRecordSchema = z.object({
    *  its check steps never receive any secrets. */
   secretNames: runRecordContract.shape.secretNames,
   budget: runRecordContract.shape.budget,
+  onBudget: runRecordContract.shape.onBudget.catch(undefined),
+  budgetExceeded: runRecordContract.shape.budgetExceeded.catch(undefined),
+  activeMs: runRecordContract.shape.activeMs.catch(undefined),
   untrustedHead: z.boolean().optional().catch(undefined),
   /**
    * Exact deadline at which a run stopped by a provider USAGE LIMIT resumes itself
@@ -1324,6 +1329,25 @@ function lockRunIndex(dataDir: string): () => void {
   }
 }
 
+export function readRunEvents(filePath: string): RunEvent[] {
+  try {
+    const raw = readFileSync(filePath, 'utf8');
+    return raw
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => {
+        try {
+          return JSON.parse(line) as RunEvent;
+        } catch {
+          return null;
+        }
+      })
+      .filter((e): e is RunEvent => e !== null);
+  } catch {
+    return [];
+  }
+}
+
 /**
  * File-backed run store: `runs.json` index (atomic tmp+rename writes, the
  * pattern from @cezar/core's IssueStore) plus one append-only NDJSON event
@@ -1333,6 +1357,9 @@ function lockRunIndex(dataDir: string): () => void {
  */
 export class RunStore extends EventEmitter {
   private runs = new Map<string, RunRecord>();
+  private activeWorkSince = new Map<string, number>();
+  private activeWorkSuspended = new Set<string>();
+  private metricsCheckpoint = new Map<string, string>();
   private lifecycleObserver?: RunLifecycleObserver;
   private lifecycleSnapshots = new Map<string, RunLifecycleSnapshot>();
 
@@ -2358,22 +2385,7 @@ export class RunStore extends EventEmitter {
   }
 
   readEvents(runId: string): RunEvent[] {
-    try {
-      const raw = readFileSync(this.eventsPath(runId), 'utf8');
-      return raw
-        .split('\n')
-        .filter(Boolean)
-        .map((line) => {
-          try {
-            return JSON.parse(line) as RunEvent;
-          } catch {
-            return null;
-          }
-        })
-        .filter((e): e is RunEvent => e !== null);
-    } catch {
-      return [];
-    }
+    return readRunEvents(this.eventsPath(runId));
   }
 
   deleteRun(id: string): boolean {
@@ -2507,12 +2519,64 @@ export class RunStore extends EventEmitter {
     this.emit('artifacts', { runId, ...listing });
   }
 
+  activeWorkMs(runId: string, now = Date.now()): number {
+    const since = this.activeWorkSince.get(runId);
+    return (this.runs.get(runId)?.activeMs ?? 0) + (since === undefined ? 0 : Math.max(0, now - since));
+  }
+
+  /** A Continue can look running in the UI while it still waits for the repository lease. */
+  suspendActiveWork(runId: string, suspended: boolean): void {
+    const run = this.runs.get(runId);
+    if (!run) return;
+    if (suspended) this.activeWorkSuspended.add(runId);
+    else this.activeWorkSuspended.delete(runId);
+    this.touch(run);
+  }
+
+  private checkpointActiveWork(run: RunRecord): void {
+    const now = Date.now();
+    if (this.activeWorkSince.has(run.id)) run.activeMs = this.activeWorkMs(run.id, now);
+    const active = run.status === 'running' && run.activity !== 'monitoring' && !this.activeWorkSuspended.has(run.id)
+      && run.steps.some((step) => step.id === run.currentStepId && step.status === 'running')
+      && !run.workflowDef?.graph?.nodes.some((node) => node.id === run.currentStepId && node.type === 'gate.human');
+    if (active) {
+      this.activeWorkSince.set(run.id, now);
+      run.activeMs ??= 0;
+    } else {
+      this.activeWorkSince.delete(run.id);
+    }
+  }
+
   private touch(run: RunRecord): void {
+    this.checkpointActiveWork(run);
     // Every status and archive write passes here, so no settle path can forget to end a question.
     this.endTaskAsks(run);
     this.observeLifecycle(run.id, run);
     this.scheduleSave();
     this.emit('run', run);
+    this.checkpointFinalMetrics(run);
+  }
+
+  private metricsPath(id: string): string {
+    return join(this.dataDir, 'runs', `${id}.metrics.json`);
+  }
+
+  /** The event log is the source. A failed or missing checkpoint can be rebuilt on demand. */
+  private checkpointFinalMetrics(run: RunRecord): void {
+    const { finishedAt, status } = run;
+    if (!finishedAt || !['done', 'review', 'failed', 'cancelled'].includes(status)) return;
+    if (!runIdParamSchema.safeParse({ id: run.id }).success) return;
+    const key = `${status}:${finishedAt}`;
+    if (this.metricsCheckpoint.get(run.id) === key) return;
+    this.metricsCheckpoint.set(run.id, key);
+    setImmediate(() => {
+      if (this.runs.get(run.id) !== run || run.finishedAt !== finishedAt || run.status !== status || this.metricsCheckpoint.get(run.id) !== key) return;
+      try {
+        atomicWriteJsonSync(this.metricsPath(run.id), summarizeRunMetrics(run, this.readEvents(run.id)));
+      } catch {
+        this.metricsCheckpoint.delete(run.id);
+      }
+    });
   }
 
   /** Forget a run, and remember that we did. Every removal path funnels through this boundary,
@@ -2526,6 +2590,9 @@ export class RunStore extends EventEmitter {
     this.forgotten.add(id);
     if (this.runs.has(id)) this.observeLifecycle(id, undefined);
     this.sessionBackends.delete(id);
+    this.activeWorkSince.delete(id);
+    this.activeWorkSuspended.delete(id);
+    this.metricsCheckpoint.delete(id);
     this.persisted.delete(id);
     const existed = this.runs.delete(id);
     if (existed) this.emit('deleted', id);
@@ -2584,6 +2651,7 @@ export class RunStore extends EventEmitter {
         rmSync(join(this.dataDir, 'dispatch', tree), { recursive: true, force: true });
       }
       rmSync(this.eventsPath(id), { force: true });
+      if (runIdParamSchema.safeParse({ id }).success) rmSync(this.metricsPath(id), { force: true });
       rmSync(this.handoffPath(id), { force: true }); // spec 007: the journal goes with the task
       rmSync(this.imagesDir(id), { recursive: true, force: true }); // agent screenshots
       rmSync(artifactsDir(this.dataDir, id), { recursive: true, force: true });
@@ -2618,6 +2686,11 @@ export class RunStore extends EventEmitter {
       // lock BEFORE reading. A unique temp protects payload identity but cannot prevent a
       // later rename from overwriting another writer's acknowledged additions.
       release = lockRunIndex(this.dataDir);
+      // Persist only elapsed work. An interrupted process never leaves an open clock on disk.
+      for (const id of this.activeWorkSince.keys()) {
+        const run = this.runs.get(id);
+        if (run) this.checkpointActiveWork(run);
+      }
       const merged = this.mergeWithIndexOnDisk(indexPath);
       writeFileSync(tmpPath, JSON.stringify(merged, null, pretty ? 2 : undefined), 'utf8');
       renameSyncWithRetry(tmpPath, indexPath);

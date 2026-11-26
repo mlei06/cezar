@@ -112,6 +112,7 @@ import { loadWorkflows, modelAlias, newerCatalogWorkflow, resolveWorkflowModelAl
 import { chooseTaskAgent } from '../managers/task-agent-choice.ts';
 import { addTaskTurnStats, TurnStatsCollector } from '../managers/turn-stats.ts';
 import { capabilityPrompt } from './capability-prompt.ts';
+import { budgetAction, carveChildWorkBudget, checkTaskBudget } from './task-budget.ts';
 import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/store.ts';
 import { switchedWorkflowAgent, taskAgentSelection, workflowAgentSwitch } from '../runs/agent-selection.ts';
 import { artifactsDir, authParkForAccount, isIdleParked } from '../runs/store.ts';
@@ -1148,6 +1149,7 @@ function formatWakeInstant(at: Date): string {
 export interface StartRunInput {
   secrets?: RunRecord['secretNames'];
   budget?: RunRecord['budget'];
+  onBudget?: RunRecord['onBudget'];
   /** Internal scheduled launch identity, persisted before any naming or execution side effect. */
   scheduledLaunch?: { id: string; provenance: NonNullable<RunRecord['automationTrigger']>; binding: NonNullable<RunRecord['deferredBinding']> };
   /** Internal child admission: inherit the launch guard without the scheduler's run identity. */
@@ -2369,6 +2371,7 @@ export class RunManager {
       workflowDef: workflow,
       ...(input.secrets !== undefined ? { secretNames: input.secrets } : {}),
       ...(budget !== undefined ? { budget: { ...budget, ...input.budget } } : {}),
+      ...(input.onBudget !== undefined ? { onBudget: input.onBudget } : {}),
       ...(input.startedByManager ? { startedByManager: input.startedByManager } : {}),
     });
     // On the record, not only the input: restart recovery rebuilds the run from it.
@@ -3481,15 +3484,13 @@ export class RunManager {
     turnText: string,
     ctx: { state: ActiveRun; stepId: string; done: boolean },
   ): DispatchTurnResult {
-    const idle: DispatchTurnResult = { hasDispatch: false, dispatched: false, overBudget: false, rePrompted: false };
+    const overBudget = this.enforceBudget(runId, ctx.stepId) && !ctx.done;
+    const idle: DispatchTurnResult = { hasDispatch: false, dispatched: false, overBudget, rePrompted: false };
     const dispatch = this.dispatchOf(runId);
     const dispatched = Boolean(ctx.state.dispatchedThisTurn);
     ctx.state.dispatchedThisTurn = false;
     if (!dispatch) return idle;
     if (ctx.done) return { hasDispatch: true, dispatched: false, overBudget: false, rePrompted: false };
-    const note = (message: string, tone?: 'danger') =>
-      this.store.appendEvent(runId, { type: 'note', stepId: ctx.stepId, message, ...(tone ? { tone } : {}) });
-    const overBudget = this.enforceDispatchBudget(runId, note);
     const rePrompted = !dispatched && !overBudget && this.deliverOwnInbox(runId, ctx.state, ctx.stepId, turnText);
     // The filesystem channel's SIGNAL: this turn may have written into a sibling's or the root's
     // inbox. Wake every parked recipient now — the writer's turn end is the one moment cezar
@@ -3720,22 +3721,28 @@ export class RunManager {
    * The caller then skips the autonomous nudge, clears the monitoring wake timer and parks
    * `waiting`. The note fires ONCE (guarded by the persisted flag) while the brake keeps answering.
    */
-  private enforceDispatchBudget(runId: string, note: (message: string, tone?: 'danger') => void): boolean {
+  private enforceBudget(runId: string, stepId: string): boolean {
     const run = this.store.getRun(runId);
-    const dispatch = run?.dispatch;
-    if (!run || !dispatch) return false;
-    const budget = runBudgetUsd(run);
-    if (budget === undefined) return false;
-    const spent = run.costUsd ?? 0;
-    if (spent < budget) return false;
-    if (!dispatch.overBudget) {
+    if (!run) return false;
+    const { crossed, park } = checkTaskBudget(run, this.store.activeWorkMs(runId), new Date().toISOString());
+    if (park && run.dispatch && !run.dispatch.overBudget) {
       this.updateDispatch(runId, (current) => ({ ...current, overBudget: true }));
-      note(
-        `budget spent — ${usd(spent)} of ${usd(budget)}. The run parks for you instead of continuing on its own; send a message to take it further.`,
-        'danger',
-      );
     }
-    return true;
+    if (crossed.length) {
+      const entries = crossed.map((entry) => ({ ...entry, stepId }));
+      this.store.updateRun(runId, { budgetExceeded: [...(run.budgetExceeded ?? []), ...entries] });
+      for (const entry of entries) {
+        this.store.emit('budget.exceeded', runId, entry);
+        const label = entry.metric === 'usd' ? 'USD' : entry.metric === 'tokens' ? 'input tokens' : 'active minutes';
+        const measured = entry.metric === 'usd' ? usd(entry.value) : Number(entry.value.toFixed(2));
+        const limit = entry.metric === 'usd' ? usd(entry.limit) : entry.limit;
+        this.store.appendEvent(runId, {
+          type: 'note', stepId, tone: 'danger',
+          message: `budget ${park ? 'spent' : 'reached'} — ${measured} ${label}, ${entry.multiple}× the ${limit} ceiling`,
+        });
+      }
+    }
+    return park;
   }
 
   /**
@@ -3809,11 +3816,20 @@ export class RunManager {
       track('dispatch_tree_started', { label: 'agent' });
     }
 
-    const budget = this.carveChildBudget(this.store.getRun(parentId) ?? parent, runs, input.max_cost ?? intent?.budgetUsd);
+    const workflowBudget = opts.workflow?.budget;
+    const budget = this.carveChildBudget(parent, runs, input.max_cost ?? intent?.budgetUsd);
     if ('refused' in budget) {
       note(`dispatch refused — ${budget.refused}`, 'danger');
       return { refused: budget.refused };
     }
+
+    const workBudget = carveChildWorkBudget(parent, childrenOf(runs, parentId), inFlightCap - inFlight,
+      this.store.activeWorkMs(parentId), workflowBudget);
+    if ('refused' in workBudget) {
+      note(`dispatch refused — ${workBudget.refused}`, 'danger');
+      return { refused: workBudget.refused };
+    }
+    const childBudget = { ...workBudget, ...(budget.budgetUsd !== undefined ? { usd: budget.budgetUsd } : {}) };
 
     const title = input.title ?? input.objective.split('\n')[0]?.slice(0, 120) ?? 'dispatched task';
     const workflow: WorkflowDef = {
@@ -3852,7 +3868,7 @@ export class RunManager {
       ...(childModel ? { model: childModel } : {}),
       ...(childAccount ? { agentProfile: childAccount } : {}),
       autonomous: true,
-      ...(budget.budgetUsd !== undefined ? { budget: { usd: budget.budgetUsd } } : {}),
+      ...(Object.keys(childBudget).length ? { budget: childBudget } : {}),
       dispatch: {
         rootRunId,
         parentRunId: parentId,
@@ -5165,6 +5181,7 @@ export class RunManager {
       parked();
       abort();
     };
+    this.store.suspendActiveWork(runId, true);
     this.waiting.add(runId);
     this.releaseSlot();
     try {
@@ -5172,6 +5189,7 @@ export class RunManager {
     } finally {
       state.interrupt = parked;
       this.waiting.delete(runId);
+      this.store.suspendActiveWork(runId, false);
     }
     if (state.cancelled) return false;
     state.releaseRepoRoot = release;
@@ -7219,6 +7237,14 @@ export class RunManager {
     // Resolve the agent backend for this run: the task choice (GUI) wins over
     // the config default. Per-step `runner` can still override it below.
     const config = await loadConfig(this.repoRoot);
+    if (original && !original.startedAt) {
+      const workspaceBudget = (await loadWorkspaceConfig().catch(() => undefined))?.factory?.budget;
+      if (state.cancelled) return;
+      this.store.updateRun(runId, {
+        budget: { tokens: 3_000_000, minutes: 30, ...workspaceBudget, ...config.factory?.budget, ...original.budget },
+        onBudget: budgetAction(original),
+      });
+    }
     const selection = await resolveTaskModelAliases(workflow, this.repoRoot, input, () => this.semaphore.accountHolds(), config);
     if (state.cancelled) return;
     if (modelAlias(input.model)) input = { ...input, model: undefined };
@@ -11515,6 +11541,7 @@ export class RunManager {
       finishedAt: new Date().toISOString(),
     });
     emit({ type: 'step-end', stepId, status, ...(error ? { error } : {}), ...extra });
+    this.enforceBudget(runId, stepId);
     appendHandoffHeartbeat(this.dataDir, runId, `step "${stepId}" complete — status=${status}`);
   }
 }

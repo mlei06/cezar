@@ -117,7 +117,7 @@ const HELP: Record<string, string> = {
   tasks: SNAPSHOT_HELP('tasks', "Every connected project's tasks, the user's own included, with their model, effort and PR."),
   prs: SNAPSHOT_HELP('prs', 'Open pull requests and their status.'),
   task: `cez manager task <run> [--project <id>]
-cez manager task create|say|switch|cancel|retry|follow|unfollow …   (each takes --help)
+cez manager task create|say|switch|cancel|retry|budget|follow|unfollow …   (each takes --help)
 
 One task as JSON: status, startedBy, runner, model, actualModel (what the agent reported running), effort, prNumber/prUrl, its last message and its children.
   --project <id>   the task's project; found from the snapshot when omitted`,
@@ -143,6 +143,7 @@ Starts a task.
   --effort <e>       ${EFFORTS.join(' | ')}; refused when the runner or model has no such level
   --dispatch         start it as the root of a dispatch tree, only for work worth splitting;
                      ignored in a trunk-based project, whose tasks work in its checkout${CONTENT_HELP}`,
+  'task budget': 'cez manager task budget <run> [--project <id>] [--tokens N] [--minutes N] [--usd N] — raise a task budget.',
   'task say': `cez manager task say --project <id> <run> [flags] "<text>"
 
 Messages a running task, or continues a finished one with the text.
@@ -652,6 +653,23 @@ export async function runManagerCommand(
           io.log(result.cancelled
             ? `cancelled ${result.runId}${children}. Its worktree and branch are kept.`
             : `${result.runId} is ${result.status}, so there was nothing to stop${children ? `; cancelled${children.slice(1)}` : ''}.`);
+          return 0;
+        }
+        if (sub === 'budget') {
+          const { values, positionals } = parse('task budget', taskArgs, {
+            project: { type: 'string' }, tokens: { type: 'string' }, minutes: { type: 'string' }, usd: { type: 'string' },
+          }, true);
+          const [runId, ...extra] = positionals;
+          if (!runId || extra.length > 0) fail('usage: cez manager task budget <run> [--tokens N] [--minutes N] [--usd N]');
+          if (env.CEZ_MANAGER_TURN === 'watch') fail('a watch check is read-only: ask the user instead');
+          const budget = runBudgetSchema.safeParse({
+            ...(values.tokens !== undefined ? { tokens: Number(values.tokens) } : {}),
+            ...(values.minutes !== undefined ? { minutes: Number(values.minutes) } : {}),
+            ...(values.usd !== undefined ? { usd: Number(values.usd) } : {}),
+          });
+          if (!budget.success) fail('set at least one positive budget, with a whole number for --tokens');
+          const projectId = await projectForRun(values.project, runId);
+          printJson(await call('/task-budget', { method: 'POST', body: { projectId, runId, budget: budget.data } }));
           return 0;
         }
         if (sub === 'switch' || sub === 'retry') {

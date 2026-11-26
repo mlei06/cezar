@@ -429,7 +429,7 @@ export const managerAttachmentSchema = z.object({
 export type ManagerAttachment = z.infer<typeof managerAttachmentSchema>;
 
 /** What a followed task's status card reports. */
-export const managerTaskReportStateSchema = z.enum(['done', 'review', 'failed', 'needs-you', 'cancelled']);
+export const managerTaskReportStateSchema = z.enum(['done', 'review', 'failed', 'needs-you', 'cancelled', 'budget']);
 export type ManagerTaskReportState = z.infer<typeof managerTaskReportStateSchema>;
 
 export const managerTaskSourceSchema = z.object({
@@ -821,6 +821,9 @@ export const managerCancelTaskResponseSchema = z.object({
   children: z.array(z.string()),
 });
 export type ManagerCancelTaskResponse = z.infer<typeof managerCancelTaskResponseSchema>;
+
+export const managerTaskBudgetInputSchema = z.object({ projectId: boundedId, runId: boundedId, budget: runBudgetSchema });
+export type ManagerTaskBudgetInput = z.infer<typeof managerTaskBudgetInputSchema>;
 
 export const managerRetryTaskInputSchema = z.object({
   projectId: boundedId,
