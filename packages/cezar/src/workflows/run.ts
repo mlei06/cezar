@@ -6914,12 +6914,13 @@ export class RunManager {
     // through `deliverMessage`, so it needs the SAME delivery-only `/skill` rewrite the
     // live path applies (#811). Delivery-only: the `user-message` event above already
     // persisted the user's original text, and the transcript must keep showing that.
+    const slash = leadingSlashSkillName(prompt);
     const attachedSkill = toolsStep?.skill;
-    const continueSkills = await this.provisionTaskSkills(state, { stepSkill: attachedSkill, slash: leadingSlashSkillName(prompt), text: prompt });
+    const continueSkills = await this.provisionTaskSkills(state, { stepSkill: attachedSkill, slash, text: prompt });
     const envOverrides = continuationTools.enforceReadOnly ? readOnlyEnv() : undefined;
     const capabilities = await this.taskCapabilityPrompt(
       runId, stepId, continueBackend, continueModel,
-      state.skills?.some((skill) => skill.name === attachedSkill && !skill.missingShared) ? attachedSkill : undefined,
+      usableSkillName(state.skills, attachedSkill) ?? usableSkillName(state.skills, slash),
       envOverrides,
     );
     // Preparation awaits can outlive consent or this state's ownership. Revalidate after
@@ -9142,10 +9143,11 @@ export class RunManager {
     // step template (`Review: {{task}}`) still reads as a sentence.
     const taskText = input.task.trim() === '' && attachments.length ? ATTACHMENT_ONLY_TASK : input.task;
     const rawPrompt = applyTemplate(step.prompt ?? '{{task}}', taskText);
+    const slash = leadingSlashSkillName(rawPrompt);
     // Install the selected skill and its companions where the agent's own skill lookup looks.
     const provision = await this.provisionTaskSkills(state, {
       stepSkill: step.skill,
-      slash: leadingSlashSkillName(rawPrompt),
+      slash,
       text: rawPrompt,
     });
     if (state.cancelled) return 'cancelled';
@@ -9589,7 +9591,7 @@ export class RunManager {
     this.store.updateStep(runId, step.id, { toolPolicy: stepTools });
     const envOverrides = stepTools.enforceReadOnly ? readOnlyEnv() : undefined;
     const capabilities = await this.taskCapabilityPrompt(
-      runId, step.id, stepBackend, backendModel, attachedSkill, envOverrides,
+      runId, step.id, stepBackend, backendModel, attachedSkill ?? usableSkillName(state.skills, slash), envOverrides,
     );
     const stepPrivateMcp = !stepDef || !isReadOnlyWorkflow(stepDef);
     const runner = createRunner(stepBackend);
@@ -11684,6 +11686,10 @@ export function missingSharedSkillsNote(names: readonly string[]): string {
 /** The `name` of a prompt's leading `/name` slash command, else undefined. */
 export function leadingSlashSkillName(text: string): string | undefined {
   return /^\/([A-Za-z0-9][A-Za-z0-9._-]*)(?=\s|$)/.exec(text)?.[1];
+}
+
+function usableSkillName(skills: readonly Skill[] | undefined, name: string | undefined): string | undefined {
+  return skills?.find((skill) => skill.name === name && !skill.missingShared)?.name;
 }
 
 /**
