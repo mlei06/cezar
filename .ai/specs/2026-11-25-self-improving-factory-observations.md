@@ -71,6 +71,13 @@ After M3, this log is also the calibration set for the automated judge.
 
 Release `7dd520c` passed health and contained both playbooks and the charter loader. The real two-project exercise is pending owner onboarding.
 
+## M2
+
+| # | Observation | Evidence | Class | Decision |
+|---|---|---|---|---|
+| M2-1 | Worktree setup or a later Continue can start from a different revision than the initial fork. The running harness release also needs to stay attributable across upgrades. | PR #13 verified dispatch, setup-hook commits, persisted Continue identity and the linked CLI. Release `417a93c` passed health and returned the expected project and harness commits for an isolated task. | harness | Record the initial identity once and the Continue identity on its step. Keep commit metadata optional for older or unidentifiable records (D8, v5.18). |
+| M2-2 | The routine model depends on network reachability, and default model pins in built-ins preempt project settings. | Owner's D2 routing decision. | policy | Keep project defaults for ordinary work, add a configurable threshold and high alias, and probe the low-tier primary before selecting a hosted fallback (v5.17). |
+
 ## Judge calibration
 
 Blind comparisons: the overseer's verdict is written before the judge's is read, on every third task and every failing one (roadmap runbook). The spec's targets are 80% agreement on pass/fail and 70% on the main cause's target.
