@@ -19,8 +19,8 @@ The factory is built by the factory. After a one-time bootstrap (M0), which the 
 | Milestone | Status | Notes |
 |---|---|---|
 | M0 | done 2026-11-25 | release `0.21.0+release-735fc84` live; warm-up PR #1 merged and released; judge prototype calibrated on 2 runs; observations M0-1 to M0-10 |
-| M1 | live acceptance partly verified | release `f1747bd`; PR #11 fixed slash-skill reporting. Live New task acceptance passed. The configured low-reasoning smoke with the paused manager is pending. |
-| M1.5 | in validation | manager playbook and charter work in the outside session. Real project work waits for the owner to onboard another project. |
+| M1 | live acceptance partly verified | PR #11 shipped slash-skill reporting in release `f1747bd`. Live New task acceptance passed. The configured low-reasoning smoke with the paused manager is pending. |
+| M1.5 | released, live acceptance pending | PR #12 shipped the charter and manager playbooks in release `7dd520c`. Isolated concurrent managers passed. Live project work is paused for second-project onboarding. |
 
 ## Goal and definition of done
 

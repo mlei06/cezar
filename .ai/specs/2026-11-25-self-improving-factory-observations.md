@@ -62,6 +62,14 @@ After M3, this log is also the calibration set for the automated judge.
 | M1-10 | The review found that `implement`'s generated validation checks inherit check-only secrets while the agent can edit the test scripts; the manager held the merge as a security decision, as D11.4 asks | review f0349f8b | none (good escalation) | overseer: not a blocker, since agent secrets are ungated by owner decision; keep inheritance, explicit allowlist as a follow-up |
 | M1-12 | The New task composer can select a workflow and a slash skill together. The runner received the expanded skill, but the capability block omitted its name. | PR #11 regression checks the actual runner prompt. The live New task form submitted the workflow, model and skill together on release `f1747bd`, and the read-only run confirmed its capability block. | harness | Use the resolved slash skill in the existing capability block. Preserve workflow-step skill precedence and compatibility with native slash commands. |
 
+## M1.5
+
+| # | Observation | Evidence | Class | Decision |
+|---|---|---|---|---|
+| M1.5-1 | Git can discover a parent repository from a separately registered folder. A manager for that folder could receive a different project's charter. | PR #12 regression held two managers open concurrently and verified charter separation, fresh-session reloading and the nested-folder case. | harness | Preview committed charter sections only from the connected repository root. Prefer already-fetched fast-forward progress and keep reads bounded. |
+
+Release `7dd520c` passed health and contained both playbooks and the charter loader. The real two-project exercise is pending owner onboarding.
+
 ## Judge calibration
 
 Blind comparisons: the overseer's verdict is written before the judge's is read, on every third task and every failing one (roadmap runbook). The spec's targets are 80% agreement on pass/fail and 70% on the main cause's target.
