@@ -4512,6 +4512,23 @@ describe('ManagerEngine', () => {
       expect(prompts()[1]).toContain('2× the 50000 input tokens ceiling (102000 used)');
     });
 
+    it('posts an infrastructure finding once without starting another manager turn', async () => {
+      const engine = followedEngine();
+      const id = await started(engine);
+      const entry = {
+        id: 'fixture-cause', projectId: 'alpha', runId: 'new-run', scorer: 'outcome',
+        label: 'missed', reasoning: 'The fixture could not connect.', at: later(0), state: 'open',
+        cause: { category: 'access', target: 'infra', evidence: 'Fixture endpoint refused.', fix: 'Restore fixture access.' },
+      } as const;
+      engine.reportInfrastructureCause(entry, id);
+      engine.reportInfrastructureCause(entry, id);
+      expect(assistants(id)).toEqual([expect.objectContaining({
+        turn: 'watch',
+        text: expect.stringContaining('Restore fixture access.'),
+      })]);
+      expect(backend.specs).toEqual([]);
+    });
+
     it('only forwards a budget raise for a task started by this manager', async () => {
       const engine = followedEngine();
       const id = await started(engine);

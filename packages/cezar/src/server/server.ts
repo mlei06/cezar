@@ -1844,6 +1844,7 @@ export function createApp(deps: ServerDeps) {
       const queues = routeCauses(event.score, origin);
       recordCauses(projectCauseQueuePath(project.dataDir), origin, event.score.scorer, queues.project);
       recordCauses(harnessCauseQueuePath(), origin, event.score.scorer, queues.harness);
+      for (const entry of queues.infra) managerEngine.reportInfrastructureCause(entry, run.startedByManager?.id);
     }).catch(() => console.warn('[cezar] score saved, but its cause queue could not be updated'));
   }, undefined, secretStore);
   deps.onDispose?.(() => scoring.dispose());
