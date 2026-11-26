@@ -10,7 +10,7 @@ import { evaluateScorer } from './evaluate.ts';
 import { JudgeQueue } from './queue.ts';
 import { resolveJudgeRoute, type JudgeRoute } from './runner.ts';
 import { readRunScores, writeRunScore } from './store.ts';
-import { renderJudgeTranscript, type JudgeTranscript } from './transcript.ts';
+import { renderJudgeTranscript } from './transcript.ts';
 
 export interface ScoringProject {
   id: string;
@@ -18,7 +18,6 @@ export interface ScoringProject {
   dataDir: string;
   store: RunStore;
 }
-
 
 function scoringEnabled(): boolean {
   return process.env.CEZ_SCORING !== '0' && process.env.CEZ_DRY_RUN !== '1';
@@ -34,7 +33,7 @@ function sampled(runId: string, scorer: string, percent: number): boolean {
 }
 
 export class ScoringService {
-  private readonly catalog = new ScorerCatalog();
+  private readonly catalog = new ScorerCatalog(true);
   private readonly queue = new JudgeQueue();
 
   constructor(private readonly onScore: (event: ScoreRecordedEvent) => void,
@@ -94,7 +93,14 @@ export class ScoringService {
     const existing = readRunScores(project.dataDir, run.id);
     const now = Date.now();
     const queued: string[] = [];
-    let transcript: JudgeTranscript | undefined;
+    let snapshot: { events: ReturnType<RunStore['readEvents']>; metrics: ReturnType<typeof summarizeRunMetrics> } | undefined;
+    const transcript = (maxChars: number) => {
+      if (!snapshot) {
+        const events = project.store.readEvents(run.id);
+        snapshot = { events, metrics: summarizeRunMetrics(run, events) };
+      }
+      return renderJudgeTranscript(run, snapshot.metrics, snapshot.events, maxChars);
+    };
     for (const scorer of scorers) {
       if (selected ? scorer.name !== selected : scorer.workflows && !scorer.workflows.includes(run.workflow)) continue;
       if (run.status === 'cancelled' && scorer.name === 'outcome') continue;
@@ -124,10 +130,6 @@ export class ScoringService {
           const chosen = await this.judgeFor(project.root);
           if ('error' in chosen) return { status: 'error', reason: chosen.error };
           route = chosen;
-          if (!transcript) {
-            const events = project.store.readEvents(run.id);
-            transcript = renderJudgeTranscript(run, summarizeRunMetrics(run, events), events, 300_000);
-          }
           return evaluateScorer(scorer, transcript, route.call);
         },
         update: (result) => {
