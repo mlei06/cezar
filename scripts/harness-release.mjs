@@ -6,7 +6,7 @@
 // automatic rollback, build pruning, and the release log.
 //
 //   node scripts/harness-release.mjs [<commit>]   build, link, wait for idle, switch, health-check
-//   node scripts/harness-release.mjs --rollback   switch back to the previous release
+//   node scripts/harness-release.mjs --rollback   switch back to the previous release and open a draft revert PR
 //   flags: --force (skip the idle wait)  --wait-minutes N (default 15)  --no-restart
 //          --health-url URL (default http://127.0.0.1:4321/api/v1/health)  --keep N (default 5)
 //          --unit NAME (default cezar)  --skip-checks (build only; no typecheck/tests)
@@ -15,8 +15,8 @@
 //          --stage-only (build and check an isolated cockpit; leave the live version active)
 //          --simulate-unhealthy (test the automatic rollback: the new version's health check fails)
 import { execFileSync, spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -297,15 +297,62 @@ async function release() {
   return ok ? 0 : 1;
 }
 
+async function openRollbackPr(entryRoot, sha) {
+  if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(sha)) throw new Error('The rolled-back build has no valid commit.');
+  const { parseRemote } = await import(pathToFileURL(join(entryRoot, 'dist', 'git-remotes.js')).href);
+  const remote = parseRemote(run('git', ['config', '--get', 'remote.origin.url']));
+  if (!remote || remote.host !== 'github.com') throw new Error('The factory fork needs a GitHub origin for a revert PR.');
+  const repo = [remote.host, remote.owner, remote.repo].join('/');
+  const branch = 'revert/harness-' + sha.slice(0, 12);
+  const existing = JSON.parse(run('gh', ['pr', 'list', '--repo', repo, '--base', 'factory', '--head', branch, '--json', 'url', '--limit', '1']));
+  if (existing[0]?.url) return existing[0].url;
+
+  run('git', ['fetch', '--quiet', 'origin', '+refs/heads/factory:refs/remotes/origin/factory']);
+  const base = 'refs/remotes/origin/factory';
+  run('git', ['merge-base', '--is-ancestor', sha, base]);
+  const account = JSON.parse(run('gh', ['api', 'user', '--hostname', remote.host]));
+  if (!Number.isSafeInteger(account.id) || typeof account.login !== 'string' || !/^[a-z0-9-]+$/i.test(account.login)) throw new Error('Could not identify the public GitHub account.');
+  const email = account.id + '+' + account.login + '@users.noreply.github.com';
+  const scratch = mkdtempSync(join(tmpdir(), 'cez-harness-revert-'));
+  const tree = join(scratch, 'checkout');
+  const body = join(scratch, 'pr.md');
+  try {
+    run('git', ['worktree', 'add', '--detach', tree, base]);
+    run('git', ['-c', 'user.name=Cezar Factory', '-c', 'user.email=' + email, '-c', 'commit.gpgSign=false', 'revert', '--no-edit', sha], tree);
+    run('git', ['push', 'origin', 'HEAD:refs/heads/' + branch], tree);
+    writeFileSync(body, 'The harness was rolled back after release ' + sha.slice(0, 12) + '. This reverts the release commit.\n');
+    return run('gh', [
+      'pr', 'create', '--repo', repo, '--base', 'factory', '--head', branch, '--draft',
+      '--title', 'Revert harness release ' + sha.slice(0, 12), '--body-file', body,
+    ], tree);
+  } finally {
+    if (existsSync(tree)) spawnSync('git', ['worktree', 'remove', '--force', tree], { cwd: REPO });
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
 async function rollback() {
-  const entryRoot = resolve(join(HOME, 'versions', 'current', 'node_modules', '@open-mercato', 'cezar'));
+  const entryRoot = realpathSync(join(HOME, 'versions', 'current', 'node_modules', '@open-mercato', 'cezar'));
   const su = await selfUpdate(entryRoot);
   const current = su.activeId();
-  const target = lastSwitch(current)?.previous;
+  const release = lastSwitch(current);
+  const target = release?.previous;
   if (!target || target === current) throw new Error('no previous release recorded to roll back to');
   say(`rolling back ${current} → ${target}`);
   const ok = await withReleaseHold(() => switchTo(su, target, current, { action: 'rollback', from: current }));
-  return ok ? 0 : 1;
+  if (!ok) return 1;
+  if (release.sha) {
+    try {
+      const url = await openRollbackPr(entryRoot, release.sha);
+      log({ action: 'revert-pr', sha: release.sha, id: target, result: 'ok', url });
+      say('opened revert PR ' + url);
+    } catch {
+      log({ action: 'revert-pr', sha: release.sha, id: target, result: 'failed' });
+      say('restored the previous version; could not open its revert PR');
+      return 4;
+    }
+  }
+  return 0;
 }
 
 try {

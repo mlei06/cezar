@@ -9,7 +9,7 @@ import { expect, it } from 'vitest';
 
 const exec = promisify(execFile);
 
-it.skipIf(process.platform === 'win32').each(['restart', 'health', 'manual', 'benchmark', 'post-switch'] as const)(
+it.skipIf(process.platform === 'win32').each(['restart', 'health', 'manual', 'benchmark', 'post-switch', 'revert'] as const)(
   'keeps a healthy release in the %s case',
   async (failure) => {
     const root = await mkdtemp(join(tmpdir(), 'cez-release-rollback-'));
@@ -24,8 +24,20 @@ it.skipIf(process.platform === 'win32').each(['restart', 'health', 'manual', 'be
       const address = server.address();
       if (!address || typeof address === 'string') throw new Error('Missing loopback listener');
       const git = (...args: string[]) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
-      git('init', '-q');
-      git('-c', 'user.name=Release Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'fixture', '--allow-empty');
+      git('init', '-q', '-b', 'factory');
+      const commit = (...args: string[]) => git(
+        '-c', 'user.name=Release Test', '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgSign=false', 'commit', ...args,
+      );
+      const payload = join(root, 'version.txt');
+      if (failure === 'revert') {
+        await writeFile(payload, 'stable\n');
+        git('add', 'version.txt');
+      }
+      commit('-qm', 'fixture', '--allow-empty');
+      if (failure === 'revert') {
+        await writeFile(payload, 'changed\n');
+        commit('-qam', 'release change');
+      }
       const sha = git('rev-parse', 'HEAD');
       const candidate = join(workspace, 'factory', 'builds', sha.slice(0, 7), 'packages', 'cezar');
       const selfUpdate = join(candidate, 'dist', 'self-update');
@@ -60,19 +72,48 @@ it.skipIf(process.platform === 'win32').each(['restart', 'health', 'manual', 'be
         timeout: 10_000,
         env: { ...process.env, CEZ_HOME: workspace, RELEASE_TEST_STATE: stateFile, PATH: `${shimDir}:${process.env.PATH}` },
       });
-      if (failure === 'manual') {
+      if (failure === 'manual' || failure === 'revert') {
         const activePackage = join(workspace, 'versions', 'current', 'node_modules', '@open-mercato', 'cezar', 'dist', 'self-update');
         await mkdir(activePackage, { recursive: true });
         for (const file of ['layout.js', 'launcher.js']) await copyFile(join(selfUpdate, file), join(activePackage, file));
         const past = [
-          { action: 'switch', id: 'previous', previous: 'stable', result: 'ok' },
+          { action: 'switch', id: 'previous', previous: 'stable', result: 'ok', ...(failure === 'revert' ? { sha } : {}) },
           { action: 'switch', id: 'candidate', previous: 'previous', result: 'failed' },
           { action: 'rollback', id: 'previous', from: 'candidate', result: 'ok', automatic: true },
         ];
         await writeFile(releaseLog, past.map((entry) => JSON.stringify(entry)).join('\n') + '\n');
+        const remote = join(root, 'remote.git');
+        const forge = join(shimDir, 'gh');
+        if (failure === 'revert') {
+          git('init', '-q', '--bare', remote);
+          const origin = 'https://github.com/example/harness.git';
+          git('remote', 'add', 'origin', origin);
+          git('config', 'url.file://' + remote + '.insteadOf', origin);
+          git('push', 'origin', 'HEAD:refs/heads/factory');
+          await writeFile(join(activePackage, '..', 'git-remotes.js'),
+            'export const parseRemote = () => ({ host: "github.com", owner: "example", repo: "harness" });');
+          await writeFile(forge, [
+            '#!/bin/sh',
+            'case "$1 $2" in',
+            '  "pr list") echo "[]";;',
+            '  "api user") echo \'{"id":123,"login":"fixture"}\';;',
+            '  "pr create") printf "%s\\n" "$@" > "$0.argv"; echo "https://github.com/example/harness/pull/1";;',
+            '  *) exit 1;;',
+            'esac',
+          ].join('\n'));
+          await chmod(forge, 0o755);
+        }
         args.push('--rollback');
         await execute();
         expect(await readFile(stateFile, 'utf8')).toBe('stable');
+        if (failure === 'revert') {
+          const branch = 'revert/harness-' + sha.slice(0, 12);
+          expect(git('--git-dir', remote, 'show', branch + ':version.txt')).toBe('stable');
+          const pr = (await readFile(forge + '.argv', 'utf8')).trim().split('\n');
+          expect(pr).toEqual(expect.arrayContaining(['--base', 'factory', '--head', branch, '--draft']));
+          expect(pr).toContain('github.com/example/harness');
+          expect(git('--git-dir', remote, 'log', '-1', '--format=%ae', branch)).toBe('123+fixture@users.noreply.github.com');
+        }
         return;
       }
       if (failure === 'benchmark' || failure === 'post-switch') {
