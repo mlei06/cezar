@@ -1,6 +1,6 @@
 # The self-improving factory
 
-Status: draft v5.19, 2026-11-25. Fork: `mlei06/cezar`, trunk `factory`. Spec owner: the overseer (see the roadmap). Implementation plan: `2026-11-25-self-improving-factory-roadmap.md`. Findings during the build: `2026-11-25-self-improving-factory-observations.md`.
+Status: draft v5.20, 2026-11-25. Fork: `mlei06/cezar`, trunk `factory`. Spec owner: the overseer (see the roadmap). Implementation plan: `2026-11-25-self-improving-factory-roadmap.md`. Findings during the build: `2026-11-25-self-improving-factory-observations.md`.
 
 ## TLDR
 
@@ -301,8 +301,8 @@ The built-in rubrics start as the overseer's tuned drafts from the build (roadma
 - **Who:** the machine's `factory.judge` setting (a runner and model). Cezar names no provider. Unset, the judge is the project's default runner at low effort. A self-hosted model is the intended choice, so transcripts stay inside the owner's network and scoring costs only time.
 - **How:** the same one-shot call Cezar already makes for commit messages and titles. That's `createRunner` and `runner.run` with no tools, a timeout, and two attempts where the second carries the rejection reason. It's tracked in the usage ledger as a new internal consumer, `scoring`. One call per scorer, never a task, so scoring creates no runs. Calls run one at a time per machine (a small queue).
 - **What it reads:** the rubric, the labels, the metrics, then the full transcript as plain text ("Data model" describes the format).
-- **Too long:** a transcript longer than the judge's window is shortened only in its largest tool outputs, keeping each one's head and tail. A call or message is never dropped.
-- **Its reply:** JSON, validated against the scorer's labels; retried once if invalid, then recorded as an error.
+- **Too long:** a transcript longer than the judge's window is shortened only in its largest tool outputs, keeping each one's head and tail. A call or message is never dropped. When the runner does not publish its input limit, start with a 300,000-character input budget including the rubric. If the provider rejects the context size, use the second attempt with half the rejected input size. If preserving messages and calls cannot fit, record a scoring error.
+- **Its reply:** a JSON object, optionally enclosed in a single code block, validated against the scorer's labels. A failing verdict needs at least one cause supported by an exact quote. An invalid reply uses the remaining attempt, then records an error.
 - **Reaching the model:** the configured runner must reach its endpoint. A runner that can't verify an endpoint's certificate is a machine setup problem: a judge that fails shows a clear error on the Factory view, never silent gaps.
 
 **A score** holds the label, its score, pass or fail, and reasoning with quoted evidence. **A failing score names 1–3 causes**, the first being the main one:
@@ -829,6 +829,8 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
 4. **Scoring the managers:** apply the same metrics, scorers and improvement to manager turns, after D6.
 
 ## Changelog
+
+- **v5.20:** D5 defines the two-attempt context limit fallback and accepts a single fenced JSON object. The scope scorer reads explicitly cited decision headings from the run's pinned commit. It excludes unrelated sections and working-copy edits.
 
 - **v5.19:** D4 specifies child token and time reservations, inclusion of measured cached input and follow-up coalescing. D5 keeps missing historical request and context fields optional.
 
