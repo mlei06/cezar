@@ -2,6 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadConfig } from '../config.ts';
+import { classifyAgentFailure } from '../core/agent-failure-class.ts';
 import type { AgentRunResult, RunnerId } from '../core/agent-runner.ts';
 import { createRunner } from '../core/runner-factory.ts';
 import { oneShotAccountRef } from '../usage-ledger/identity.ts';
@@ -34,7 +35,7 @@ export async function resolveJudgeRoute(repoRoot: string): Promise<JudgeRoute | 
       const scratch = await mkdtemp(join(tmpdir(), 'cez-judge-'));
       const tracked = trackOneShot(runner, account, INTERNAL_CONSUMERS.scoring);
       let timedOut = false;
-      let providerFailed = false;
+      let providerError: string | undefined;
       let result: AgentRunResult | undefined;
       const timer = setTimeout(() => {
         timedOut = true;
@@ -48,18 +49,20 @@ export async function resolveJudgeRoute(repoRoot: string): Promise<JudgeRoute | 
           ...(model ? { model } : {}),
           ...(!configured && runner !== 'opencode' ? { reasoningEffort: 'low' } : {}),
         }, (event) => {
-          if (event.type === 'error') providerFailed = true;
+          if (event.type === 'error') providerError = event.message;
           tracked.onEvent(event);
         });
-        if (timedOut) return { timedOut: true };
-        return providerFailed ? { unavailable: true } : { text: result.text };
-      } catch {
-        return timedOut ? { timedOut: true } : { unavailable: true };
+        if (!timedOut && !providerError) return { text: result.text };
+      } catch (error) {
+        providerError ??= error instanceof Error ? error.message : String(error);
       } finally {
         clearTimeout(timer);
         tracked.done(result);
         await rm(scratch, { recursive: true, force: true }).catch(() => undefined);
       }
+      if (timedOut) return { timedOut: true };
+      if (classifyAgentFailure(providerError) === 'context_too_large') return { contextTooLarge: true };
+      return { unavailable: true };
     },
   };
 }

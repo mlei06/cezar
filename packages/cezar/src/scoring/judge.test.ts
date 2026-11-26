@@ -62,18 +62,31 @@ describe('judge inputs and validation', () => {
     const call = vi.fn()
       .mockResolvedValueOnce({ text: 'garbled' })
       .mockResolvedValueOnce({ text: JSON.stringify({ label: 'pass', reasoning: 'Conforms' }) });
-    const result = await evaluateScorer(scorer, transcript, call);
+    const result = await evaluateScorer(scorer, () => transcript, call);
     expect(result).toMatchObject({ status: 'scored', verdict: { pass: true } });
     expect(call).toHaveBeenCalledTimes(2);
     expect(call.mock.calls[0]?.[0]).toMatchObject({ timeoutMs: JUDGE_TIMEOUT_MS, userPrompt: transcript.text });
     expect(call.mock.calls[1]?.[0].systemPrompt).toContain('The previous reply was rejected: Reply must be a single JSON object.');
 
     call.mockClear().mockResolvedValue({ unavailable: true });
-    expect(await evaluateScorer(scorer, transcript, call)).toEqual({ status: 'unavailable' });
+    expect(await evaluateScorer(scorer, () => transcript, call)).toEqual({ status: 'unavailable' });
     expect(call).toHaveBeenCalledTimes(1);
     call.mockClear().mockResolvedValue({ timedOut: true });
-    expect(await evaluateScorer(scorer, transcript, call)).toEqual({ status: 'error', reason: 'The judge exceeded the reply timeout.' });
+    expect(await evaluateScorer(scorer, () => transcript, call)).toEqual({ status: 'error', reason: 'The judge exceeded the reply timeout.' });
     expect(call).toHaveBeenCalledTimes(2);
+  });
+
+  it('asks for a smaller transcript after a context rejection', async () => {
+    const raw = 'tool output '.repeat(4000);
+    const call = vi.fn()
+      .mockResolvedValueOnce({ contextTooLarge: true })
+      .mockResolvedValueOnce({ text: JSON.stringify({ label: 'pass', reasoning: 'Conforms' }) });
+    const fit = vi.fn((maxChars: number) => ({
+      text: raw.slice(0, maxChars), shortened: raw.length > maxChars,
+    }));
+    expect(await evaluateScorer(scorer, fit, call)).toMatchObject({ status: 'scored', shortened: true });
+    expect(fit.mock.calls[1]![0]).toBeLessThan(raw.length);
+    expect(call.mock.calls[1]?.[0].systemPrompt).toContain('exceeded the judge’s context window');
   });
 
   it('derives the score from the rubric, caps causes and rejects unsupported evidence', () => {
