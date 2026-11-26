@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, isAbsolute, join } from 'node:path';
@@ -45,5 +46,35 @@ export async function prepareReplayCheck(command: string, cwd: string) {
   } catch (error) {
     await close();
     throw error;
+  }
+}
+
+/** Used only by the verified Codex tool broker. Its own timeout can close the
+ * request, so kill the whole group, including processes started by the check. */
+export async function runReplayShell(command: string, cwd: string, signal: AbortSignal): Promise<{ ok: boolean; text: string }> {
+  const sandbox = await prepareReplayCheck(command, cwd);
+  try {
+    signal.throwIfAborted();
+    return await new Promise((resolve) => {
+      const child = spawn(sandbox.file, sandbox.args, { cwd, env: sandbox.env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      let text = '';
+      const collect = (chunk: Buffer) => { if (text.length < 256_000) text = (text + chunk.toString('utf8')).slice(0, 256_000); };
+      const stop = () => {
+        if (!child.pid) return;
+        try { process.kill(-child.pid, 'SIGKILL'); } catch { /* The group already exited. */ }
+      };
+      signal.addEventListener('abort', stop, { once: true });
+      const timer = setTimeout(stop, 120_000);
+      child.stdout.on('data', collect);
+      child.stderr.on('data', collect);
+      child.on('error', () => { text = 'The replay sandbox could not be started.'; });
+      child.on('close', (code) => {
+        signal.removeEventListener('abort', stop);
+        clearTimeout(timer);
+        resolve({ ok: code === 0, text: text.trim() || (code === 0 ? '(no output)' : 'Replay sandbox stopped.') });
+      });
+    });
+  } finally {
+    await sandbox.close();
   }
 }

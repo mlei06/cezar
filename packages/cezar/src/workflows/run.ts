@@ -2,7 +2,7 @@ import { replayRunInputSchema, type ReplayRunInput, type HarnessVersion, type St
 import { readOnlyEnv } from '../core/read-only-env.ts';
 import { AgentUsageHolds } from '../workspace/agent-usage-holds.ts';
 import { completionReason } from './completion-reason.ts';
-import { prepareReplayCheck } from './replay-check.ts';
+import { prepareReplayCheck, runReplayShell } from './replay-check.ts';
 import { resolveReplayHarness, saveStagedReplayDiff, stagedCheckReplay } from './staged-replay.ts';
 import { WorktreeLifecycleCoordinator } from '../worktree-lifecycle/coordinator.ts';
 import type { RunParked, RunSubject, WebhookAttentionRequest, TrackerAssociation, UsageWindowsObservation } from '@open-mercato/cezar-contract';
@@ -78,7 +78,7 @@ import {
   storedAttachmentExtension,
 } from '@open-mercato/cezar-contract';
 import type { AgentEvent, AgentRunResult, ContentBlock } from '../core/agent-runner.ts';
-import { discoverSkills, parseFrontmatter, type Skill } from '../skills.ts';
+import { discoverLocalSkills, discoverSkills, parseFrontmatter, type Skill } from '../skills.ts';
 import { automationsReachable } from '../automations/builtin-skill.ts';
 import { AUTOMATIONS_PROMPT } from '../automations/prompts.ts';
 import { pausedAutomationHold } from '../automations/paused-work.ts';
@@ -1277,6 +1277,7 @@ export const PROJECT_INSTRUCTIONS_HEADING =
 const MANAGER_TASK_SYSTEM_PROMPT = 'A cezar manager started this task. Do not merge pull requests or enable automations: leave that to the user.';
 
 const REPLAY_EXTERNAL_NODE_PORTS: Readonly<Partial<Record<ExecutableNode['type'], string>>> = {
+  'git.commit': 'done',
   'git.push': 'done',
   'git.sync-base': 'done',
   'github.draft-pr': 'nothing',
@@ -1289,17 +1290,30 @@ const REPLAY_EXTERNAL_NODE_PORTS: Readonly<Partial<Record<ExecutableNode['type']
 
 const REPLAY_CHECK_NODE_TYPES = new Set(['start', 'end', 'loop', 'check', 'if', ...Object.keys(REPLAY_EXTERNAL_NODE_PORTS)]);
 
-function replayMode(workflow: WorkflowDef): 'checks' | 'read-only-agent' | undefined {
+function replayMode(workflow: WorkflowDef): 'checks' | 'agent' | undefined {
   const graph = workflow.graph ?? compileV1(workflow.steps);
   if (graph.nodes.every((node) => REPLAY_CHECK_NODE_TYPES.has(node.type))) return 'checks';
-  if (!isBuiltInPlan(workflow)) return undefined;
-  if (graph.nodes.every((node) => node.type === 'agent'
-    ? (!node.runner || node.runner === 'codex') && node.allowedTools?.every(tool => READ_ONLY_TOOLS.includes(tool)) &&
-      !node.bashAllowlist && !node.session && !node.model
-    : REPLAY_CHECK_NODE_TYPES.has(node.type))) return 'read-only-agent';
-  return undefined;
+  return graph.nodes.every((node) => {
+    if (node.type !== 'agent') return REPLAY_CHECK_NODE_TYPES.has(node.type);
+    if ((node.runner && node.runner !== 'codex') || node.bashAllowlist || node.session || node.model) return false;
+    const tools = node.allowedTools ?? DEFAULT_ALLOWED_TOOLS;
+    return tools.includes('Bash') || tools.every(tool => READ_ONLY_TOOLS.includes(tool));
+  }) ? 'agent' : undefined;
 }
 
+
+function withReplaySkill(workflow: WorkflowDef, skill: string): WorkflowDef {
+  const first = workflow.graph?.nodes.find((node) => node.type === 'agent')?.id
+    ?? workflow.steps.find((step) => stepKind(step) === 'agent')?.id;
+  return {
+    ...workflow,
+    steps: workflow.steps.map(step => step.id === first ? { ...step, skill } : step),
+    ...(workflow.graph ? {
+      graph: { ...workflow.graph, nodes: workflow.graph.nodes.map(node =>
+        node.type === 'agent' && node.id === first ? { ...node, skill } : node) },
+    } : {}),
+  };
+}
 
 /**
  * Joins the parts of one agent step's system prompt in fixed order — skill
@@ -2540,10 +2554,10 @@ export class RunManager {
     const changesAgent = input.model || input.runner || input.effort || input.skill;
     if (mode === 'checks' && changesAgent) return { error: 'The replay workflow has no agent input to change.' };
     const runner = input.runner ?? source.runner;
-    if (mode === 'read-only-agent' && runner !== 'codex') {
-      return { error: 'Read-only agent replay requires Codex.' };
+    if (mode === 'agent' && runner !== 'codex') {
+      return { error: 'Agent replay requires Codex sandbox support.' };
     }
-    if (input.skill) return { error: 'Replay skill overrides are not supported yet.' };
+    const replayWorkflow = input.skill ? withReplaySkill(workflow, input.skill) : workflow;
     const model = input.model ?? (source.runner === runner ? source.actualModel || source.model : undefined);
     if (input.model && modelConflictsWithRunner(input.model, 'codex')) return { error: 'The replay model must belong to the Codex runner.' };
     if ((input.model || input.effort) && agentModelsLocked(this.repoRoot)) return { error: AGENT_MODELS_LOCKED_ERROR };
@@ -2568,10 +2582,10 @@ export class RunManager {
     const groupId = foundGroup ?? randomUUID();
     if (!foundGroup) this.store.updateRun(sourceId, { groupId, variant: 'A' });
     const change = input.brief ? 'brief' : input.workflow ? `workflow ${input.workflow}` : input.harness ? `harness ${input.harness}`
-      : input.model ? `model ${input.model}` : input.runner ? `runner ${input.runner}` : input.effort ? `effort ${input.effort}` : 'repeat';
-    const runs = slots.map((variant) => this.startRun(workflow, {
+      : input.skill ? `skill ${input.skill}` : input.model ? `model ${input.model}` : input.runner ? `runner ${input.runner}` : input.effort ? `effort ${input.effort}` : 'repeat';
+    const runs = slots.map((variant) => this.startRun(replayWorkflow, {
       task, images, worktree: true, generateFollowups: false, modelRoutePinned: true,
-      ...(mode === 'read-only-agent' ? {
+      ...(mode === 'agent' ? {
         runner: 'codex', model, agentProfile: input.runner && input.runner !== source.runner ? undefined : source.agentProfile,
         reasoningEffort: input.effort ?? source.reasoningEffort, readOnly: true, enforceReadOnly: true, secrets: [],
       } : {}),
@@ -7386,7 +7400,7 @@ export class RunManager {
       const sameHarness = current.id === original.harnessVersion?.id && current.commit === original.harnessVersion.commit;
       if (!original.startCommit || !original.workflowDef || input.worktree !== true ||
         !original.harnessVersion?.commit || !mode || (!sameHarness && mode !== 'checks') ||
-        (mode === 'read-only-agent' && (input.runner !== 'codex' || !input.enforceReadOnly))) {
+        (mode === 'agent' && (input.runner !== 'codex' || !input.enforceReadOnly))) {
         const error = 'The replay needs its saved workflow, exact worktree and pinned harness.';
         this.publishRunFailure(runId, { status: 'failed', error, finishedAt: new Date().toISOString(), currentStepId: undefined });
         emit({ type: 'lifecycle', message: error });
@@ -7715,7 +7729,7 @@ export class RunManager {
     const seeded = this.store.getRun(runId);
     if (seeded) seedHandoffFile(this.dataDir, seeded);
 
-    const skills = await discoverSkills(this.repoRoot);
+    const skills = original?.replayOf ? await discoverLocalSkills(state.cwd) : await discoverSkills(this.repoRoot);
     // Every ActiveRun construction site must carry the registry — `runContinuation` builds
     // its own, and the one that skipped this leaked raw `/skill` text to the backend (#811).
     state.skills = skills;
@@ -9452,6 +9466,8 @@ export class RunManager {
       savedTools?: StepToolPolicy;
     },
   ): Promise<string | null> {
+    const launchRecord = this.store.getRun(runId);
+    const replay = !!launchRecord?.replayOf;
     const resumeStep = graphHooks?.usageLimitResume;
     let systemPrompt: string | undefined;
     let attachedSkill: string | undefined;
@@ -9461,7 +9477,7 @@ export class RunManager {
     const rawPrompt = applyTemplate(step.prompt ?? '{{task}}', taskText);
     const slash = leadingSlashSkillName(rawPrompt);
     // Install the selected skill and its companions where the agent's own skill lookup looks.
-    const provision = await this.provisionTaskSkills(state, {
+    const provision = replay ? NO_TASK_SKILLS : await this.provisionTaskSkills(state, {
       stepSkill: step.skill,
       slash,
       text: rawPrompt,
@@ -9474,6 +9490,9 @@ export class RunManager {
     if (missingShared.length) emit(missingSharedSkillsEvent(step.id, missingShared));
     if (step.skill) {
       const skill = (state.skills ?? skills).find((s) => s.name === step.skill);
+      if (replay && (!skill || skill.kind === 'command' || skill.missingShared)) {
+        return 'The replay skill is unavailable in the pinned checkout or local skill library.';
+      }
       if (skill) {
         // The body alone often does not identify the selected skill. Keep its
         // name and catalog description in the normalized runner payload so a
@@ -9542,8 +9561,6 @@ export class RunManager {
 
     const sessionId = graphHooks?.resumeSessionId ?? randomUUID();
     const backend = step.runner ?? taskBackend;
-    const launchRecord = this.store.getRun(runId);
-    const replay = !!launchRecord?.replayOf;
     const resumedOwnerId = resumeStep?.id ?? graphHooks?.resumeStepId;
     const resumedOwner = graphHooks?.resumeSessionId === undefined ? undefined : launchRecord?.steps.find(
       (candidate) => candidate.id === (resumedOwnerId ?? step.id) && candidate.sessionId === graphHooks.resumeSessionId,
@@ -9912,6 +9929,11 @@ export class RunManager {
       if (refusal) return refusal;
     }
     const stepTools = resolveAgentStepTools(state, step, graphHooks?.savedTools);
+    const originalTools = step.allowedTools ?? DEFAULT_ALLOWED_TOOLS;
+    const replayBash = replay && originalTools.includes('Bash') && !step.bashAllowlist;
+    if (replay) {
+      stepTools.allowedTools = [...READ_ONLY_TOOLS.filter(tool => originalTools.includes(tool)), ...(replayBash ? ['Bash'] : [])];
+    }
     this.store.updateStep(runId, step.id, { toolPolicy: stepTools });
     const envOverrides = stepTools.enforceReadOnly ? readOnlyEnv() : undefined;
     const capabilities = await this.taskCapabilityPrompt(
@@ -9919,7 +9941,7 @@ export class RunManager {
     );
     const stepPrivateMcp = !stepDef || !isReadOnlyWorkflow(stepDef);
     const runner = createRunner(stepBackend);
-    const stepMcp = stepPrivateMcp ? await this.privateMcpForLaunch(stepBackend, onEvent) : [];
+    const stepMcp = stepPrivateMcp && !replay ? await this.privateMcpForLaunch(stepBackend, onEvent) : [];
     let session: AgentSession;
     state.currentStepId = step.id;
     this.beginUsageInvocation(runId, state, step.id);
@@ -9956,6 +9978,7 @@ export class RunManager {
           images,
           cwd: state.cwd,
           ...stepTools,
+          ...(replayBash ? { replayShell: (command, signal) => runReplayShell(command, state.cwd, signal) } : {}),
           ...(state.bypassPermissions && !stepTools.enforceReadOnly ? { bypassPermissions: true } : {}),
           // The handoff file lives outside the worktree — grant access.
           additionalDirectories: replay ? [this.attachmentsDir(runId)] : agentDirectories(

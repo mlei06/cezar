@@ -26,6 +26,10 @@ export const CODEX_READ_TOOL = {
 
 /** The tool a session's model sees: a manager's shell is described by the manager. */
 export function codexReadTool(policy: CodexRestrictedPolicy): typeof CODEX_READ_TOOL {
+  if (policy.replayShell) return {
+    ...CODEX_READ_TOOL,
+    description: 'Use Read, Grep or Glob for the worktree, and Bash to edit files or run local checks in the isolated replay worktree. The sandbox has no network or Git administration. Native shell and write tools are disabled.',
+  };
   if (!policy.shell) return CODEX_READ_TOOL;
   return { ...CODEX_READ_TOOL, description: `Tools enforced by cezar. Use Read for files, Grep for content, Glob for file names, Bash for one command: ${policy.shell.describe} Native shell and write tools are denied; cezar refuses every other command and any other shell syntax.` };
 }
@@ -367,7 +371,8 @@ export class CodexReadBroker {
     this.pending++;
     let timer: NodeJS.Timeout | undefined;
     // A manager command has its own timeout; this backstop only fires if that one fails.
-    const limit = this.limits.backstopMs ?? (this.policy.shell ? (this.limits.shellTimeoutMs ?? SHELL_TIMEOUT_MS) + 10_000 : 20_000);
+    const limit = this.limits.backstopMs ?? (this.policy.shell || this.policy.replayShell
+      ? (this.limits.shellTimeoutMs ?? SHELL_TIMEOUT_MS) + 10_000 : 20_000);
     try {
       return await Promise.race([this.perform(params), new Promise<CodexReadResult>(done => {
         timer = setTimeout(() => { this.close(); done(result(false, 'cezar: read timed out; this broker is closed')); }, limit);
@@ -408,6 +413,11 @@ export class CodexReadBroker {
           return result(true, await this.execute(['rg', '--no-config', '--files', '--glob', input.pattern, '--', target]));
         }
         case 'Bash': {
+          if (this.policy.replayShell) {
+            if (CONTROL.test(input.command)) throw new Error('a replay command cannot contain control characters');
+            const ran = await this.policy.replayShell(input.command, this.aborter.signal);
+            return result(ran.ok, ran.text);
+          }
           if (this.policy.shell) {
             if (CONTROL.test(input.command)) throw new Error('cezar manager policy: a control character');
             const plan = this.policy.shell.verify(input.command);

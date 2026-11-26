@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CodexAppServerRunner } from '../core/codex-app-server-runner.ts';
+import { mockCodexPath } from '../core/codex-app-server-transport.ts';
 import { mergeWriteWorkspaceConfig } from '../workspace/config.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { OpencodeServerRunner } from '../core/opencode-server-runner.ts';
@@ -89,7 +90,7 @@ describe('graph workflows run through RunManager', () => {
     const sandbox = join(repoRoot, '.ai', 'cezar', 'fixture-sandbox');
     writeFileSync(sandbox, [
       '#!/bin/sh',
-      '[ "$1" = sandbox ] || exit 1',
+      `[ "$1" = sandbox ] || exec "${mockCodexPath()}" "$@"`,
       '[ "$2" = --permission-profile ] && [ "$3" = replay ] || exit 2',
       'grep -q "^enabled = false$" "$CODEX_HOME/config.toml" || exit 5',
       '[ -z "$FIXTURE_PASSWORD" ] || exit 3',
@@ -184,6 +185,60 @@ describe('graph workflows run through RunManager', () => {
     }
     runner.mockRestore();
   }, 30_000);
+
+  it.skipIf(process.platform !== 'linux')('loads the requested replay skill from the pinned checkout', async () => {
+    const skillRoot = join(repoRoot, '.ai', 'skills', 'fixture-review');
+    mkdirSync(skillRoot, { recursive: true });
+    writeFileSync(join(skillRoot, 'SKILL.md'), '---\nname: fixture-review\ndescription: Inspect a fixture.\n---\nUse the pinned fixture guidance.\n');
+    await run('git', ['add', '.ai/skills'], { cwd: repoRoot });
+    await run('git', [...GIT_ID, 'commit', '-qm', 'fixture skill'], { cwd: repoRoot });
+    const original = manager.startRun(await builtin('plan'), { task: 'Inspect the fixture.', runner: 'codex' });
+    await vi.waitFor(() => expect(store.getRun(original.id)?.status).toBe('waiting'), { timeout: 15_000 });
+    expect(manager.finish(original.id)).toBe(true);
+    await settle(original.id);
+    await vi.waitFor(() => expect(manager.isActive(original.id)).toBe(false));
+    writeFileSync(join(skillRoot, 'SKILL.md'), 'Different uncommitted guidance.\n');
+    const runner = vi.spyOn(CodexAppServerRunner.prototype, 'startSession');
+    try {
+      const result = await manager.startReplay(original.id, { skill: 'fixture-review', times: 1 });
+      if ('error' in result) throw new Error(result.error);
+      expect(await settle(result.runs[0]!.id)).toMatchObject({ status: 'done', replayChange: 'skill fixture-review' });
+      expect(runner.mock.calls[0]?.[0].systemPrompt).toContain('Use the pinned fixture guidance.');
+      expect(runner.mock.calls[0]?.[0].systemPrompt).not.toContain('Different uncommitted guidance.');
+    } finally {
+      runner.mockRestore();
+    }
+  }, 30_000);
+
+  it.skipIf(process.platform !== 'linux')('routes Codex replay edits to the isolated shell and leaves the baseline untouched', async () => {
+    stubReplaySandbox();
+    const workflow: WorkflowDef = { name: 'edit-fixture', source: 'file', steps: [{ id: 'work', prompt: '{{task}}' }] };
+    const commit = (await run('git', ['rev-parse', 'HEAD'], { cwd: repoRoot })).stdout.trim();
+    const original = store.createRun({ title: 'Baseline', task: 'Update the fixture.', workflow: workflow.name, steps: [], runner: 'codex' });
+    store.updateRun(original.id, {
+      status: 'done', finishedAt: new Date().toISOString(), startCommit: commit, workflowDef: workflow,
+      harnessVersion: await runHarnessVersion(),
+    });
+    const launch = CodexAppServerRunner.prototype.startSession;
+    const writes: Promise<{ ok: boolean; text: string }>[] = [];
+    const runner = vi.spyOn(CodexAppServerRunner.prototype, 'startSession').mockImplementation(function (this: CodexAppServerRunner, spec, onEvent) {
+      expect(spec).toMatchObject({ enforceReadOnly: true, allowedTools: ['Read', 'Grep', 'Glob', 'Bash'], mcpServers: [] });
+      writes.push(spec.replayShell!('test "$FIXTURE_SANDBOX_USED" = 1 && printf revised >a.txt', new AbortController().signal));
+      return launch.call(this, spec, onEvent);
+    });
+    try {
+      const result = await manager.startReplay(original.id, { times: 1 });
+      if ('error' in result) throw new Error(result.error);
+      const completed = await settle(result.runs[0]!.id);
+      expect(completed.status).toBe('done');
+      expect(writes).toHaveLength(1);
+      expect(await writes[0]).toMatchObject({ ok: true });
+      expect(readFileSync(join(completed.worktreePath!, 'a.txt'), 'utf8')).toBe('revised');
+      expect(readFileSync(join(repoRoot, 'a.txt'), 'utf8')).toBe('one\n');
+    } finally {
+      runner.mockRestore();
+    }
+  }, 20_000);
 
   it.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('lowers the CPU priority of workflow checks', async () => {
     const command = `'${process.execPath}' -p 'require("node:os").getPriority()'`;
