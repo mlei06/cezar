@@ -21,7 +21,7 @@ The factory is built by the factory. After a one-time bootstrap (M0), which the 
 | M0 | done 2026-11-25 | release `0.21.0+release-735fc84` live; warm-up PR #1 merged and released; judge prototype calibrated on 2 runs; observations M0-1 to M0-10 |
 | M1 | done 2026-11-26 | PR #11 shipped slash-skill reporting in release `f1747bd`. Live New task acceptance passed. With `factory.models.lowReasoning` set on this machine, an `operate` task ran on OpenCode with the self-hosted low-reasoning model, read-only in one turn, and its prompt carried the capability block (checked in the runner's stored session, since the model refuses to quote its own system prompt). |
 | M1.5 | released, live acceptance pending | PR #12 shipped the charter and manager playbooks in release `7dd520c`. Isolated concurrent managers passed. One project completed a live rollout. The concurrent live two-project check is pending. |
-| M2 | in progress | Run identity (#13), delegated routing (#14), shared USD storage (#15), task metrics (#16), and budget enforcement (#17) are released and verified live. Historical metrics replay passed locally. The PR workflow correction and Azure ownership guard (B16, #18) released in `ab14791`; the custom publication gate passed live. Task CPU priority (B22, #19) merged and is releasing. |
+| M2 | done 2026-11-26 | Run identity (#13), delegated routing (#14), shared USD storage (#15), task metrics (#16), budget enforcement (#17), the workflow PR gate (#18) and lower task CPU priority (#19) are released and checked live. Historical metrics replay passed locally. The live scratch check observed niceness 5 with the workspace cap still at 2. |
 | M3 | in progress | Catalog, judge, scores, routing and score UI are on implementation branches. An isolated run scored all four rubrics against the configured judge in 67 seconds. Full validation, release, one-minute acceptance and blind calibration are still open. |
 
 ## Goal and definition of done
@@ -340,7 +340,7 @@ New features and improvements found so far, not yet scheduled into a milestone. 
 | B19 | **The `scope` scorer sees the spec sections a task names,** not only its brief, so drift the brief allowed is still caught | M1-7 | M3 (pinned spec excerpts implemented and focused tests passed) |
 | B20 | **`review-pr` on Claude: two of three reviewers can't run Bash** (read-only allowlist), so they never see the change and give no verdict, which silently weakens reviews | review 0ee2df32 | M2 (review template and read-only allowlist verified in code) |
 | B21 | **A runner failing right after a machine restart** (Codex read-only startup) made the manager switch runners; Cezar could retry the original runner once after a short delay before falling back | M1, after the crash | M4 |
-| B22 | **Test runs overload the host:** tasks override the repository's 2-worker Vitest cap (`--maxWorkers=5`) and start a second full suite in the same worktree while one runs; with several tasks in parallel the laptop crashed. Cezar could give each task a CPU share (for example `nice` and a cgroup CPU limit per run) and the `implement` check steps should run the suite once, with the default | M1, after the crashes | M2 (#19 merged and releasing) |
+| B22 | **Test runs overload the host:** tasks override the repository's 2-worker Vitest cap (`--maxWorkers=5`) and start a second full suite in the same worktree while one runs; with several tasks in parallel the laptop crashed. Cezar could give each task a CPU share (for example `nice` and a cgroup CPU limit per run) and the `implement` check steps should run the suite once, with the default | M1, after the crashes | M2 (#19 released; niceness 5 verified live) |
 | B23 | **Read-only review tasks have no `gh`,** so they can't confirm a PR's live head or target and compare against their local `origin/factory` instead | review 30fe42f2 | M2 (read-only forge commands verified in code) |
 
 ## Risks
@@ -363,7 +363,7 @@ New features and improvements found so far, not yet scheduled into a milestone. 
 |---|---|---|
 | M0 | 1 session | overseer-built |
 | M1 | 1–2 sessions | six small PRs |
-| M2 | in progress | Run identity (#13), delegated routing (#14), shared USD storage (#15), task metrics (#16), and budget enforcement (#17) are released and verified live. Historical metrics replay passed locally. The PR workflow correction and Azure ownership guard (B16, #18) released in `ab14791`; the custom publication gate passed live. Task CPU priority (B22, #19) merged and is releasing. |
+| M2 | done 2026-11-26 | Run identity (#13), delegated routing (#14), shared USD storage (#15), task metrics (#16), budget enforcement (#17), the workflow PR gate (#18) and lower task CPU priority (#19) are released and checked live. Historical metrics replay passed locally. The live scratch check observed niceness 5 with the workspace cap still at 2. |
 | M3 | 2 sessions | plus calibration over about 20 runs |
 | M4 | 1–2 sessions | |
 | M5 | 2–3 sessions | plus two weeks for its acceptance |
