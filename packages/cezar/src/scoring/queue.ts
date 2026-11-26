@@ -9,11 +9,14 @@ export interface JudgeJob {
   finishedAt: number;
   retryAt: number;
   outages: number;
+  core?: boolean;
   evaluate(): Promise<JudgeEvaluation>;
   update(result: QueueUpdate): void;
 }
 
-/** One queue for the workspace. Newest ready jobs win, and an outage never holds the worker. */
+const CORE_RESULT_WINDOW_MS = 60_000;
+
+/** One workspace judge. Fresh core results take precedence while their latency target is reachable. */
 export class JudgeQueue {
   private readonly waiting = new Map<string, JudgeJob>();
   private timer: ReturnType<typeof setTimeout> | undefined;
@@ -45,9 +48,10 @@ export class JudgeQueue {
 
   private async process(): Promise<void> {
     const now = this.now();
+    const priority = (job: JudgeJob) => Number(job.core === true && now - job.finishedAt < CORE_RESULT_WINDOW_MS);
     const ready = [...this.waiting.values()]
       .filter((job) => job.retryAt <= now)
-      .sort((a, b) => b.finishedAt - a.finishedAt);
+      .sort((a, b) => priority(b) - priority(a) || b.finishedAt - a.finishedAt);
     const job = ready[0];
     if (!job) { this.schedule(); return; }
     this.waiting.delete(job.id);

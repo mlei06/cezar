@@ -50,3 +50,26 @@ it('keeps the other scorers when a single result is replaced', () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+it('prioritizes core results across recent runs before secondary scorers', async () => {
+  vi.useFakeTimers();
+  const queue = new JudgeQueue();
+  try {
+    const order: string[] = [];
+    const now = Date.now();
+    const add = (id: string, age: number, core = false) => queue.enqueue({
+      id, finishedAt: now - age, retryAt: now, outages: 0, core,
+      evaluate: async () => { order.push(id); return { status: 'error', reason: 'fixture' }; },
+      update: () => undefined,
+    });
+    add('new-scope', 0);
+    add('older-efficiency', 15_000, true);
+    add('new-outcome', 0, true);
+    add('backlog-outcome', 70_000, true);
+    await vi.advanceTimersByTimeAsync(20);
+    expect(order).toEqual(['new-outcome', 'older-efficiency', 'new-scope', 'backlog-outcome']);
+  } finally {
+    queue.dispose();
+    vi.useRealTimers();
+  }
+});

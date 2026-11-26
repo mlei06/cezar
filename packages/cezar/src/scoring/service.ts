@@ -172,6 +172,7 @@ export class ScoringService {
         finishedAt: Date.parse(finishedAt),
         retryAt,
         outages,
+        core: scorer.name === 'outcome' || scorer.name === 'efficiency',
         evaluate: async () => {
           if (!stillCurrent()) return { status: 'error', reason: 'The task changed before it could be scored.' };
           if (!scoringEnabled()) return { status: 'error', reason: 'Scoring is disabled.' };

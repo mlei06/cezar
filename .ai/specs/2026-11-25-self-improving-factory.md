@@ -1,6 +1,6 @@
 # The self-improving factory
 
-Status: draft v5.35, 2026-11-26. Fork: `mlei06/cezar`, trunk `factory`. Spec owner: the overseer (see the roadmap). Implementation plan: `2026-11-25-self-improving-factory-roadmap.md`. Findings during the build: `2026-11-25-self-improving-factory-observations.md`.
+Status: draft v5.36, 2026-11-26. Fork: `mlei06/cezar`, trunk `factory`. Spec owner: the overseer (see the roadmap). Implementation plan: `2026-11-25-self-improving-factory-roadmap.md`. Findings during the build: `2026-11-25-self-improving-factory-observations.md`.
 
 ## TLDR
 
@@ -732,7 +732,7 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
 | A run is cancelled before it starts, or is a dry run | not scored |
 | A run is cancelled mid-way | `outcome` isn't scored; `efficiency`, `procedure` and `scope` are |
 | A run is very long (transcript over the window) | shortened only in its largest outputs (D5); if the metrics, brief and calls alone don't fit, scored as `error: too large`, and the run is listed for owner attention |
-| Scoring falls behind | it's a queue: one judge call at a time per machine, newest runs first; backlog size shows on the Factory view |
+| Scoring falls behind | one judge call at a time per machine. Ready Outcome and Efficiency jobs for the first minute take priority. Within each priority, newer runs go first. The Factory view shows pending scores. |
 | Two causes contradict each other | both stay; the improvement run's clustering decides |
 | The same cause keeps recurring after a fix | the next run receives the earlier fix and its before/after, and may revert or redraft it |
 | An improvement run fails or is cancelled | its causes return to `open`; the next trigger retries; three failures in a row pause that queue and tell the owner |
@@ -854,6 +854,7 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
 
 ## Changelog
 
+- **v5.36:** D5 prioritizes ready Outcome and Efficiency during a run's first minute. A single worker processes each ready priority group newest first.
 - **v5.35:** D8 allows the configured OpenCode route for explicitly tool-free text benchmarks. Use the existing stateless generation mechanism and empty scratch directory. Workflows with tool grants still require the Codex replay broker.
 - **v5.34:** D6 records the checked commit and the decisions before submitting a PR. Final autosave must retain the same commit. Recovery tracks an already-open PR even if the decisions artifact has been removed. The checkpoint preserves recorded outcomes.
 - **v5.33:** D6 workflow hardening. The host claims and records a batch before admission. The built-in workflow is available only to that admission path, with the owner-approved bundled skill. A project validates the exact batch decisions and configured change scope before publication. The harness keeps the agent's task evidence out of the public PR. The ordinary project body comes from the optional `pullRequestDescription` in the decisions file. Use the built-in automation for all user and manager starts. Record a merge only with the forge's exact commit and timestamp.
