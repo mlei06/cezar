@@ -93,6 +93,7 @@ export const GITHUB_EVENTS: readonly AutomationEvent[] = [
   'pull_request.rereview_requested',
   'pull_request.closed',
   'pull_request.merged',
+  'workflow_run.failed',
 ]
 
 type TaskSteps = NonNullable<AutomationDefinition['task']['steps']>

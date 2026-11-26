@@ -308,6 +308,7 @@ import { ScoringService, type ScoringProject, type SettledScore } from '../scori
 import { readRunScores } from '../scoring/store.ts';
 import { aggregateScores, groupScoreColumns } from '../scoring/summary.ts';
 import { checkFactory } from '../factory/check.ts';
+import { ensureFixCiAutomation } from '../factory/ci-trigger.ts';
 import { detectHarnessProject, harnessCauseQueuePath, projectCauseQueuePath, readCauseQueue, recordCauses, routeCauses } from '../factory/causes.ts';
 import { byLastActivityDesc, compareIsoDesc, lastActivityAt, readRunIndexDiagnostic, readRunIndexFromDisk } from '../runs/run-index.ts';
 import { isV2WireEventType } from '../runs/ui-event-sink.ts';
@@ -10345,6 +10346,7 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
   const automationCoordinator = new AutomationCoordinator({
     listProjects, pinned: bootProjectId, warn: warnAutomations,
     configureStore: (store, project) => {
+      ensureFixCiAutomation(store, project.root);
       if (process.env.CEZ_SELF_IMPROVEMENT === '0' || store.get(FACTORY_AUTOMATION)) return;
       ensureDataGitignore(project.root);
       ensureFactoryAutomation(store);

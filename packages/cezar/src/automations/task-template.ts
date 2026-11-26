@@ -69,7 +69,7 @@ export function renderAutomationTask(definition: GithubAutomationDefinition, can
   const issue = validateAutomationPrompt(definition.task.prompt, 'github');
   if (issue) throw new Error(issue);
   const values: Record<string, string> = {
-    'github.kind': candidate.event.startsWith('pull_request') ? 'pull request' : 'issue',
+    'github.kind': candidate.event === 'workflow_run.failed' ? 'CI workflow run' : candidate.event.startsWith('pull_request') ? 'pull request' : 'issue',
     'github.number': String(candidate.number),
     'github.title': bounded(candidate.title, 500),
     'github.url': candidate.url,

@@ -23,6 +23,7 @@ export const EVENT_LABELS: Record<AutomationEvent, string> = {
   'pull_request.rereview_requested': 'A re-review is requested',
   'pull_request.closed': 'A pull request closes',
   'pull_request.merged': 'A pull request merges',
+  'workflow_run.failed': 'Main CI fails',
 }
 
 /**

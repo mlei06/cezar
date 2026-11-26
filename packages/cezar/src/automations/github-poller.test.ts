@@ -36,6 +36,30 @@ describe('GithubPoller', () => {
     expect(result.candidates[0]).toMatchObject({ repo: 'acme/demo', number: 7, title: 'A  title' });
   });
 
+  it('matches one failed main push per commit and refuses old, foreign and unrelated CI runs', async () => {
+    const row = {
+      id: 12, node_id: 'run-one', name: 'Validate', head_branch: 'main', head_sha: 'a'.repeat(40),
+      updated_at: '2026-07-26T01:00:00Z', event: 'push', status: 'completed', conclusion: 'failure',
+      head_repository: { full_name: 'acme/demo' },
+    };
+    const run = vi.fn(async () => JSON.stringify({ workflow_runs: [
+      row, { ...row, id: 13, node_id: 'duplicate' },
+      { ...row, id: 14, head_sha: 'b'.repeat(40), head_branch: 'feature' },
+      { ...row, id: 15, head_sha: 'c'.repeat(40), event: 'pull_request' },
+      { ...row, id: 16, head_sha: 'd'.repeat(40), head_repository: { full_name: 'other/demo' } },
+      { ...row, id: 17, head_sha: 'e'.repeat(40), conclusion: 'success' },
+      { ...row, id: 18, head_sha: 'f'.repeat(40), updated_at: '2026-07-24T00:00:00Z' },
+    ] }));
+    const result = await new GithubPoller({ run }).poll('acme', 'demo',
+      { ...definition, events: ['workflow_run.failed'] }, { since: '2026-07-25T00:00:00Z' });
+    expect(run).toHaveBeenCalledWith('gh', expect.arrayContaining(['/repos/acme/demo/actions/runs', 'branch=main', 'status=failure']));
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0]).toMatchObject({
+      event: 'workflow_run.failed', number: 12, url: 'https://github.com/acme/demo/actions/runs/12',
+      eventId: 'acme/demo:workflow_run.failed:' + 'a'.repeat(40),
+    });
+  });
+
   it('talks to an enterprise host and accepts its repository_url shapes', async () => {
     const run = vi.fn(async () => JSON.stringify({ items: [
       { ...item, node_id: 'ghes', repository_url: 'https://ghe.corp.example/api/v3/repos/acme/demo' },
