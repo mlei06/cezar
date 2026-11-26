@@ -76,3 +76,17 @@ export const scoreRecordedEventSchema = z.object({
   score: recordedScoreSchema,
 });
 export type ScoreRecordedEvent = z.infer<typeof scoreRecordedEventSchema>;
+
+export const queuedCauseSchema = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  runId: z.string(),
+  scorer: scorerNameSchema,
+  label: scorerNameSchema,
+  reasoning: z.string(),
+  cause: scoreCauseSchema,
+  at: z.string().datetime(),
+  state: z.enum(['open', 'processing', 'processed', 'dismissed', 'escalated', 'deferred']),
+});
+export type QueuedCause = z.infer<typeof queuedCauseSchema>;
+export const causeQueueSchema = z.array(queuedCauseSchema);
