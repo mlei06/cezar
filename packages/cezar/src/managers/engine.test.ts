@@ -5,6 +5,8 @@ import { delimiter, join } from 'node:path';
 import lockfile from 'proper-lockfile';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mergeWriteAgentAccounts } from '../workspace/agent-accounts.ts';
+import { mergeWriteWorkspaceConfig } from '../workspace/config.ts';
+import { appendLedger } from '../usage-ledger/store.ts';
 import { managerAccessOf, type GithubData, type ManagerAsk, type ManagerMessage } from '@open-mercato/cezar-contract';
 import type { AgentEvent, AgentRunner, AgentRunSpec, AgentSession, RunnerId } from '../core/agent-runner.ts';
 import { inRelayScope, runInRelayScope } from '../relay/scope.ts';
@@ -3419,6 +3421,48 @@ describe('ManagerEngine', () => {
   });
 
   describe('task agent selection', () => {
+    it('uses the project default at the threshold and the configured high model above it', async () => {
+      const root = join(home, 'fixture-project');
+      const workflows = join(root, '.ai/cezar/workflows');
+      mkdirSync(workflows, { recursive: true });
+      writeFileSync(join(root, '.ai/cezar/config.json'), JSON.stringify({ defaultRunner: 'codex' }));
+      writeFileSync(join(workflows, 'pinned.yml'), [
+        'name: pinned', 'steps:', '  - id: work', '    prompt: Review the fixture', '    model: fixture-pinned',
+      ].join('\n'));
+      const configDir = join(home, 'codex-fixture');
+      mkdirSync(configDir);
+      await mergeWriteAgentAccounts((accounts) => ({
+        ...accounts, accounts: [{ id: 'fixture', provider: 'codex', label: 'Fixture', configDir, addedAt: '' }],
+      }));
+      await mergeWriteWorkspaceConfig((config) => {
+        config.factory = { models: { highReasoning: { runner: 'claude', model: 'fixture-high' } } };
+      });
+      let now = Date.now();
+      const engine = makeEngine({ projects: async () => [{ ...connected, root }], now: () => now });
+      const manager = await engine.create({
+        projects: 'all', runner: 'claude', model: 'fixture-chat', cronMinutes: 0, instructions: '',
+        taskAgents: [{ runner: 'codex', agentProfile: 'fixture' }, { runner: 'claude' }],
+      });
+      if ('error' in manager) throw manager;
+      const createTask = (workflow = 'quick-task') =>
+        engine.createTask(manager.id, { projectId: 'alpha', task: 'Review the fixture', workflow });
+      const reading = { t: 'reading', source: 'codex-notification', account: 'codex:fixture',
+        window: 'five-hour', status: 'allowed', resetsAt: now + 60_000 } as const;
+      appendLedger({ ...reading, at: now - 2, usedPercent: 80 });
+      expect(await createTask()).toMatchObject({ agent: { runner: 'codex' } });
+      expect(requests.at(-1)?.body).not.toHaveProperty('model');
+
+      appendLedger({ ...reading, at: now - 1, usedPercent: 81 });
+      expect(await createTask()).toMatchObject({ agent: { runner: 'claude' } });
+      expect(requests.at(-1)?.body).toMatchObject({ model: 'fixture-high' });
+      expect(await createTask('pinned')).toMatchObject({ agent: { runner: 'codex' } });
+      expect(requests.at(-1)?.body).not.toHaveProperty('model');
+      expect(store.get(manager.id)).toMatchObject({ runner: 'claude', model: 'fixture-chat' });
+
+      now += 60_000;
+      expect(await createTask()).toMatchObject({ agent: { runner: 'codex' } });
+    });
+
     it('selects only allowed runner/account pairs, validates at launch and tells the manager their CLI arguments', async () => {
       let removed = false;
       const engine = makeEngine({ accountError: async (_runner, account) => removed && account === 'first' ? 'account removed' : null });
@@ -3446,7 +3490,7 @@ describe('ManagerEngine', () => {
       expect(requests.at(-1)?.body).toMatchObject({ runner: 'codex', agentProfile: 'new-account' });
     });
 
-    it('automatically uses the manager backend instead of the project default', async () => {
+    it('uses the manager backend when the project checkout is unavailable', async () => {
       const engine = makeEngine({ defaultRunner: async () => 'codex' });
       const id = await create(engine, 0);
       await engine.createTask(id, { projectId: 'alpha', task: 'Fix it' });

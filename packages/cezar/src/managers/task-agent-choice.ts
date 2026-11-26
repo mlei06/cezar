@@ -4,6 +4,8 @@
  * Limit state is the workspace's account holds — the same the queue enforces — never a second source.
  */
 import type { RunnerId } from '../core/agent-runner.ts';
+import type { LedgerAccountRef } from '../usage-ledger/recorder.ts';
+import type { LedgerRecord } from '../usage-ledger/store.ts';
 
 export interface AccountOption {
   runner: RunnerId;
@@ -16,8 +18,8 @@ export interface AccountOption {
   until?: number;
 }
 
-export interface TaskAgentChoice {
-  chosen: AccountOption;
+export interface TaskAgentChoice<T extends AccountOption = AccountOption> {
+  chosen: T;
   reason: string;
   /** Every candidate is out of limits: the task waits in the queue until this instant. */
   queuedUntil?: number;
@@ -34,14 +36,14 @@ export const accountFlags = (option: Pick<AccountOption, 'runner' | 'agentProfil
  * `candidates` are ordered, preferred first, and already narrowed by explicit flags; `allowed` is
  * every account the manager may use, for naming an alternative to an explicit pick. Never empty.
  */
-export function chooseTaskAgent(
-  candidates: readonly AccountOption[],
+export function chooseTaskAgent<T extends AccountOption>(
+  candidates: readonly T[],
   options: {
     explicitAccount: boolean; fromSettings: boolean; allowed?: readonly AccountOption[]; now: number;
     /** The flag that narrowed `candidates` below `allowed` (e.g. `--runner codex`), for honest wording. */
     narrowedBy?: string;
   },
-): TaskAgentChoice {
+): TaskAgentChoice<T> {
   const open = (option: AccountOption) => option.until === undefined || option.until <= options.now;
   const first = candidates[0];
   if (!first) throw new Error('chooseTaskAgent needs at least one candidate');
@@ -74,4 +76,18 @@ export function chooseTaskAgent(
     queuedUntil: soonest.until,
     ...(alternative ? { warning: `${options.narrowedBy} has no account with capacity until ${iso(soonest.until!)}; ${accountName(alternative)} has capacity (${accountFlags(alternative)})` } : {}),
   };
+}
+
+/** Fresh account-wide readings can route new ordinary tasks before the account is held. */
+export function accountUsageAbove(
+  records: readonly LedgerRecord[], account: LedgerAccountRef, now: number, threshold = 0.8,
+): boolean {
+  type Reading = Extract<LedgerRecord, { t: 'reading' }>;
+  const latest = new Map<Reading['window'], Reading>();
+  for (const entry of records) {
+    if (entry.t !== 'reading' || entry.account !== account.key || entry.identity !== account.identity ||
+      entry.at > now || now - entry.at > 30 * 60_000) continue;
+    if (entry.at >= (latest.get(entry.window)?.at ?? 0)) latest.set(entry.window, entry);
+  }
+  return [...latest.values()].some((entry) => entry.resetsAt > now && entry.usedPercent > threshold * 100);
 }
