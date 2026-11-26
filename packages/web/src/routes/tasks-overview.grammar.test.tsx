@@ -219,7 +219,11 @@ describe('column headers and the Columns menu', () => {
     fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false, pointerType: 'mouse' })
     fireEvent.click(trigger)
     const items = await screen.findAllByRole('menuitemcheckbox')
-    expect(items.map((item) => item.textContent)).toEqual(['Workflow', 'Branch', '±', 'Ref', 'IN / OUT', 'Cost', 'Plan limit', 'CPU', 'Mem', 'Updated'])
+    const scoreColumns = ['Outcome', 'Efficiency', 'Main cause']
+    expect(items.map((item) => item.textContent)).toEqual(['Workflow', 'Branch', '±', 'Ref', 'IN / OUT', 'Cost', ...scoreColumns, 'Plan limit', 'CPU', 'Mem', 'Updated'])
+    for (const label of scoreColumns) {
+      expect(items.find((item) => item.textContent === label)?.getAttribute('aria-checked')).toBe('false')
+    }
     expect(items.find((item) => item.textContent === 'Branch')?.getAttribute('aria-checked')).toBe('true')
     expect(items.find((item) => item.textContent === 'Mem')?.getAttribute('aria-checked')).toBe('false')
 
