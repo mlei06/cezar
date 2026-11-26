@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { join, resolve, basename, dirname, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
+import { splitMarkdownFrontmatter } from './markdown-frontmatter.ts';
 import { gatedSkillsRepos } from './config.ts';
 import { getTeamSkillsCached } from './skills-remote.ts';
 import { readUiState } from './ui-state.ts';
@@ -361,13 +362,9 @@ export function parseFrontmatter(raw: string): {
   frontmatter: Record<string, FrontmatterValue>;
   body: string;
 } {
-  // Normalize CRLF and lone CR, and strip a UTF-8 BOM — otherwise frontmatter is silently dropped.
-  const text = raw.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
-  const match = /^---\n([\s\S]*?)\n---[ \t]*(?:\n|$)/.exec(text);
-  if (!match) return { frontmatter: {}, body: raw };
-
-  const block = match[1] ?? '';
-  const body = text.slice(match[0].length);
+  const parts = splitMarkdownFrontmatter(raw);
+  if (!parts) return { frontmatter: {}, body: raw };
+  const { block, body } = parts;
   const legacy = parseLegacyFrontmatter(block);
   let parsed: unknown;
   try {

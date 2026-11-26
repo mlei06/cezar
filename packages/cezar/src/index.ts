@@ -81,6 +81,7 @@ import {
   type CockpitRuntimeRecord,
 } from './runtime/cockpit-runtime.ts';
 import { handoffMarkerLine, handoffProject } from './runtime/cockpit-handoff.ts';
+import { checkFactory } from './factory/check.ts';
 
 const HELP = `cezar — local cockpit for AI agent tasks in your repo
 
@@ -99,6 +100,7 @@ Usage:
   cezar usage [--json]      which tasks and managers used your Claude/Codex plan limits (\`cezar usage --help\`)
   cezar impact <evidence|render>  collect evidence for, and render, an impact report
                             (local, no cockpit; paths default to $CEZ_ARTIFACTS_DIR)
+  cezar factory check       validate workflows, referenced skills, and scorers
   cezar init                scaffold .ai/cezar/ (example workflow + skill)
   cezar projects            list the projects this cockpit serves
                             (also: projects add [<dir>] · projects remove <id>)
@@ -277,6 +279,18 @@ async function main(): Promise<void> {
     case 'run':
       await runCommand(repoRoot, positionals.slice(1).join(' ').trim(), values.workflow, values.model, values.effort);
       return;
+    case 'factory': {
+      if (positionals.length !== 2 || positionals[1] !== 'check') {
+        console.error('Usage: cezar factory check [--repo <directory>]');
+        process.exitCode = 2;
+        return;
+      }
+      const issues = await checkFactory(repoRoot);
+      for (const issue of issues) console.error(`${issue.path}: ${issue.message}`);
+      if (issues.length) process.exitCode = 1;
+      else console.log('Factory files passed validation.');
+      return;
+    }
     case 'init':
       initCommand(repoRoot);
       return;
