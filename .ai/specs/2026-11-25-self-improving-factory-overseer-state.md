@@ -2,7 +2,7 @@
 
 The overseer's resume point for the self-improving factory build. Updated and pushed at every milestone step and every overseer decision, so the work survives a crashed machine or a new session. Read this first, then the roadmap's Progress table and the observation log.
 
-Last updated: 2026-11-26 05:12 UTC.
+Last updated: 2026-11-26 05:29 UTC.
 
 ## Where the build stands
 
@@ -11,8 +11,8 @@ Last updated: 2026-11-26 05:12 UTC.
 - **M1 PRs:** #2 (known host test failures), #3 (secret descriptions), #4 (workflow budgets and agent-step secrets), #5 (typecheck repair), #6 (built-in `implement`, `plan`, `operate`), #7 (the capability block), #8 (manager discovery and task flags), #9 (`manage-project` update), #10 (test-resource rules in `factory-work`).
 - **M1 follow-ups** (from reviews, not blocking): generated validation checks get an explicit secrets allowlist; forge-adapter-level draft-PR assertions; check-artifact exclusions survive a cockpit restart (tracked before M1).
 - **Live delegated routing:** applied `highReasoning`, `switchAbove: 0.8` and the ordered hosted fallback list through the config merge-writer. With the VPN available, an isolated `operate` task completed on the configured OpenCode primary. With a temporary unreachable probe target, a second `operate` completed on the first hosted fallback and recorded the runner, model and fallback note. Restored the real probe URL immediately after admission.
-- **In flight:** `impl/m2-budget-enforcement` at `a86dd035d` passed typecheck and 1,010 focused tests. The full validation is running. `impl/m1-pr-publishing` at `59b13a2ff` (B16) and `impl/m2-task-priority` at `677719856` (B22) have focused coverage and still need full validation. M3 catalog, judge, scoring service, and cause routing also have focused coverage on their implementation branches.
-- **Next:** after budget validation, put its branch on the #16 squash and verify the tree is unchanged. Release budget enforcement, then verify the two live manager threshold alerts. Finish B16 and B22. M3 still needs cockpit scores, manager score discovery, infrastructure notices, workspace reads, and live calibration. The concurrent real-project acceptance remains open.
+- **In flight:** Budget enforcement PR #17 merged at `03e0bc95b`, and release `03e0bc9` is running. Typecheck, 1,010 focused tests, all unit and package tests and the build passed. Targeted reruns covered the config inventory and theme fixes, and an isolated rerun passed for the lock-contention test. The next full validation is B16 on `impl/m1-pr-publishing`. B22 is on `impl/m2-task-priority` at `677719856`. The M3 implementation branches cover the catalog, judge, scoring service, cause routing, and cockpit/API on `impl/m3-score-ui` at `28dc836a2`. Those branches have focused checks and need to be rebased and fully validated in order.
+- **Next:** confirm release `03e0bc9`, run the isolated live threshold check, then finish B16 and B22 validation and releases. M3 needs full validation and live scoring, outage recovery, and calibration on two projects. The concurrent real-project acceptance remains open.
 
 ## Standing instructions given to the harness manager
 
@@ -46,5 +46,5 @@ Since 2026-11-25 17:25 the manager runs the harness project on its own (owner de
 - **M1 acceptance:** completed. New task and the configured low-reasoning alias were verified on the live cockpit.
 - Calibration so far: 4 runs, 16 scorer comparisons. Pass/fail agreement is 14/16. The two disagreements: the overseer under-called efficiency once, and the judge can't see spec drift (backlog B19).
 - **Public repository hygiene:** the fork holds nothing internal. No provider ids, hosts, paths, usernames, project names, job names or run data. Project-specific notes belong in that project's own repository; machine settings stay in `~/.config/factory-overseer.json`.
-- **Git metadata:** current implementation heads are being rebased with the public GitHub noreply identity. Earlier pushed implementation heads may still be reachable by commit id. Include those with earlier local Git identities in the owner’s existing history-cleanup review.
+- **Git metadata:** verified public noreply metadata on the current metrics and budget PR heads and corrected the related implementation branch heads. Earlier pushed implementation heads may still be reachable by commit id. Include those with earlier local Git identities in the owner’s existing history-cleanup review.
 - **History purge, pending (owner decision, not for the implementer):** commits pushed before 2026-11-25 21:45 UTC on `factory`, `feat/manager-autonomy` and the PR branches still contain internal names in older spec text. Rewrite them once M1's PRs are merged and nothing is open: run `git filter-repo --replace-text` over all fork branches, force-push, then delete the stale branches.
