@@ -9547,9 +9547,9 @@ export function createApp(deps: ServerDeps) {
         dataDir, project: project.id, name: project.name, now, runs: project.runs(),
         harness: detectHarnessProject(config.projects, config.factory?.harnessProject) === project.id,
         charter: await projectCharterProgress(project.root),
-        isMerged: async (number) => {
+        isMerged: async (number, url) => {
           const result = await forge?.prMergeState?.(number);
-          return result?.available ? result.mergeState.state === 'merged' : undefined;
+          return result?.available && result.mergeState.url === url ? result.mergeState.state === 'merged' : undefined;
         },
         humanTouchpoints: (runId) => {
           const path = join(dataDir, 'runs', `${runId}.ndjson`);

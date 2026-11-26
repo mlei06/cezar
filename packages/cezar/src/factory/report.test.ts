@@ -30,7 +30,7 @@ it('reports stored scores, counts verified unique merges and escapes project tex
       dataDir, project: 'fixture', name: '<script>unsafe()</script>', now: new Date('2026-11-26T00:00:00.000Z'),
       runs: store.listRuns(), harness: false, charter: '<img src=x>', isMerged, humanTouchpoints: () => 2,
     });
-    expect(isMerged.mock.calls).toEqual([[5], [6]]);
+    expect(isMerged.mock.calls).toEqual([[5, 'https://github.com/example/test/pull/5'], [6, 'https://github.com/example/test/pull/6']]);
     expect(report.text).toContain('2 tasks finished, 1 PRs confirmed merged');
     const markup = await readFile(join(factoryReportsDir(dataDir), report.name), 'utf8');
     expect(markup).toContain('<td>outcome</td><td>100.0%</td><td>50.0%</td>');

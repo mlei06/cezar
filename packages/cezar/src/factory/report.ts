@@ -34,7 +34,7 @@ export async function writeFactoryReport(input: {
   runs: readonly RunRecord[];
   harness: boolean;
   charter: string;
-  isMerged: (number: number) => Promise<boolean | undefined>;
+  isMerged: (number: number, url: string) => Promise<boolean | undefined>;
   humanTouchpoints: (runId: string) => number | undefined;
 }): Promise<{ name: string; text: string }> {
   const { dataDir, project, name, now, harness } = input;
@@ -53,14 +53,16 @@ export async function writeFactoryReport(input: {
   };
 
   // Attribute only the work Cezar knows opened a PR, using one run per PR and checking the forge.
-  const opened = new Map<number, RunRecord>();
+  const opened = new Map<number, { run: RunRecord; url: string }>();
   for (const run of recent.sort((a, b) => a.finishedAt!.localeCompare(b.finishedAt!))) {
-    const number = run.prRefs?.find(({ origin }) => origin === 'created')?.number ?? prNumberOfUrl(run.pullRequestUrl);
-    if (number) opened.set(number, run);
+    const created = run.prRefs?.find(({ origin }) => origin === 'created');
+    const url = created?.url ?? run.pullRequestUrl;
+    const number = created?.number ?? prNumberOfUrl(url);
+    if (number && url) opened.set(number, { run, url });
   }
   const sampled = [...opened].slice(-MAX_PRS);
-  const results = await mapWithConcurrency(sampled, 4, async ([number, run]) => ({
-    run, merged: await input.isMerged(number).catch(() => undefined),
+  const results = await mapWithConcurrency(sampled, 4, async ([number, { run, url }]) => ({
+    run, merged: await input.isMerged(number, url).catch(() => undefined),
   }));
   const merged = results.filter((entry) => entry.merged === true);
   const costs = merged.flatMap(({ run }) => run.costUsd === undefined || run.costUsd < 0 ? [] : [run.costUsd]);
