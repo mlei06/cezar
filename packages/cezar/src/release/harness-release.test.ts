@@ -9,7 +9,7 @@ import { expect, it } from 'vitest';
 
 const exec = promisify(execFile);
 
-it.skipIf(process.platform === 'win32').each(['restart', 'health', 'manual', 'benchmark'] as const)(
+it.skipIf(process.platform === 'win32').each(['restart', 'health', 'manual', 'benchmark', 'post-switch'] as const)(
   'keeps a healthy release in the %s case',
   async (failure) => {
     const root = await mkdtemp(join(tmpdir(), 'cez-release-rollback-'));
@@ -75,7 +75,7 @@ it.skipIf(process.platform === 'win32').each(['restart', 'health', 'manual', 'be
         expect(await readFile(stateFile, 'utf8')).toBe('stable');
         return;
       }
-      if (failure === 'benchmark') {
+      if (failure === 'benchmark' || failure === 'post-switch') {
         const benchmarks = join(candidate, 'dist', 'benchmarks');
         const settings = join(candidate, 'dist', 'workspace');
         await Promise.all([mkdir(benchmarks), mkdir(settings)]);
@@ -83,10 +83,14 @@ it.skipIf(process.platform === 'win32').each(['restart', 'health', 'manual', 'be
           writeFile(join(candidate, 'package.json'), '{"version":"0.1.0","type":"module"}'),
           writeFile(join(benchmarks, 'harness-smoke.js'), [
             'export const HARNESS_SMOKE_SUITE = "fixture";',
-            'export const runHarnessSmokeSuite = async entry => ({ passRate: entry === "/previous-entry" ? 100 : 60, samples: [] });',
+            'export const runHarnessSmokeSuite = async entry => ({ passRate: entry === "/previous-entry" ? 100 : ' +
+              (failure === 'benchmark' ? 60 : 100) + ', samples: [] });',
           ].join('\n')),
           writeFile(join(settings, 'config.js'), 'export const loadWorkspaceConfig = async () => ({});'),
         ]);
+        if (failure === 'post-switch') {
+          await writeFile(join(selfUpdate, 'staging.js'), 'export const smokeStagedHarness = async () => { throw new Error("fixture failed"); };');
+        }
         args.push('--benchmark');
       }
       await expect(execute()).rejects.toMatchObject({ code: 1 });

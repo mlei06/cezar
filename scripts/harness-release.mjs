@@ -105,8 +105,8 @@ async function withReleaseHold(action) {
   if (!response.ok) throw new Error('Could not hold traffic for a release (HTTP ' + response.status + ').');
   const lease = await response.json();
   const path = endpoint + '/' + encodeURIComponent(lease.id);
-  // Leave a minute for restart and health verification within the lease.
-  const deadline = Date.parse(lease.expiresAt) - 60_000;
+  // Reserve time for restart, health, the post-switch check and rollback.
+  const deadline = Date.parse(lease.expiresAt) - (flag('benchmark') ? 150_000 : 60_000);
   try {
     log({ action: 'hold', result: 'started', expiresAt: lease.expiresAt });
     let status = lease;
@@ -148,7 +148,9 @@ async function healthy(priorRuntime) {
 
 function restart() {
   if (flag('no-restart')) return say('--no-restart: not restarting the service');
-  run('systemctl', ['--user', 'restart', UNIT]);
+  execFileSync('systemctl', ['--user', 'restart', UNIT], {
+    cwd: REPO, stdio: ['ignore', 'pipe', 'pipe'], timeout: 20_000,
+  });
 }
 
 /** Self-update's own code, from a built tree (the build being released, or the active one). */
@@ -186,7 +188,7 @@ async function benchmark(packageRoot, su, sha, id, previous) {
   return passed;
 }
 
-async function activateAndVerify(su, id, simulateFailure = false) {
+async function activateAndVerify(su, id, simulateFailure = false, verifyWorkload) {
   try {
     const priorRuntime = flag('no-restart') || simulateFailure ? undefined
       : (await getJson(HEALTH).catch(() => undefined))?.runtimeId;
@@ -195,14 +197,16 @@ async function activateAndVerify(su, id, simulateFailure = false) {
     restart();
     if (flag('no-restart')) return { ok: true };
     if (simulateFailure) return { ok: false, reason: 'simulated (--simulate-unhealthy)' };
-    return await healthy(priorRuntime);
+    const health = await healthy(priorRuntime);
+    if (health.ok && verifyWorkload) await verifyWorkload(su.versionEntry(id));
+    return health;
   } catch (error) {
     return { ok: false, reason: error.message };
   }
 }
 
-async function switchTo(su, id, previous, entry) {
-  const health = await activateAndVerify(su, id, flag('simulate-unhealthy') && entry.action === 'switch');
+async function switchTo(su, id, previous, entry, verifyWorkload) {
+  const health = await activateAndVerify(su, id, flag('simulate-unhealthy') && entry.action === 'switch', verifyWorkload);
   if (health.ok) {
     log({ ...entry, id, previous, result: 'ok' });
     say(`now running ${id}`);
@@ -235,6 +239,12 @@ function pruneBuilds(su, keepIds) {
   }
 }
 
+async function candidateSmoke(packageRoot, entry) {
+  const stagingModule = join(packageRoot, 'dist', 'self-update', 'staging.js');
+  const { smokeStagedHarness } = await import(pathToFileURL(stagingModule).href);
+  await smokeStagedHarness(entry);
+}
+
 async function release() {
   const spec = positional[0] ?? 'origin/factory';
   spawnSync('git', ['fetch', '--quiet', 'origin', 'factory'], { cwd: REPO });
@@ -260,9 +270,7 @@ async function release() {
   log({ action: 'build', sha, result: 'ok' });
 
   if (flag('stage-only')) {
-    const stagingModule = join(packageRoot, 'dist', 'self-update', 'staging.js');
-    const { smokeStagedHarness } = await import(pathToFileURL(stagingModule).href);
-    await smokeStagedHarness(join(packageRoot, 'dist', 'index.js'));
+    await candidateSmoke(packageRoot, join(packageRoot, 'dist', 'index.js'));
     log({ action: 'stage', sha, result: 'ok' });
     say('candidate completed its isolated smoke task');
     return 0;
@@ -280,7 +288,11 @@ async function release() {
     say('already the active release');
     return 0;
   }
-  const ok = await withReleaseHold(() => switchTo(su, linked.id, previous, { action: 'switch', sha }));
+  const verifyWorkload = flag('benchmark') ? async (entry) => {
+    await candidateSmoke(packageRoot, entry);
+    log({ action: 'post-switch-smoke', sha, result: 'ok' });
+  } : undefined;
+  const ok = await withReleaseHold(() => switchTo(su, linked.id, previous, { action: 'switch', sha }, verifyWorkload));
   pruneBuilds(su, [linked.id, previous].filter(Boolean));
   return ok ? 0 : 1;
 }
