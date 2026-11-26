@@ -71,7 +71,8 @@ import { parseUsageLimit } from '../core/usage-limit.ts';
 import type { UiEvent } from '../core/ui-events.ts';
 import { assertCezarHomeWriteIsSandboxed, managersDir } from '../paths.ts';
 import { withoutAgentLogins, type SecretStore } from '../workspace/secrets.ts';
-import { provisionManagerSkills } from './manager-skills.ts';
+import { managerSkillSources, provisionManagerSkills } from './manager-skills.ts';
+import { projectCharterPrompt } from './project-charter.ts';
 import { resolveProfileEnvForRoot } from '../workspace/agent-profiles.ts';
 import {
   changedSettingFields,
@@ -374,7 +375,7 @@ export function isScratchRoot(root: string): boolean {
 /** The goal an automatic project manager starts with: generic, so it fits any repository. What is
  *  specific to one project belongs in that repository's AGENTS.md, which the manager reads. */
 export function projectManagerGoal(project: string): string {
-  return `You are the project manager of ${project}. The owner states outcomes and hears back when they are done; you carry each one from plan to finish with tasks, pull requests, reviews, merges and deployment. Follow the manage-project skill. Everything specific to this project (its forge, branches, tests, deployment, conventions) is in the repository's AGENTS.md and the docs it points to: read them before planning.`;
+  return `You lead ${project} on the owner's behalf. Carry each outcome from plan to verified delivery using tasks, pull requests, reviews, merges and releases. Follow the manage-project skill. Read .ai/project.md first, then AGENTS.md and the instructions it links for the work at hand.`;
 }
 const MAX_TIMER_MS = 2 ** 31 - 1;
 const MAX_WATCH_BACKOFF = 4;
@@ -2385,8 +2386,11 @@ export class ManagerEngine {
     // Stopped or deleted during setup: building the spec would recreate the workdir.
     if (turn.stopped) return { text: '', commands: [], costUsd: 0 };
     // The manager playbook and its kin live only in a manager's own folder, never globally.
+    const harnessProjects = sources.filter((source) => source.available && existsSync(join(source.root, '.ai/cezar/HARNESS')));
     try {
-      provisionManagerSkills(store.workdir(id));
+      const skills = managerSkillSources();
+      if (harnessProjects.length === 0) skills.delete('manage-harness');
+      provisionManagerSkills(store.workdir(id), skills);
     } catch (error) {
       console.warn(`[cezar] manager skills: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -2418,7 +2422,10 @@ export class ManagerEngine {
     // A new chat session hears what it would otherwise have remembered; a watch or job is self-contained.
     // A fresh session never saw the cards a resumed one would get by id.
     const unseen = turn.cards?.ids ? prompt.replace(turn.cards.ids, () => turn.cards!.full) : prompt;
-    const freshPrompt = turn.kind === 'chat' ? `${this.preamble(id, sources)}${unseen}` : prompt;
+    const freshPrompt = async () => {
+      const charter = await projectCharterPrompt(sources);
+      return turn.kind === 'chat' ? `${charter}${this.preamble(id, sources)}${unseen}` : `${charter}${prompt}`;
+    };
     const connectorRules = connectorTurn ? connectorAllowRules(manager.connectors, state.connectors) : [];
     // Secrets shared with agents: the workspace's, plus the project's when it manages exactly one
     // (several projects may store the same name; `cezar secrets get --repo` reads any of them).
@@ -2434,10 +2441,11 @@ export class ManagerEngine {
         {
           textInFiles: runner === 'claude' && writable !== undefined,
           full,
+          harnessProjects: harnessProjects.map((source) => source.id),
           memory: renderMemory(this.memoryFor(id, (profile.env as Record<string, string | undefined>).CLAUDE_CONFIG_DIR ?? process.env.CLAUDE_CONFIG_DIR).entries),
         },
       ),
-      userPrompt: resumeId ? prompt : freshPrompt,
+      userPrompt: resumeId ? prompt : await freshPrompt(),
       cwd: store.workdir(id),
       // A full turn off Claude sends no tool list: Codex and the others then run unrestricted.
       ...(full && runner !== 'claude' ? {} : {
@@ -2490,7 +2498,7 @@ export class ManagerEngine {
       const again = await this.session(id, base, sessionKey, runner, resumeId, turn, onProgress, origin);
       return { ...again, costUsd: again.costUsd + first.costUsd, runner };
     }
-    const fresh = await this.session(id, { ...base, userPrompt: freshPrompt }, sessionKey, runner, undefined, turn, onProgress, { startedAt: origin.startedAt });
+    const fresh = await this.session(id, { ...base, userPrompt: await freshPrompt() }, sessionKey, runner, undefined, turn, onProgress, { startedAt: origin.startedAt });
     return { ...fresh, costUsd: fresh.costUsd + first.costUsd, runner };
   }
 

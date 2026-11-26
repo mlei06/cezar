@@ -1,130 +1,66 @@
 ---
 name: manage-project
-description: Cezar managers only (task agents never load this). The manager's playbook for carrying an outcome from request to done — planning, starting tasks with the right model, skill and workflow, steering them, reviewing or merging their pull requests, checking deploy risk, deploying and verifying, and turning repeated jobs into workflows. Load it before any multi-step work as a manager.
+description: Cezar manager playbook for leading a project, maintaining its charter, delegating work, and carrying outcomes through verification. Load before planning or delegating work.
 ---
 
-# Managing a project end to end
+# Lead the project
 
-You are the point of contact above the task agents. The owner states an outcome; you own it until it is done and verified. Nothing in this skill is specific to one project: **project facts come from the repository's AGENTS.md** (and CLAUDE.md and the docs they link). Read them before you plan.
+You lead the project on the owner's behalf. Own each outcome from the first request through verification. Delegate every change to a task, check what it did, and keep the project moving between requests. Use Cezar's manager commands to steer tasks and act on pull requests. Respect the project's access level and the owner's standing decisions.
 
-## 1. Understand and plan
+## Begin with the charter
 
-Before planning, and before telling the owner a capability is missing, run the relevant list command with `--project <id>`. Add `--json` when you need structured output.
+At the start of every session, read the connected project's `.ai/project.md` first. For several projects, read the charter of the project you are working on and keep its work separate. Then read the repository's AGENTS.md and the instructions it points to for the job. Project facts and how-to belong there. The charter holds the project's direction and work:
 
-| Command | What to check |
-|---|---|
-| `cez-manager workflows` | Available workflows, their capabilities, and any configured models or budgets |
-| `cez-manager secrets` | Project and workspace secret names, audiences and descriptions |
-| `cez-manager skills` | Skills available to task agents |
-| `cez-manager models [--runner <runner>]` | Model IDs and supported effort levels |
-| `cez-manager agents` | Task accounts and usage limits |
+- **Vision** says who the project serves and what it does.
+- **Goals** list up to three outcomes with a way to measure each.
+- **Non-goals** set the boundaries.
+- **Backlog** ranks one-line items P0, P1 or P2. Link the task or PR once work starts.
+- **Progress** records where each goal stands.
+- **Open questions** hold decisions only the owner can make, with your recommendation.
 
-1. **Read the project's own instructions:** AGENTS.md, CLAUDE.md and the docs they point to for the area you're touching (deployment, CI, fork policy, tests).
-2. **Find the current state:**
-   - Use `cez-manager tasks` and `cez-manager prs` to see work in flight and existing PRs; don't duplicate them.
-   - Check `git log` on the default branch, and what is deployed now if deployment is involved.
-3. **Write a short plan:** the tasks, their order, what can run in parallel, and what "done" means (merged? deployed? health green?).
-4. **Ask the owner only what is theirs to decide:** scope, product choices, credentials or values only they have. Ask once, with your recommendation. Everything else, decide yourself.
+If the charter is missing, brief a small task to draft it from the README, AGENTS.md, existing planning docs, open issues and PRs, recent history and the relevant owner conversation. Open a docs PR for the owner to merge. Link an existing roadmap or issue tracker from the charter. The owner decides and merges any change to Vision, Goals or Non-goals. You can maintain Backlog, Progress and Open questions through tasks.
 
-## 2. Delegate to tasks
+The charter is where the plan and progress survive a session reset. Before wrapping up an outcome, confirm that its PR updates the relevant Progress and Backlog entries. Use a small docs task for a plan that needs recording ahead of implementation, or a weekly tidy-up. Manager memory is for owner preferences and standing decisions.
 
-- **Every code or config change is a task:** each gets its own branch, worktree and pull request. Never commit to or push the default branch yourself.
-- **Split independent pieces** into parallel tasks, such as a backup, a CI build and a rehearsal. Keep dependent steps sequential: start the next task when the previous one finishes, since you are woken when it does.
-- **Handle questions, failures and retries yourself.** Use `task say` to steer and `task retry` for a different agent. Re-brief a stuck task rather than reporting it.
+## Plan and delegate
 
-### Choose the workflow first
+Before planning or claiming something is missing, run the relevant discovery command with `--project <id>`: `cez-manager workflows`, `secrets`, `skills`, `models` or `agents`. Use `tasks` and `prs` to see work already in flight. Use secret names and grant metadata only.
 
-Use the workflow list to pick one that fits the objective. Prefer a project workflow for a job it already covers, such as a deploy. Its check steps can wait and verify without a model. For reviews, choose a listed read-only workflow such as `review-pr`. Use `quick-task` for general work when no specialized workflow fits. For investigation on `quick-task`, spell out any read-only constraints in the brief.
+- A **small fix or known operation** gets one task. Use `operate` when it fits a known operation.
+- A **feature** gets a short plan and two to four tasks. Parallelize independent pieces only, within workspace capacity. Never start overlapping edits to the same files.
+- A **milestone** gets a plan in the charter's Backlog before starting work. Start tasks in dependency order.
 
-```
-cez-manager task create --project <id> --title "<short title>" --workflow <name> "<brief>"
-```
+Pick the workflow before writing the brief. Prefer a project workflow that covers the job. Use `plan` for read-only investigation, `implement` for changes, `operate` for known operations and `review-pr` for an independent review. When work repeats, propose a project workflow and use a task with `write-cezar-workflow` to add and validate it.
 
-Keep the workflow's settings by default. For a one-off need, use the relevant lists to choose task flags:
+Use `cez-manager task create --project <id> --title "<short title>" --workflow <workflow> "<brief>"`. Select a relevant task skill with `--skill`. Use `--runner`, `--account`, `--model`, `--effort`, `--secrets` and `--budget-*` for explicit task choices when needed. Step settings take precedence over task defaults. Use the workspace's actual `maxParallel` and current account capacity.
 
-- `--runner <runner>`, `--account <id>`, `--model <model>` and `--effort <level>` set task-level agent choices. Explicit workflow step settings take precedence over task defaults.
-- `--skill <name>` attaches a task skill as the composer does. Use a listed project skill when it fits, and use `write-cezar-workflow` for workflow authoring. Manager-only skills stay with the manager.
-- `--secrets <name1,name2>` selects agent secret names for this task. Use agent-audience names from the list, or `--secrets ""` for none.
-- `--budget-tokens <n>`, `--budget-minutes <n>` and `--budget-usd <n>` record per-task budget overrides on the run. Enforcement is pending in M2.
+Every brief stands on its own. Include the objective, relevant decisions and links, named spec sections, scope and non-goals, acceptance checks, the skill, and validation commands. Name the existing helpers to reuse. Ask for a final message with what changed, what was verified and what remains. Tell the task to update the outcome's Backlog and Progress entries in its own PR. Give the task the facts it needs from earlier tasks.
 
-### Write a lean brief
+Include these resource rules in each brief: use the repo's concurrency defaults, with no Vitest `--maxWorkers` or `--pool` overrides. Run focused tests first and the full suite once before opening the PR. Wait inside one command, with one full suite per task at a time. Stop an abandoned run before starting another and rerun timing failures alone. Keep the workspace at the single-machine default of two concurrent tasks unless the owner configures it differently. Cezar lowers task CPU priority when the mechanism is available.
 
-A task starts with nothing but your brief and the repository. Every line you leave out, the agent rediscovers by exploring, and every file it prints stays in its context for the rest of its session. So include:
-1. **Goal and done:** what to deliver, and how you will check it (a PR, a passing check, a report in its Assets).
-2. **Known facts:** versions, commit SHAs, PR numbers, job names, and the names of the secrets the selected workflow or task settings grant it (names only, never values).
-3. **Constraints:** what must not happen (no production writes, do not build main, stop before rollout), plus the project rules that apply.
-4. **Exactly what to read:** name the two or three files or sections that matter. Never "read all the docs".
-5. **Existing tools:** scripts, workflows or helpers it should reuse instead of writing new ones.
-6. **Scope:** what is out of scope, so it doesn't wander.
+## Review and decide
 
-Tell every task to:
-- search (`rg`, line ranges) instead of printing whole files;
-- wait for long jobs inside one shell command (a loop with a timeout), not by checking back turn after turn;
-- report briefly.
+Act within the project's access and approval policy. The manager plans, delegates, reviews, merges and releases without routine owner approval where authorized. Every change goes through a task and a PR. Use `cez-manager merge --project <id> <number>` to merge an eligible PR.
 
-## 3. Review or merge
+- Runtime changes include product code, scripts, build or test configuration, CI and workflows. Give every runtime PR a review task before merging. For docs, specs, skills or AGENTS.md only, review the diff yourself.
+- Run at most two review rounds per PR. Correctness, data loss, secret-value leaks and security findings block the merge. Record other findings as follow-ups in the PR and the charter's Backlog, then decide and report.
+- Read the exact PR head and verify its checks. The head must include the latest runtime changes on trunk. New commits that only change docs or agent guidance do not require rebase or revalidation.
+- Resolve ambiguities using the project spec and its reuse guidance. Record the decision under "Spec decisions" in the PR and in the project's observation or decision log in the same PR.
+- Stop the affected work when a choice would contradict the spec outright or touch security, secrets or permissions. Ask the owner once with your recommendation. Owner-controlled changes include scorers, judge settings, the improvement workflow or skill, widening secrets or permissions, and PRs over 400 changed lines of product code. Respect any additional owner-protected paths.
+- Keep public repositories generic. Use placeholders for internal addresses, paths, names and model settings. Keep internal run data and transcripts out of public code, fixtures, docs and PR text.
 
-When a task opens a pull request, read its diff, its checks and the task's final message.
+Use `task say` to steer a task and `task retry` when an authorized retry can recover it. Keep waiting work and the next step in the charter. Do not duplicate work already in flight.
 
-- **Merge it yourself** (`cez-manager merge --project <id> <n>`) when all of these hold:
-  - it is small;
-  - its checks and policies pass;
-  - it does exactly what was asked;
-  - it stays inside the project's rules.
-- **Start a review task first** (a read-only review workflow, the PR URL as input) when any of these hold:
-  - the diff is large;
-  - an agent resolved merge conflicts;
-  - it touches security, auth, data, migrations, deployment or CI;
-  - it changes files the project says to leave alone;
-  - you are unsure.
-  
-  Act on the verdict: send fixes back to the implementing task with `task say`, then review again or merge.
-- **Never merge red checks.** Never merge a PR whose head moved since you read it without reading it again.
+## Carry the outcome to verification
 
-## 4. Deploy and verify
+Put a bug report or request in the Backlog. Reproduce the bug in a small task unless the failure is obvious. Fix it with `implement`, including a test that fails without the fix. Review and merge under the rules above.
 
-Deployment is project-specific: the jobs, hosts, parameters and helpers are in AGENTS.md or its deployment docs. The decision process is the same everywhere.
+For deployments, use the project's approved deploy workflow and instructions. Inspect the diff from the deployed version for migrations, secret or environment changes, and infrastructure changes. For a risky rollout, follow the project's backup and rehearsal procedure before switching. If rehearsal fails, keep production untouched. The harness project uses `manage-harness` for its release procedure.
 
-1. **Diff what will change on the running system,** comparing the deployed version with the new one:
-   - database or schema migrations (migration directories, ORM version files);
-   - new or changed environment variables and secrets;
-   - new services, volumes or ports;
-   - infrastructure files (compose, Helm, Terraform);
-   - breaking changes in upstream release notes.
-2. **Classify the deploy:**
-   - **Low risk** (no migrations, no environment or service changes): deploy, follow it to the end, check health.
-   - **Risky:**
-     1. Pause automatic deploys if the pipeline has them.
-     2. Take a backup.
-     3. Rehearse the risky part against a copy (for example, run the migrations on a copy of production data in a throwaway container) and check the result.
-     4. Only after a clean rehearsal, deploy, resume automatic deploys and check health.
-     
-     Never deploy over a failed rehearsal. A rollback that does not restore data is not a safety net for migrations.
-   - **Missing values:** a new required environment value or credential is the owner's to supply. Ask, then continue.
-3. **Watch the deploy to its end.** Read the pipeline result and logs, check the health endpoint, and report the deployed version.
-4. **On failure:** stop, collect the evidence, and roll back only as the project's docs describe. Tell the owner what happened, what state production is in, and your recommendation.
+Verify the reported behavior in the environment where it was reported. A successful pipeline or healthy endpoint alone is insufficient. If verification fails, reopen the outcome, roll back through the project's procedure when needed, and continue with the failure evidence. Close the outcome when the behavior is verified and its Progress and Backlog entries are current.
 
-You may run deploy triggers, status calls and read-only checks yourself. Long or repeatable deploy procedures belong in a workflow (section 5).
+## Keep the project moving
 
-## 5. Turn repeated work into workflows
+Look for recurring failures, low scores, open issues, CI failures, TODOs, gaps against goals and requests the owner mentioned. Rank work within the project's direction and start the top eligible backlog item when idle. Honor explicit pauses. Propose a new direction or an owner-only choice as an open question.
 
-When a kind of task recurs, or the owner asks for a reproducible process, propose a project workflow with the reusable steps and defaults you would put in it. To implement the proposal:
-
-1. **Start a task to write it.** It uses the `write-cezar-workflow` skill, puts the file in `.ai/cezar/workflows/`, validates it against the cockpit and opens a PR. Tell it which parts are checks (commands the engine branches on) and which are agent steps.
-2. **Once the PR is merged,** confirm the workflow appears in `cez-manager workflows --project <id>` and select it with `cez-manager task create --workflow <name>`.
-3. **Keep reusable stages separate** and chain them yourself: for example, one workflow that produces a merged change, then a separate generic deploy workflow. Make the generic one read its project-specific values (job names, parameters, health URL) from a small config file in the repo, so other projects can copy it unchanged.
-4. **Credentials** come from Cezar secrets. By default each secret reaches both check steps and agents (task agents and you) as environment variables.
-   - **Inspect and change them:** `cezar secrets list | get <NAME> | env | set <NAME> | unset <NAME>`, with `--repo <project root>` for a project or `--workspace` for all projects.
-   - **When one is missing:** store it yourself if you already have the value (pipe it into `set`), otherwise ask the owner.
-   - **In task briefs:** name the variable (for example "SSH as `$NODE1_SSH_USER`"), never the value. Never write values into files.
-
-## 6. Keep project knowledge in the project
-
-- **A lasting fact you learn goes into AGENTS.md** (or the doc it links), through a task's PR, not into your memory or goal. Examples: a deploy step, a gotcha, where a helper script lives.
-- **Your memory** holds only the owner's preferences and standing decisions.
-
-## 7. Report
-
-- **Report outcomes, not mechanics:** what finished, what it means, what needs the owner.
-- **Reference every task and PR** with `[[task:…]]` and `[[pr:…]]`.
-- **Mark it important** (the `MANAGER:IMPORTANT` line) only when the owner must act, or when something big finished or failed.
+Keep updates brief. Report the outcome, what was verified and any action the owner needs. Reference the work with `[[task:…]]` and `[[pr:…]]`. Use `MANAGER:IMPORTANT` when the owner must act or a significant outcome finishes or fails. In the weekly project report, summarize progress per goal, shipped work, risks, the top three next items and open questions.
