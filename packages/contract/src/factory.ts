@@ -253,3 +253,42 @@ export const factoryWeeklyMetricsSchema = z.object({
   meanCostUsd: z.number().nonnegative().optional(),
   meanHumanTouchpoints: z.number().nonnegative().optional(),
 });
+
+export const benchmarkNameSchema = z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/);
+const benchmarkConfigSchema = z.object({
+  name: benchmarkNameSchema,
+  runner: runnerSchema.optional(),
+  model: z.string().trim().min(1).max(190).optional(),
+  effort: reasoningEffortSchema.optional(),
+}).strict();
+export const benchmarkSuiteSchema = z.object({
+  description: z.string().trim().max(2000).default(''),
+  configurations: z.array(benchmarkConfigSchema).min(1).max(8),
+  tasks: z.array(benchmarkNameSchema).min(1).max(40),
+  scorers: z.array(scorerNameSchema).min(1).max(20).default(['outcome']),
+  times: z.number().int().min(1).max(5).default(1),
+}).strict().superRefine((suite, ctx) => {
+  const fields = { configurations: suite.configurations.map(({ name }) => name), tasks: suite.tasks, scorers: suite.scorers };
+  for (const [key, entries] of Object.entries(fields)) {
+    if (new Set(entries).size !== entries.length) ctx.addIssue({ code: 'custom', path: [key], message: 'Names must be unique.' });
+  }
+});
+export type BenchmarkSuite = z.infer<typeof benchmarkSuiteSchema>;
+export const benchmarkTaskSchema = z.object({
+  title: z.string().trim().min(1).max(300),
+  sourceRun: z.string().min(1).max(120).optional(),
+  workflow: z.string().trim().min(1).max(190),
+  prompt: z.string().min(1).max(100_000),
+  successCriteria: z.string().trim().min(1).max(4000),
+  startCommit: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/),
+}).strict();
+export type BenchmarkTask = z.infer<typeof benchmarkTaskSchema>;
+export const benchmarkAddInputSchema = z.object({
+  run: z.string().min(1).max(120), suite: benchmarkNameSchema,
+  criteria: z.string().trim().min(1).max(4000).optional(),
+}).strict();
+export const benchmarkAddResponseSchema = z.object({ task: benchmarkNameSchema, path: z.string() });
+export const benchmarkSuitesResponseSchema = z.object({
+  suites: z.array(benchmarkSuiteSchema.safeExtend({ name: benchmarkNameSchema })),
+  issues: z.array(z.object({ path: z.string(), message: z.string() })),
+});
