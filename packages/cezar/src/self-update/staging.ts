@@ -7,6 +7,12 @@ import { join } from 'node:path';
 import { setTimeout as wait } from 'node:timers/promises';
 import { runRecordSchema } from '@open-mercato/cezar-contract';
 
+// In particular, a host runner override can take precedence over CEZ_DRY_RUN.
+const stagingEnvironment = () => Object.fromEntries(
+  ['PATH', 'HOME', 'USER', 'LANG', 'LC_ALL', 'TZ', 'TMPDIR', 'TMP', 'TEMP', 'SystemRoot', 'WINDIR', 'COMSPEC', 'PATHEXT']
+    .flatMap((key) => process.env[key] === undefined ? [] : [[key, process.env[key]]]),
+);
+
 async function loopbackPort(): Promise<number> {
   const socket = createServer();
   return new Promise((resolve, reject) => {
@@ -46,7 +52,7 @@ export async function withStagingCockpit<T>(entry: string, use: (api: string) =>
     const child = spawn(process.execPath, [entry, 'serve', '--repo', project, '--port', String(port), '--bind-host', '127.0.0.1', '--no-open'], {
       cwd: project,
       env: {
-        ...process.env,
+        ...stagingEnvironment(),
         CEZ_HOME: join(scratch, 'workspace'),
         CEZ_INSTANCE_ID: instanceId,
         CEZ_REMOTE: '0',
