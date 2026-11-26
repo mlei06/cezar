@@ -139,8 +139,8 @@ export function failImprovement(paths: ImprovementPaths, id: string, now: Date):
 }
 
 /** The improvement PR merged: its commit starts the before/after window and the cooldown. */
-export function mergeImprovement(paths: ImprovementPaths, id: string, input: { commit: string; at: Date }): ImprovementRecord {
-  return updateRecord(paths.records, id, (entry) => ({ ...entry, state: 'merged', mergeCommit: input.commit, mergedAt: input.at.toISOString() }));
+export function mergeImprovement(paths: ImprovementPaths, id: string, input: { commit?: string; at: Date }): ImprovementRecord {
+  return updateRecord(paths.records, id, (entry) => ({ ...entry, state: 'merged', ...(input.commit ? { mergeCommit: input.commit } : {}), mergedAt: input.at.toISOString() }));
 }
 
 /** The improvement PR closed unmerged: its fixes never landed, so their causes reopen. */

@@ -164,6 +164,7 @@ import {
   scoresQuerySchema,
   managerScoresQuerySchema,
   type FactoryCheckResponse,
+  type FactoryImproveResponse,
   type WorkspaceScoresResponse,
   type CauseQueueResponse,
   type ScoreRunResponse,
@@ -309,6 +310,9 @@ import { aggregateScores, groupScoreColumns } from '../scoring/summary.ts';
 import { checkFactory } from '../factory/check.ts';
 import { factoryReportsDir, writeFactoryReport } from '../factory/report.ts';
 import { projectCharterProgress } from '../managers/project-charter.ts';
+import { ImprovementService, type ImprovementProject } from '../improvement/service.ts';
+import { resolveImprovementSettings } from '../improvement/settings.ts';
+import { IMPROVE_FACTORY } from '../workflows/templates.ts';
 import { detectHarnessProject, harnessCauseQueuePath, projectCauseQueuePath, readCauseQueue, recordCauses, routeCauses } from '../factory/causes.ts';
 import { byLastActivityDesc, compareIsoDesc, lastActivityAt, readRunIndexDiagnostic, readRunIndexFromDisk } from '../runs/run-index.ts';
 import { isV2WireEventType } from '../runs/ui-event-sink.ts';
@@ -1013,6 +1017,7 @@ async function workflowCatalog(repoRoot: string) {
 // Give both mounts a named response so declaration emit doesn't inline the full catalog twice.
 interface WorkflowCatalogBody extends Awaited<ReturnType<typeof workflowCatalog>> {}
 interface FactoryCheckBody extends FactoryCheckResponse {}
+type FactoryImproveBody = FactoryImproveResponse;
 interface ScoresBody extends ScoresResponse {}
 interface WorkspaceScoresBody extends WorkspaceScoresResponse {}
 interface GroupCompareBody extends GroupResponse {}
@@ -1887,6 +1892,35 @@ export function createApp(deps: ServerDeps) {
     routeSavedScores(project, [{ run, score: event.score }]);
   }, undefined, secretStore, routeSavedScores, (event) => workspaceEvents.emit('score.changed', event));
   deps.onDispose?.(() => scoring.dispose());
+  // Self-improvement (factory D6): runs from the cause queues, and their bookkeeping.
+  const improvement = new ImprovementService({
+    isHarness: async (project) => {
+      const config = await loadWorkspaceConfig();
+      return detectHarnessProject(config.projects, config.factory?.harnessProject) === project.id;
+    },
+    settings: async (project, harness) => {
+      const [workspace, local] = await Promise.all([loadWorkspaceConfig(), loadConfig(project.root)]);
+      return resolveImprovementSettings({ harness, workspace: workspace.factory?.improvement, project: local.factory?.improvement });
+    },
+    prState: async (project, number) => {
+      const forge = resolveForge(await getRepoInfo(project.root));
+      const result = await forge?.prMergeState?.(number, { refresh: true });
+      const state = result?.available ? result.mergeState.state : undefined;
+      return state === 'open' || state === 'merged' || state === 'closed' ? state : undefined;
+    },
+  });
+  const improvementProject = (project: ProjectContext, id: string): ImprovementProject => ({
+    id, root: project.root, dataDir: project.dataDir,
+    listRuns: () => project.store.listRuns(),
+    getRun: (runId) => project.store.getRun(runId),
+    onRun: (listener) => { project.store.on('run', listener); return () => { project.store.off('run', listener); }; },
+    startRun: async (task) => {
+      const [{ workflows }, skills] = await Promise.all([loadWorkflows(project.root), discoverSkills(project.root)]);
+      if (!skills.some((skill) => skill.name === 'improve-factory')) return { error: 'the improve-factory skill is not installed (it needs the owner\'s review first)' };
+      const workflow = workflows.find((entry) => entry.name === 'improve-factory') ?? IMPROVE_FACTORY;
+      return { id: project.manager.startRun(workflow, { task, worktree: true, autonomous: true }).id };
+    },
+  });
   const emitAutomationChange = (
     project: ProjectContext,
     automationId: string,
@@ -5792,6 +5826,12 @@ export function createApp(deps: ServerDeps) {
 
     .get('/factory/check', async (c): Promise<Response & TypedResponse<FactoryCheckBody, 200, 'json'>> => {
       const response: FactoryCheckResponse = { issues: await checkFactory(c.get('project').root) };
+      return c.json(response);
+    })
+
+    .post('/factory/improve', async (c): Promise<Response & TypedResponse<FactoryImproveBody, 200, 'json'>> => {
+      const project = c.get('project');
+      const response: FactoryImproveResponse = await improvement.start(improvementProject(project, project.id), { startedBy: 'owner', manual: true });
       return c.json(response);
     })
 
@@ -9809,7 +9849,11 @@ export function createApp(deps: ServerDeps) {
       let stopped = false;
       let offScoring: (() => void) | undefined;
       void Promise.resolve(project === bootContext ? resolveBootProject() : project.id).then((id) => {
-        if (!stopped) offScoring = scoring.watch({ ...project, id }, deps.factoryScoringRecoveredSince);
+        if (stopped) return;
+        offScoring = scoring.watch({ ...project, id }, deps.factoryScoringRecoveredSince);
+        const offImprovement = improvement.watch(improvementProject(project, id));
+        const offBoth = offScoring;
+        offScoring = () => { offBoth(); offImprovement(); };
       }).catch(() => undefined);
       detach.push(() => { stopped = true; offScoring?.(); });
     }
