@@ -1,0 +1,7 @@
+name: harness-release
+description: Stage and benchmark the merged factory commit before switching the harness.
+steps:
+  - id: schedule
+    name: Schedule the release
+    sideEffects: true
+    command: node scripts/schedule-harness-release.mjs

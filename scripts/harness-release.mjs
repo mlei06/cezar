@@ -11,6 +11,7 @@
 //          --health-url URL (default http://127.0.0.1:4321/api/v1/health)  --keep N (default 5)
 //          --unit NAME (default cezar)  --skip-checks (build only; no typecheck/tests)
 //          --benchmark (stage and compare the harness smoke suite before switching)
+//          --require-real-replays (for the protected workflow, validate affected real runner paths)
 //          --hold-new-tasks (lease admission while waiting and switching; needs a compatible live cockpit)
 //          --stage-only (build and check an isolated cockpit; leave the live version active)
 //          --simulate-unhealthy (test the automatic rollback: the new version's health check fails)
@@ -190,6 +191,25 @@ async function benchmark(packageRoot, su, sha, id, previous) {
   return passed;
 }
 
+async function verifyRealReplays(packageRoot, sha, previous) {
+  if (!flag('require-real-replays')) return true;
+  const base = previous && lastSwitch(previous)?.sha;
+  const paths = base ? run('git', ['diff', '--name-only', base, sha]).split('\n') : [];
+  const changed = (pattern) => !base || paths.some(path => pattern.test(path));
+  const needed = {
+    agent: changed(/packages\/cezar\/src\/(core\/|workflows\/|managers\/(engine|prompts)|skills)|\.ai\/(skills|cezar\/workflows)|AGENTS\.md$/),
+    judge: changed(/packages\/cezar\/src\/(scoring\/|core\/.*runner|core\/opencode)|\.ai\/cezar\/scorers/),
+  };
+  if (!needed.agent && !needed.judge) return true;
+  const dist = join(packageRoot, 'dist');
+  const { runHarnessRealReplaySuite } = await import(pathToFileURL(join(dist, 'benchmarks', 'harness-smoke.js')).href);
+  const samples = await runHarnessRealReplaySuite(join(dist, 'index.js'), needed);
+  const passed = samples.length > 0 && samples.every(sample => sample.passed);
+  log({ action: 'real-benchmark', sha, result: passed ? 'ok' : 'failed', samples });
+  if (!passed) say('required real replay checks failed; keeping the active harness');
+  return passed;
+}
+
 async function activateAndVerify(su, id, simulateFailure = false, verifyWorkload) {
   try {
     const priorRuntime = flag('no-restart') || simulateFailure ? undefined
@@ -350,6 +370,7 @@ async function release() {
   if (flag('benchmark')) {
     const version = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')).version;
     if (!await benchmark(packageRoot, su, sha, su.linkId(version, branch), previous)) return 1;
+    if (!await verifyRealReplays(packageRoot, sha, previous)) return 1;
   }
   const linked = su.linkCheckout(packageRoot, branch);
   say(`linked ${linked.id}${previous ? ` (current: ${previous})` : ''}`);
