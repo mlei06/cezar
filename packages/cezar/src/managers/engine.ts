@@ -154,6 +154,7 @@ import { PlanUsageTracker, recordUsageObservation, type LedgerAccountRef } from 
 import { ledgerAccountRef } from '../usage-ledger/identity.ts';
 import { readLedger } from '../usage-ledger/store.ts';
 import { managerConsumerId } from '../usage-ledger/report.ts';
+import { FACTORY_REPORT_JOB } from '../factory/report.ts';
 import { hasProtectedPaths, protectedChanges } from '../improvement/protection.ts';
 
 /**
@@ -183,6 +184,7 @@ export interface ManagerEngineDeps {
   /** Settings → Resources' auto-resume switch; off keeps a usage limit a plain failure. Absent = on. */
   autoResume?: () => boolean;
   releaseHoldActive?: () => boolean;
+  factoryWeeklyReport?: (project: ManagerProjectSource, now: Date) => Promise<{ name: string; text: string }>;
   /** Raises the OS notification; absent where there is nobody at the machine. */
   notifySystem?: (title: string, body: string) => void;
   /** Wakes a sleeping phone (spec relay R5). The manager's id and the kind, which each phone's
@@ -774,6 +776,22 @@ export class ManagerEngine {
       if (this.deps.store.get(managerId) && this.deps.store.messages(managerId).length === 0) await this.remove(managerId);
       delete created[projectId];
       changed = true;
+    }
+    if (this.deps.factoryWeeklyReport) {
+      for (const source of sources) {
+        if (!source.available || isScratchRoot(source.root)) continue;
+        const manager = this.deps.store.list().find((entry) =>
+          entry.projects !== 'all' && entry.projects.length === 1 && entry.projects[0] === source.id);
+        if (!manager || manager.jobs.length >= 32 || manager.jobs.some((job) => job.id === FACTORY_REPORT_JOB)) continue;
+        const job: ManagerJob = {
+          id: FACTORY_REPORT_JOB, name: 'Weekly factory report',
+          prompt: 'Summarize stored scores, project progress, causes and improvements.',
+          enabled: true, everyMinutes: 10_080, lastRunAt: this.iso(),
+        };
+        this.deps.store.update(manager.id, (entry) => ({ ...entry, jobs: [...entry.jobs, job] }));
+        this.emitChange(manager.id);
+      }
+      this.reschedule();
     }
     if (changed) {
       assertCezarHomeWriteIsSandboxed(dirname(path));
@@ -1604,13 +1622,28 @@ export class ManagerEngine {
       return;
     }
     const job = manager.jobs.find((candidate) => candidate.id === item.jobId);
-    if (!job) return;
+    if (!job || !job.enabled || (job.id === FACTORY_REPORT_JOB && jobDueAt(manager, job) > this.now())) return;
     // Stamped here, under the lease: a cockpit that lost the race must not eat the interval.
     const lastRunAt = this.iso();
     store.update(id, (current) => ({
       ...current,
       jobs: current.jobs.map((candidate) => (candidate.id === job.id ? { ...candidate, lastRunAt } : candidate)),
     }));
+    if (job.id === FACTORY_REPORT_JOB) {
+      const projectId = manager.projects !== 'all' && manager.projects.length === 1 ? manager.projects[0] : undefined;
+      if (!projectId || !this.deps.factoryWeeklyReport) return;
+      const source = (await this.deps.projects().catch(() => [])).find((project) => project.id === projectId && project.available);
+      if (!source) return;
+      const report = await this.deps.factoryWeeklyReport(source, new Date(lastRunAt)).catch(() => undefined);
+      this.postDirect(id, {
+        messageId: `${FACTORY_REPORT_JOB}:${lastRunAt}`,
+        turn: 'job', attentionKeys: [], fields: { jobName: job.name },
+        text: report
+          ? `${report.text}\n\n[Weekly factory report](/api/v1/p/${encodeURIComponent(projectId)}/factory/reports/${report.name})`
+          : 'The weekly factory report could not be written.',
+      });
+      return;
+    }
     turn.sourceTasks = taskSources(job.prompt);
     const outcome = await this.visibleTurn(id, manager, jobPrompt(job.name, job.prompt, this.openCards(id)), 'job', turn, job.name);
     // Due again, so it runs as soon as the limit lifts.
