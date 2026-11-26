@@ -387,6 +387,13 @@ The project's **manager** (`cez-manager improve --project <id>`), or the **owner
 
 If the run fails or is cancelled, its causes return to the queue unprocessed.
 
+Edge cases (v5.30):
+- **A batch** is the queue's open causes, oldest first, at most 50.
+- **An improvement PR closed unmerged** reopens the causes it had marked processed, since its fixes never landed.
+- **The harness queue can't escalate further:** an `escalated` decision on a harness run returns the cause to the harness queue.
+- **Three failed runs in a row** pause automatic starts for that queue. A manual start still works and ends the pause if it succeeds.
+- **The cooldown** ends at the first of its run count or its days. The harness has no day limit, only 10 scored runs on the new release.
+
 **Approval.** The project's manager is informed like any other task, and handles the PR by the project's policy:
 - `manager` (default): a review task reviews it, then the manager merges it or sends fixes back;
 - `owner`: the owner approves;
@@ -841,6 +848,7 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
 
 ## Changelog
 
+- **v5.30:** D6 bookkeeping edge cases: batches of at most 50 open causes, a closed unmerged PR reopens its causes, harness escalations return to the harness queue, a three-failure pause on automatic starts, and the cooldown ends at its first limit.
 - **v5.29:** D5 defines each cause target, after calibration showed blind labels putting Cezar's own sandbox, grants and built-in workflows under `infra` or `workflow` instead of `harness`.
 - **v5.28:** D8 uses the original Codex profile for authenticated alternate-version agent replay. Input attachments stay limited to the recorded task, and staged execution returns usage data for comparison. Durable scoring remains outside the scratch cockpit.
 - **v5.27:** D8 reuses the Codex broker and the replay check sandbox for isolated agent edits. Alternate harness checks retain their diff after the scratch cockpit closes.
