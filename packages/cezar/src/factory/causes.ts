@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import { causeQueueSchema, type QueuedCause, type RecordedScore } from '@open-mercato/cezar-contract';
 import { cezarHomeDir } from '../paths.ts';
 import { atomicWriteJsonSync } from '../workspace/config.ts';
@@ -69,7 +70,8 @@ export function recordCauses(path: string, origin: Pick<CauseOrigin, 'projectId'
     existing.add(entry.id);
     additions.push({ ...entry, at: removed.get(entry.id)?.at ?? entry.at });
   }
-  if (removed.size || additions.length) atomicWriteJsonSync(path, [...kept, ...additions]);
+  if (removed.size === additions.length && additions.every((entry) => isDeepStrictEqual(entry, removed.get(entry.id)))) return;
+  atomicWriteJsonSync(path, [...kept, ...additions]);
 }
 
 export function detectHarnessProject(projects: readonly { id: string; root: string }[], configured?: string): string | undefined {

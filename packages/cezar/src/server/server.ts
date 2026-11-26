@@ -288,7 +288,7 @@ import {
 } from '../runs/event-history.ts';
 import { readRunUserMessages } from '../runs/user-messages.ts';
 import { summarizeRunMetrics } from '../runs/task-metrics.ts';
-import { ScoringService } from '../scoring/service.ts';
+import { ScoringService, type ScoringProject, type SettledScore } from '../scoring/service.ts';
 import { readRunScores } from '../scoring/store.ts';
 import { detectHarnessProject, harnessCauseQueuePath, projectCauseQueuePath, recordCauses, routeCauses } from '../factory/causes.ts';
 import { byLastActivityDesc, compareIsoDesc, lastActivityAt, readRunIndexDiagnostic, readRunIndexFromDisk } from '../runs/run-index.ts';
@@ -1830,23 +1830,28 @@ export function createApp(deps: ServerDeps) {
   // checkout flow (Phase 4) emit here; /api/workspace/events relays.
   const workspaceEvents = deps.workspaceEvents ?? new WorkspaceEventBus();
   const secretStore = deps.secrets ?? new SecretStore();
+  const routeSavedScores = (project: ScoringProject, scores: readonly SettledScore[]) => {
+    void loadWorkspaceConfig().then((config) => {
+      const harnessId = detectHarnessProject(config.projects, config.factory?.harnessProject);
+      for (const { run, score } of scores) {
+        const latest = readRunScores(project.dataDir, run.id)[score.scorer];
+        if (latest?.status !== 'scored' || latest.score.at !== score.at || latest.finishedAt !== run.finishedAt) continue;
+        const origin = {
+          projectId: project.id, runId: run.id, workflowSource: run.workflowDef?.source,
+          harness: harnessId === project.id,
+          improvement: run.workflow === 'improve-factory',
+        };
+        const queues = routeCauses(score, origin);
+        recordCauses(projectCauseQueuePath(project.dataDir), origin, score.scorer, queues.project);
+        recordCauses(harnessCauseQueuePath(), origin, score.scorer, queues.harness);
+        for (const entry of queues.infra) managerEngine.reportInfrastructureCause(entry, run.startedByManager?.id);
+      }
+    }).catch(() => console.warn('[cezar] score saved, but its cause queue could not be updated'));
+  };
   const scoring = new ScoringService((event, project, run) => {
     workspaceEvents.emit('score.recorded', event);
-    void loadWorkspaceConfig().then((config) => {
-      const latest = readRunScores(project.dataDir, run.id)[event.score.scorer];
-      if (latest?.status !== 'scored' || latest.score.at !== event.score.at) return;
-      const harnessId = detectHarnessProject(config.projects, config.factory?.harnessProject);
-      const origin = {
-        projectId: project.id, runId: run.id, workflowSource: run.workflowDef?.source,
-        harness: harnessId === project.id,
-        improvement: run.workflow === 'improve-factory',
-      };
-      const queues = routeCauses(event.score, origin);
-      recordCauses(projectCauseQueuePath(project.dataDir), origin, event.score.scorer, queues.project);
-      recordCauses(harnessCauseQueuePath(), origin, event.score.scorer, queues.harness);
-      for (const entry of queues.infra) managerEngine.reportInfrastructureCause(entry, run.startedByManager?.id);
-    }).catch(() => console.warn('[cezar] score saved, but its cause queue could not be updated'));
-  }, undefined, secretStore);
+    routeSavedScores(project, [{ run, score: event.score }]);
+  }, undefined, secretStore, routeSavedScores);
   deps.onDispose?.(() => scoring.dispose());
   const emitAutomationChange = (
     project: ProjectContext,
