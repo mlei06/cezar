@@ -1,6 +1,6 @@
 # The self-improving factory
 
-Status: draft v5.23, 2026-11-26. Fork: `mlei06/cezar`, trunk `factory`. Spec owner: the overseer (see the roadmap). Implementation plan: `2026-11-25-self-improving-factory-roadmap.md`. Findings during the build: `2026-11-25-self-improving-factory-observations.md`.
+Status: draft v5.24, 2026-11-26. Fork: `mlei06/cezar`, trunk `factory`. Spec owner: the overseer (see the roadmap). Implementation plan: `2026-11-25-self-improving-factory-roadmap.md`. Findings during the build: `2026-11-25-self-improving-factory-observations.md`.
 
 ## TLDR
 
@@ -444,6 +444,7 @@ Two extensions to variants make this work:
 
 **What a replay may do:**
 - **Outside systems:** replays never push, merge or deploy, and they skip check steps marked `sideEffects: true`.
+- **Local check execution:** replay checks run in a separate worktree with a sandbox that permits writes in the worktree and private scratch space. They receive no service credentials or task capability. Checks fail if the sandbox is unavailable. The Linux Codex sandbox is the first verified implementation.
 - **Harness version:** a replay on another harness version runs on a staging cockpit started from that installed version (D9), with its own `CEZ_HOME`.
 - **Mid-task messages:** the original's owner and manager messages are appended to the replay's brief as context, not resent mid-run.
 - **Queues:** replays never feed improvement queues. They're experiments, and a deliberately weak variant would otherwise flood the queues.
@@ -831,6 +832,7 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
 
 ## Changelog
 
+- **v5.24:** D8 specifies the execution boundary for local replay checks, including network isolation and failure when the sandbox is unavailable.
 - **v5.23:** D5 emits an invalidation for pending and error scores so an open cockpit reflects outages, retries and failed evaluations.
 - **v5.22:** D5 redacts the full judge input, including the preserved brief, and redacts parsed verdicts before storage and events. Logging preferences apply to run logs. Scoring protects its own model boundary.
 - **v5.21:** D5 requires OpenCode's stateless text generation for the judge. When the installed version cannot provide it, scoring records a configuration error.
