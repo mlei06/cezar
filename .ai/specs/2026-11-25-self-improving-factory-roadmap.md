@@ -21,7 +21,7 @@ The factory is built by the factory. After a one-time bootstrap (M0), which the 
 | M0 | done 2026-11-25 | release `0.21.0+release-735fc84` live; warm-up PR #1 merged and released; judge prototype calibrated on 2 runs; observations M0-1 to M0-10 |
 | M1 | done 2026-11-26 | PR #11 shipped slash-skill reporting in release `f1747bd`. Live New task acceptance passed. With `factory.models.lowReasoning` set on this machine, an `operate` task ran on OpenCode with the self-hosted low-reasoning model, read-only in one turn, and its prompt carried the capability block (checked in the runner's stored session, since the model refuses to quote its own system prompt). |
 | M1.5 | released, live acceptance pending | PR #12 shipped the charter and manager playbooks in release `7dd520c`. Isolated concurrent managers passed. One project completed a live rollout. The concurrent live two-project check is pending. |
-| M2 | in progress | Run identity (#13) and delegated routing (#14) shipped. Both live `operate` routing cases passed on `0349ad4`. Dispatch USD storage (#15) shipped in `6466703` and passed a live dispatch check. Task metrics and the remaining D4 budget behavior are in separate implementation branches. |
+| M2 | in progress | Run identity (#13) and delegated routing (#14) shipped. Both live `operate` routing cases passed on `0349ad4`. Dispatch USD storage (#15) shipped in `6466703` and passed a live dispatch check. The historical metrics replay passed locally. Task metrics, remaining budget behavior, the PR workflow correction (B16), and task CPU priority (B22) are in implementation branches. |
 
 ## Goal and definition of done
 
@@ -321,7 +321,7 @@ New features and improvements found so far, not yet scheduled into a milestone. 
 | B1 | **Finish the deployment project's deploy workflow** (its own repository tracks the details) and roll out the new release without the inline-PDF fix | the paused the deployment project work; observations 5–6 | after M2 |
 | B2 | **Cap review rounds:** at most 2 review tasks per PR head before asking the owner | 7 review runs on PRs #4 and #5 | M1 (`manage-project`) |
 | B3 | **Isolate testing:** tasks must test against a staging cockpit with its own `CEZ_HOME`, never register projects or start runs on the live one; add a guard or skill rule | task the deploy-workflow task registered throwaway projects on the live cockpit (observation 9) | M1 (`factory-work`), harness guard M4 |
-| B4 | **Raise the manager's session-reset thresholds** (55 min idle, 100k context) for long jobs | the the deployment project session restarts mid-work | M2 |
+| B4 | **Raise the manager's session-reset thresholds** (55 min idle, 100k context) for long jobs | the deployment project session restarts mid-work | already implemented; verified in M2 code review |
 | B5 | **One summary at the end,** not a stream of updates, from managers | the the deployment project chat | M1 (`manage-project`) |
 | B6 | **Azure parity for PR actions:** `github.pr-comment`, `pr-update` and `issue-comment` still call `gh` | the Azure driver's known gap | M4 or later |
 | B7 | **Slim the fork's AGENTS.md** (62k characters) for harness tasks, or split it into routed files | measured in M0 | after M3, using M3's efficiency scores |

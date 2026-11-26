@@ -1,6 +1,6 @@
 # The self-improving factory
 
-Status: draft v5.18, 2026-11-25. Fork: `mlei06/cezar`, trunk `factory`. Spec owner: the overseer (see the roadmap). Implementation plan: `2026-11-25-self-improving-factory-roadmap.md`. Findings during the build: `2026-11-25-self-improving-factory-observations.md`.
+Status: draft v5.19, 2026-11-25. Fork: `mlei06/cezar`, trunk `factory`. Spec owner: the overseer (see the roadmap). Implementation plan: `2026-11-25-self-improving-factory-roadmap.md`. Findings during the build: `2026-11-25-self-improving-factory-observations.md`.
 
 ## TLDR
 
@@ -241,12 +241,13 @@ Cezar already has a budget: dispatch's `budgetUsd`. A dispatched child's budget 
 
 - **The budget** is `{ usd?, tokens?, minutes? }` on any run. It replaces `budgetUsd` on dispatch records, which keep parsing; `budgetUsd: n` reads as `{ usd: n }`. Cost alone isn't enough: Codex and OpenCode on subscriptions report little or no cost, so tokens and time are the reliable limits.
 - **Precedence:** the task flag, else the workflow's `budget:`, else (for a dispatched child) the share carved from its parent, else the project setting, else the global setting (default 3M input tokens and 30 active minutes).
+- **Child allocations:** the existing USD reservation rule stays in place. Automatic token and time ceilings divide the parent's remaining budget by its remaining child slots. A settled child returns the unused portion when its measured work is known; an unstarted child returns the whole reservation. Explicit workflow ceilings still have to fit the parent's available budget.
 - **Accounting:**
-  - **Tokens** are input tokens summed over every step and model call, which the run record already tracks.
+  - **Tokens** are input tokens summed over every step and model call, using the greater measured input for each step when request-context samples include cached input omitted in directional usage.
   - **Active time** is time with a step running. Queued time, parking (usage-limit holds, waiting on the owner) and time at a human gate don't count.
 - **What happens when it's crossed** depends on the run's `onBudget` action:
   - `park` (the existing dispatch behaviour, still the default for dispatched children): the run parks at turn end and stops auto-continuing.
-  - `notify` (the default for every other run): the run keeps going and records `budgetExceeded: { metric, at, value }`. A managed run wakes its manager through the existing follow-up channel, with the metrics so far, the five largest tool outputs and the current step.
+  - `notify` (the default for every other run): the run keeps going and records `budgetExceeded: { metric, at, value }`. A managed run wakes its manager through the existing follow-up channel, with the metrics so far, the five largest tool outputs and the current step. Each threshold has a durable identity. Thresholds crossed in one burst share a follow-up turn through the existing coalescing rule.
 - **The manager's options when woken:**
   - raise the budget: `cez-manager task budget <run> --tokens N --minutes M`;
   - steer the task with `task say`;
@@ -828,6 +829,8 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
 4. **Scoring the managers:** apply the same metrics, scorers and improvement to manager turns, after D6.
 
 ## Changelog
+
+- **v5.19:** D4 specifies child token and time reservations, inclusion of measured cached input and follow-up coalescing. D5 keeps missing historical request and context fields optional.
 
 - **v5.18:** D8 records initial and Continue identity separately, and specifies the representation when the project commit or harness commit is unavailable.
 

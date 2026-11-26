@@ -2,7 +2,7 @@
 
 The overseer's resume point for the self-improving factory build. Updated and pushed at every milestone step and every overseer decision, so the work survives a crashed machine or a new session. Read this first, then the roadmap's Progress table and the observation log.
 
-Last updated: 2026-11-26 04:31 UTC.
+Last updated: 2026-11-26 04:44 UTC.
 
 ## Where the build stands
 
@@ -11,8 +11,8 @@ Last updated: 2026-11-26 04:31 UTC.
 - **M1 PRs:** #2 (known host test failures), #3 (secret descriptions), #4 (workflow budgets and agent-step secrets), #5 (typecheck repair), #6 (built-in `implement`, `plan`, `operate`), #7 (the capability block), #8 (manager discovery and task flags), #9 (`manage-project` update), #10 (test-resource rules in `factory-work`).
 - **M1 follow-ups** (from reviews, not blocking): generated validation checks get an explicit secrets allowlist; forge-adapter-level draft-PR assertions; check-artifact exclusions survive a cockpit restart (tracked before M1).
 - **Live delegated routing:** applied `highReasoning`, `switchAbove: 0.8` and the ordered hosted fallback list through the config merge-writer. With the VPN available, an isolated `operate` task completed on the configured OpenCode primary. With a temporary unreachable probe target, a second `operate` completed on the first hosted fallback and recorded the runner, model and fallback note. Restored the real probe URL immediately after admission.
-- **In flight:** Task metrics are pushed on `impl/m2-task-stats` at `07f9ce7d2`, with typecheck and 280 focused tests passed after rebasing onto #15. The full validation sequence is running. Budget enforcement is in the `impl/m2-budget-enforcement` worktree, pending the latest focused checks and the metrics branch. `impl/m1-pr-publishing` at `0236f7f53` still needs to be updated before its PR.
-- **Next:** finish metrics validation and release, then add the five largest outputs to budget follow-ups, finish budget enforcement validation, and verify the remaining M2 acceptance cases. The concurrent two-project live acceptance remains open. One manager completed a live rollout and created a workflow PR.
+- **In flight:** Metrics are pushed on `impl/m2-task-stats` at `b7c015ba6`. Initial full testing exposed alias elapsed-time and route inventory gaps. Both are fixed and passed targeted tests. Finish the full validation sequence on the corrected head. `impl/m2-budget-enforcement` at `ef4265aa7` is stacked on metrics and has focused coverage of active time, child allocations, manager alerts, authorization and API parity. `impl/m1-pr-publishing` at `94f683b1f` (B16) and `impl/m2-task-priority` at `677719856` (B22) have typecheck and focused tests. M3 scorer loading and the first `cez factory check` implementation are prepared on `impl/m3-scorers` at `520dd1ee9`. It needs full validation after M2.
+- **Next:** finish metrics validation and release. Offline replay of the historical upgrade window matched the expected metrics using the existing local runner samples and event log. Verify live request collection, then merge and release the remaining M2 work and run the live budget threshold check. The concurrent two-project live acceptance remains open.
 
 ## Standing instructions given to the harness manager
 
