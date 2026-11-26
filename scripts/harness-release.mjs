@@ -10,6 +10,7 @@
 //   flags: --force (skip the idle wait)  --wait-minutes N (default 15)  --no-restart
 //          --health-url URL (default http://127.0.0.1:4321/api/v1/health)  --keep N (default 5)
 //          --unit NAME (default cezar)  --skip-checks (build only; no typecheck/tests)
+//          --benchmark (stage and compare the harness smoke suite before switching)
 //          --hold-new-tasks (lease admission while waiting and switching; needs a compatible live cockpit)
 //          --stage-only (build and check an isolated cockpit; leave the live version active)
 //          --simulate-unhealthy (test the automatic rollback: the new version's health check fails)
@@ -158,11 +159,31 @@ async function selfUpdate(packageRoot) {
   return { ...layout, ...launcher };
 }
 
+function releaseEntries() {
+  if (!existsSync(LOG)) return [];
+  return readFileSync(LOG, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)).reverse();
+}
+
 function lastSwitch(id) {
-  if (!existsSync(LOG)) return undefined;
-  const lines = readFileSync(LOG, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
   // An automatic rollback's 'from' is the failed candidate, never a rollback target.
-  return lines.reverse().find((e) => e.action === 'switch' && e.result === 'ok' && e.id === id);
+  return releaseEntries().find((e) => e.action === 'switch' && e.result === 'ok' && e.id === id);
+}
+
+async function benchmark(packageRoot, su, sha, id, previous) {
+  const dist = join(packageRoot, 'dist');
+  const { HARNESS_SMOKE_SUITE: suite, runHarnessSmokeSuite } =
+    await import(pathToFileURL(join(dist, 'benchmarks', 'harness-smoke.js')).href);
+  const { loadWorkspaceConfig } = await import(pathToFileURL(join(dist, 'workspace', 'config.js')).href);
+  const tolerance = (await loadWorkspaceConfig()).factory?.release?.benchmarkTolerance ?? 10;
+  log({ action: 'benchmark', suite, sha, id, result: 'started' });
+  const cached = previous && releaseEntries().find((entry) =>
+    entry.action === 'benchmark' && entry.suite === suite && entry.id === previous && entry.result === 'ok');
+  const baseline = cached?.passRate ?? (previous ? (await runHarnessSmokeSuite(su.versionEntry(previous))).passRate : 100);
+  const candidate = await runHarnessSmokeSuite(join(dist, 'index.js'));
+  const passed = candidate.passRate >= baseline - tolerance;
+  log({ action: 'benchmark', suite, sha, id, baseline, tolerance, ...candidate, result: passed ? 'ok' : 'failed' });
+  say('benchmark pass rate ' + candidate.passRate + '%, previous ' + baseline + '%, tolerance ' + tolerance + ' points');
+  return passed;
 }
 
 async function activateAndVerify(su, id, simulateFailure = false) {
@@ -249,6 +270,10 @@ async function release() {
 
   const su = await selfUpdate(packageRoot);
   const previous = su.activeId();
+  if (flag('benchmark')) {
+    const version = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')).version;
+    if (!await benchmark(packageRoot, su, sha, su.linkId(version, branch), previous)) return 1;
+  }
   const linked = su.linkCheckout(packageRoot, branch);
   say(`linked ${linked.id}${previous ? ` (current: ${previous})` : ''}`);
   if (linked.id === previous) {
