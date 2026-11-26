@@ -121,7 +121,7 @@ Release `7dd520c` passed health and contained both playbooks and the charter loa
 
 ### M4 review
 
-The installed releases verified staging, queue admission, five benchmark cases, three scored replay variants in the browser, and authenticated replay between installed versions. Deliberate restart, benchmark and post-switch failures were exercised in isolated fixtures. D8 v5.28 records reuse of the selected Codex profile and the staged metrics import. The first protected live release is the outstanding M4 acceptance.
+The installed releases verified staging, queue admission, five benchmark cases, three scored replay variants in the browser, and authenticated replay between installed versions. Deliberate restart, benchmark and post-switch failures were exercised in isolated fixtures. D8 v5.28 records reuse of the selected Codex profile and the staged metrics import. The delegated protected #29 released `64a902a` on the live cockpit. Five stage cases and the authenticated replay passed. It held admission until idle, switched, passed post-switch smoke and health, and delivered its report. M4 is complete.
 
 ## Judge calibration
 
