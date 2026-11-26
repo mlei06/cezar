@@ -99,6 +99,12 @@ describe('judge inputs and validation', () => {
       label: 'fail', score: 0.5, pass: false, reasoning: reply.reasoning, evidence: ['Exact quote'], causes: [cause, cause, cause],
     });
     expect(validateJudgeReply(JSON.stringify({ ...reply, label: 'unknown' }), scorer, '')).toHaveProperty('error');
+    expect(validateJudgeReply(JSON.stringify({ ...reply, causes: [{ ...cause, evidence: 'Invented' }] }), scorer, 'Exact quote')).toEqual({
+      error: 'A failing label needs a cause supported by an exact quote.',
+    });
+    const fenced = '```json\n{"label":"pass","reasoning":"Conforms"}\n```';
+    expect(validateJudgeReply(fenced, scorer, '')).toMatchObject({ pass: true });
+    expect(validateJudgeReply('Before the verdict.\n' + fenced, scorer, '')).toHaveProperty('error');
     expect(validateJudgeReply('not JSON', scorer, '')).toHaveProperty('error');
   });
 });
