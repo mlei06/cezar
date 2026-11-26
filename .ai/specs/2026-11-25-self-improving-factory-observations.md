@@ -104,6 +104,8 @@ Release `7dd520c` passed health and contained both playbooks and the charter loa
 
 ## Judge calibration
 
+A new blind sample contains 20 archived runs. The installed scoring queue admitted all 20, for 78 scorer calls. Blind labels were recorded before admission. Local evidence and run identities stay out of the fork.
+
 Blind comparisons: the overseer's verdict is written before the judge's is read, on every third task and every failing one (roadmap runbook). The spec's targets are 80% agreement on pass/fail and 70% on the main cause's target.
 
 | Run | Scorer | Overseer | Judge | Agree on pass/fail | Agree on main target | Note |
