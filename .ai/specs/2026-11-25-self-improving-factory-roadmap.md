@@ -349,6 +349,7 @@ New features and improvements found so far, not yet scheduled into a milestone. 
 | B25 | **Confirm blind judge calibration and one-minute scoring:** keep the input-preservation and cited-cause requirements. A fresh blind sample uses the clarified target definitions. Rubric and judge changes need the owner. | M3-10 cleared the M5 gate on adjudicated labels. The M6 installed pair recorded Outcome in 29.66 and 67.02 seconds and Efficiency in 21.70 and 13.77 seconds. | M3 follow-up |
 | B26 | **Verify replay isolation for more runners:** replay requires an enforced filesystem and tool boundary before a runner is eligible. | Installed Codex, sandboxed checks and explicitly tool-free OpenCode replays passed. OpenCode tool use, alternate-version replay and Claude still need verified boundaries. | after M4 |
 | B27 | **Extend main-CI triggers to other configured CI providers.** Reuse the project automation event source and record CI run identity before admission. | Installed M6 GitHub Actions polling and deduplication passed across repeated polls and restart. Other CI providers still need a source adapter. | after M6 |
+| B28 | **Keep full validation in the workflow.** Tell the improvement drafting and repair steps to use focused checks and leave the full suite to the workflow gate. | The first genuine harness run passed a repaired typecheck, then ran the full suite inside its repair agent even though the graph already includes it. | M5 follow-up |
 
 ## Risks
 

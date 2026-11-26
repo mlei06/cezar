@@ -192,4 +192,4 @@ The live cockpit released `f1c8724` through the protected workflow. #38 passed 1
 
 ### First genuine improvement admission
 
-The live hourly harness check admitted a single run at 23:22 UTC and durably claimed 17 causes from the existing queue. The batch entered the improvement workflow without a run-now request.
+The live hourly harness check admitted a single run at 23:22 UTC and durably claimed 17 causes from the existing queue. The batch entered the improvement workflow without a run-now request. The validation loop caught a TypeScript error in the draft. The repair passed typecheck and then ran a full test suite although the workflow already has its own full-suite step. Preserve the workflow gate and make the focused-only repair guidance explicit in B28.
