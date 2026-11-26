@@ -307,8 +307,10 @@ import { summarizeRunMetrics } from '../runs/task-metrics.ts';
 import { ScoringService, type ScoringProject, type SettledScore } from '../scoring/service.ts';
 import { readRunScores } from '../scoring/store.ts';
 import { aggregateScores, groupScoreColumns } from '../scoring/summary.ts';
-import { benchmarkAddInputSchema, benchmarkAddResponseSchema, benchmarkSuitesResponseSchema } from '@open-mercato/cezar-contract';
+import { benchmarkAddInputSchema, benchmarkAddResponseSchema, benchmarkHistoryResponseSchema, benchmarkMatrixParamsSchema,
+  benchmarkMatrixRunSchema, benchmarkResultsResponseSchema, benchmarkRunInputSchema, benchmarkSuiteParamsSchema, benchmarkSuitesResponseSchema } from '@open-mercato/cezar-contract';
 import { addBenchmarkTask, loadBenchmarkSuites } from '../benchmarks/suites.ts';
+import { benchmarkResults, readBenchmarkBatches, runBenchmarkSuite } from '../benchmarks/run-suite.ts';
 import { checkFactory } from '../factory/check.ts';
 import { factoryReportsDir, writeFactoryReport } from '../factory/report.ts';
 import { projectCharterProgress } from '../managers/project-charter.ts';
@@ -5839,6 +5841,31 @@ export function createApp(deps: ServerDeps) {
       } catch {
         return c.json({ error: 'The frozen benchmark file or suite could not be written. Check the suite and task definitions.' }, 409);
       }
+    })
+
+    .post('/benchmarks/:suite/run', paramZodValidator(benchmarkSuiteParamsSchema), jsonZodValidator(benchmarkRunInputSchema, { absent: ({}) }), async (c) => {
+      if (!capabilities().localHandoff || inRelayScope()) return c.json({ error: 'Start benchmarks from the local cockpit.' }, 403);
+      const project = c.get('project');
+      const { suite } = c.req.valid('param');
+      const { config } = c.req.valid('json');
+      const catalog = await loadBenchmarkSuites(project.root);
+      const entry = catalog.suites.find(({ name }) => name === suite);
+      if (!entry) return c.json({ error: 'The benchmark suite is missing or invalid.' }, 404);
+      const result = await runBenchmarkSuite(project, suite, entry.suite, entry.tasks, config);
+      return 'reason' in result ? c.json({ error: result.reason }, 409) : c.json(benchmarkMatrixRunSchema.parse(result.batch), 202);
+    })
+
+    .get('/benchmarks/:suite/results', paramZodValidator(benchmarkSuiteParamsSchema), (c) => {
+      const batches = readBenchmarkBatches(c.get('project').dataDir, c.req.valid('param').suite);
+      return c.json(benchmarkHistoryResponseSchema.parse({ batches }));
+    })
+
+    .get('/benchmarks/:suite/results/:id', paramZodValidator(benchmarkMatrixParamsSchema), async (c) => {
+      const project = c.get('project');
+      const { suite, id } = c.req.valid('param');
+      const batch = readBenchmarkBatches(project.dataDir, suite).find((entry) => entry.id === id);
+      if (!batch) return c.json({ error: 'Benchmark batch not found.' }, 404);
+      return c.json(benchmarkResultsResponseSchema.parse(await benchmarkResults(project, batch)), 200);
     })
 
     .get('/factory/check', async (c): Promise<Response & TypedResponse<FactoryCheckBody, 200, 'json'>> => {

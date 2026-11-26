@@ -1158,6 +1158,8 @@ export interface StartRunInput {
   /** Set only by the factory source after it claims an improvement batch. */
   improvementId?: string;
   improvementAutomation?: RunRecord['automationTrigger'];
+  /** A persisted benchmark matrix reserves these variant IDs before they enter the normal queue. */
+  benchmarkRunId?: string;
   /** The immutable fork and prompt for an admitted replay, persisted before it enters the queue. */
   replay?: { sourceId: string; startCommit: string; change: string; harness: HarnessVersion; systemPrompt?: string };
   secrets?: RunRecord['secretNames'];
@@ -1296,7 +1298,7 @@ const REPLAY_EXTERNAL_NODE_PORTS: Readonly<Partial<Record<ExecutableNode['type']
 
 const REPLAY_CHECK_NODE_TYPES = new Set(['start', 'end', 'loop', 'check', 'if', ...Object.keys(REPLAY_EXTERNAL_NODE_PORTS)]);
 
-function replayMode(workflow: WorkflowDef): 'checks' | 'agent' | undefined {
+export function replayMode(workflow: WorkflowDef): 'checks' | 'agent' | undefined {
   const graph = workflow.graph ?? compileV1(workflow.steps);
   if (graph.nodes.every((node) => REPLAY_CHECK_NODE_TYPES.has(node.type))) return 'checks';
   return graph.nodes.every((node) => {
@@ -2385,7 +2387,7 @@ export class RunManager {
       ...(input.forkRef && input.worktree === false ? { worktree: undefined } : {}),
     };
     const run = this.store.createRun({
-      id: input.scheduledLaunch?.id ?? input.improvementId,
+      id: input.scheduledLaunch?.id ?? input.improvementId ?? input.benchmarkRunId,
       title: makeRunTitle(input.task, workflow, input.images?.length) + (group ? ` (${group.variant})` : ''),
       workflow: workflow.name,
       task: input.task,
