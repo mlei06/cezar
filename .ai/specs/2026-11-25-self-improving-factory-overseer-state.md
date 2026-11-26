@@ -2,7 +2,7 @@
 
 The overseer's resume point for the self-improving factory build. Updated and pushed at every milestone step and every overseer decision, so the work survives a crashed machine or a new session. Read this first, then the roadmap's Progress table and the observation log.
 
-Last updated: 2026-11-26 03:30 UTC.
+Last updated: 2026-11-26 03:40 UTC.
 
 ## Where the build stands
 
@@ -10,7 +10,7 @@ Last updated: 2026-11-26 03:30 UTC.
 - **Live harness:** `0.21.0+release-417a93c`. PR #13 is installed and healthy. An isolated task on the live cockpit completed and recorded the exact fork commit, harness id and harness commit. The harness manager remains inactive.
 - **M1 PRs:** #2 (known host test failures), #3 (secret descriptions), #4 (workflow budgets and agent-step secrets), #5 (typecheck repair), #6 (built-in `implement`, `plan`, `operate`), #7 (the capability block), #8 (manager discovery and task flags), #9 (`manage-project` update), #10 (test-resource rules in `factory-work`).
 - **M1 follow-ups** (from reviews, not blocking): generated validation checks get an explicit secrets allowlist; forge-adapter-level draft-PR assertions; check-artifact exclusions survive a cockpit restart (tracked before M1).
-- **In flight:** v5.17 delegated routing on `impl/m2-delegated-routing`. Implement and verify the aliases, the threshold in existing account selection, and primary reachability and hosted fallback. The USD storage slice is on `impl/m2-budget-storage` at `751271be4`, typechecked with 335 focused tests passing. The PR publication handoff patch is local on `impl/m1-pr-publishing` and has passed typecheck and focused tests.
+- **In flight:** v5.17 delegated routing on `impl/m2-delegated-routing` at `51a77c77e`. Typecheck and 440 focused tests passed, including the threshold boundary, network fallback and queueing. Full validation is running. The USD storage slice is on `impl/m2-budget-storage` at `751271be4`, typechecked with 335 focused tests passing. The PR publication handoff patch is local on `impl/m1-pr-publishing` and has passed typecheck and focused tests.
 - **Next:** release routing after validation, configure its local model pairs through the config merge-writer and verify both live `operate` paths. Remaining M2 work includes full budget enforcement, active time, manager alerts and metrics. The concurrent two-project live acceptance remains open. One manager completed a live rollout and created a workflow PR.
 
 ## Standing instructions given to the harness manager
