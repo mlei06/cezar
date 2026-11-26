@@ -123,24 +123,32 @@ function lastSwitch() {
   return lines.reverse().find((e) => (e.action === 'switch' || e.action === 'rollback') && e.result === 'ok');
 }
 
+async function activateAndVerify(su, id, simulateFailure = false) {
+  try {
+    su.activate(id);
+    su.writeLaunchers();
+    restart();
+    if (flag('no-restart')) return { ok: true };
+    if (simulateFailure) return { ok: false, reason: 'simulated (--simulate-unhealthy)' };
+    return await healthy();
+  } catch (error) {
+    return { ok: false, reason: error.message };
+  }
+}
+
 async function switchTo(su, id, previous, entry) {
-  su.activate(id);
-  su.writeLaunchers();
-  restart();
-  const health = flag('no-restart') ? { ok: true } : flag('simulate-unhealthy') && entry.action === 'switch' ? { ok: false, reason: 'simulated (--simulate-unhealthy)' } : await healthy();
+  const health = await activateAndVerify(su, id, flag('simulate-unhealthy') && entry.action === 'switch');
   if (health.ok) {
     log({ ...entry, id, previous, result: 'ok' });
     say(`now running ${id}`);
     return true;
   }
-  say(`health check failed (${health.reason}); rolling back to ${previous ?? 'nothing'}`);
   log({ ...entry, id, previous, result: 'failed', reason: health.reason });
+  say(`switch failed (${health.reason})`);
   if (previous) {
-    su.activate(previous);
-    restart();
-    const back = await healthy();
+    const back = await activateAndVerify(su, previous);
     log({ action: 'rollback', id: previous, from: id, result: back.ok ? 'ok' : 'failed', reason: back.reason, automatic: true });
-    say(back.ok ? `rolled back to ${previous}` : `rollback to ${previous} is also unhealthy: ${back.reason}`);
+    say(back.ok ? `rolled back to ${previous}` : `rollback to ${previous} failed: ${back.reason}`);
   }
   return false;
 }
