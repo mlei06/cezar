@@ -31,9 +31,11 @@ export async function taskPrHeadChecks(repoRoot: string, number: number, sha: st
 }
 
 /** Mark an Azure Repos draft PR ready; null when the repository is not on Azure (the caller keeps its own path). */
-export async function markAzurePrReady(repoRoot: string, url: string): Promise<{ ok: true } | { ok: false; error: string } | null> {
+export async function markAzurePrReady(repoRoot: string, url: string, branch?: string): Promise<{ ok: true } | { ok: false; error: string } | null> {
   const azure = await azureDriverFor(repoRoot);
   if (!azure) return null;
   const number = prNumberOfUrl(url);
-  return number ? azure.markPrReady(number) : { ok: false, error: 'not a pull request URL' };
+  if (!number) return { ok: false, error: 'not a pull request URL' };
+  if (!branch) return { ok: false, error: 'no task branch to verify' };
+  return azure.markPrReady(number, branch);
 }

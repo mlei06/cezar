@@ -114,6 +114,11 @@ export function workflowCapabilities(def: WorkflowDef, catalog: readonly Workflo
   return capabilitiesOf(def, (name) => catalog.find((w) => w.name === name), new Set());
 }
 
+/** A PR step publishes this task's worktree. Sub-workflows publish their own task's worktree. */
+export function hasPrPublishStep(def: Pick<WorkflowDef, 'graph'> | undefined): boolean {
+  return def?.graph?.nodes.some((node) => node.type === 'github.draft-pr') ?? false;
+}
+
 export function isReadOnlyWorkflow(def: WorkflowDef, catalog: readonly WorkflowDef[] = []): boolean {
   const c = workflowCapabilities(def, catalog);
   return !c.push && !c.openPr && !c.postToGithub;

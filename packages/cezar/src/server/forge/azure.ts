@@ -90,7 +90,7 @@ const lastLine = (s: string) => s.trim().split('\n').filter(Boolean).at(-1) ?? '
 
 /** The Azure driver, plus the one action the seam has no method for yet: publishing a draft PR. */
 export type AzureForgeDriver = ForgeDriver & {
-  markPrReady(number: number): Promise<{ ok: true } | { ok: false; error: string }>;
+  markPrReady(number: number, branch: string): Promise<{ ok: true } | { ok: false; error: string }>;
 };
 
 export function createAzureDriver(remote: AzureRemote, deps: AzureDriverDeps = {}): AzureForgeDriver {
@@ -161,9 +161,17 @@ export function createAzureDriver(remote: AzureRemote, deps: AzureDriverDeps = {
   const driver: AzureForgeDriver = {
     kind: 'azure-devops',
 
-    async markPrReady(number) {
+    async markPrReady(number, branch) {
       if (dryRun()) return { ok: true };
-      const res = await t.request('PATCH', ['git', 'repositories', remote.repo, 'pullrequests', String(number)], {
+      const path = ['git', 'repositories', remote.repo, 'pullrequests', String(number)];
+      const current = await t.request('GET', path);
+      if (!current.ok) return { ok: false, error: current.reason };
+      const parsed = azurePrSchema.safeParse(current.json);
+      if (!parsed.success || parsed.data.sourceRefName !== `refs/heads/${branch}`) {
+        return { ok: false, error: 'could not confirm that the existing PR belongs to this task branch' };
+      }
+      if (parsed.data.isDraft === false) return { ok: true };
+      const res = await t.request('PATCH', path, {
         body: { isDraft: false },
       });
       return res.ok ? { ok: true } : { ok: false, error: res.reason };

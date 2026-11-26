@@ -1,4 +1,9 @@
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { RunStore } from '../../runs/store.ts';
 import { createAzureDriver } from './azure.ts';
 import { resolveForge, forgeKindOfRemote, forgeWebRoot } from './index.ts';
 import { prNumberOfUrl, PR_URL_RE } from './pr-url.ts';
@@ -75,6 +80,57 @@ describe('PR URLs on both forges', () => {
 });
 
 describe('createAzureDriver (spec 2026-11-24-azure-repos-forge-driver)', () => {
+  it('creates a draft for a task branch and reuses it on a second publish', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cez-azure-publish-'));
+    const repo = join(dir, 'worktree');
+    const bare = join(dir, 'remote.git');
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: repo, stdio: 'pipe' });
+    mkdirSync(repo);
+    try {
+      git('init', '-q', '-b', 'main');
+      git('init', '-q', '--bare', bare);
+      git('config', 'user.name', 'Fixture');
+      git('config', 'user.email', 'fixture@example.test');
+      git('commit', '-qm', 'base', '--allow-empty');
+      git('remote', 'add', 'origin', bare);
+      git('switch', '-qc', 'cez/12345678');
+      writeFileSync(join(repo, 'change.txt'), 'Task change');
+      const store = RunStore.open(join(dir, 'state'));
+      const run = store.createRun({ title: 'Task change', task: 'Make a change', workflow: 'implement', steps: [] });
+      const path = 'git/repositories/web/pullrequests';
+      let drafts: ReturnType<typeof pr>[] = [];
+      const { driver, api } = driverFor({
+        [`GET ${path}`]: () => ({ status: 200, json: { value: drafts } }),
+        [`POST ${path}`]: () => {
+          drafts = [pr({ isDraft: true })];
+          return { status: 201, json: drafts[0] };
+        },
+      });
+      const input = { repoRoot: repo, run: { ...run, worktreePath: repo, branch: 'cez/12345678', baseBranch: 'main' }, handoffText: '' };
+      expect(await driver.createPR(input)).toEqual({ ok: true, url: `${WEB}/pullrequest/12`, dryRun: false });
+      expect(await driver.createPR(input)).toEqual({ ok: true, url: `${WEB}/pullrequest/12`, dryRun: false, updated: true });
+      const posts = api.calls.filter((call) => call.method === 'POST');
+      expect(posts).toHaveLength(1);
+      expect(posts[0]?.body).toMatchObject({ sourceRefName: 'refs/heads/cez/12345678', targetRefName: 'refs/heads/main', isDraft: true });
+      store.flush();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('marks a draft ready only if it belongs to the task branch', async () => {
+    const path = 'git/repositories/web/pullrequests/12';
+    const { driver, api } = driverFor({
+      [`GET ${path}`]: () => ({ status: 200, json: pr({ isDraft: true }) }),
+      [`PATCH ${path}`]: () => ({ status: 200, json: pr() }),
+    });
+    expect(await driver.markPrReady(12, 'cez/other')).toMatchObject({ ok: false });
+    expect(api.calls.map((call) => call.method)).toEqual(['GET']);
+    expect(await driver.markPrReady(12, 'cez/12345678')).toEqual({ ok: true });
+    expect(api.calls.map((call) => call.method)).toEqual(['GET', 'GET', 'PATCH']);
+    expect(api.calls.at(-1)?.body).toEqual({ isDraft: false });
+  });
+
   it('detects through the repository, with the credential git holds', async () => {
     const { driver, api } = driverFor({ 'GET git/repositories/web': () => ({ status: 200, json: { id: 'r1', project: { id: 'p1' } } }) });
     expect(driver.detectCached()).toBeNull();

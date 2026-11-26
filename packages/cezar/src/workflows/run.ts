@@ -105,7 +105,7 @@ import {
 } from '../git-worktree.ts';
 import { commentOnIssue, commentOnPr, fetchPrWatchFingerprint, findBranchPr, resolvePrTarget, updatePr } from '../server/forge/github.ts';
 import { baseDivergence, createOrSwitchBranch } from '../server/git-changes.ts';
-import { isReadOnlyWorkflow, readOnlyWorkflowRefusal } from './capabilities.ts';
+import { hasPrPublishStep, isReadOnlyWorkflow, readOnlyWorkflowRefusal } from './capabilities.ts';
 import { getHeadCommit, getRepoInfo } from '../server/git.ts';
 import { runHarnessVersion } from '../self-update/run-version.ts';
 import { loadWorkflows, modelAlias, newerCatalogWorkflow, resolveWorkflowModelAlias } from './load.ts';
@@ -1282,6 +1282,8 @@ export function composeSystemPrompt(...parts: Array<string | undefined>): string
     .filter((p): p is string => Boolean(p))
     .join('\n\n---\n\n');
 }
+
+const WORKFLOW_PR_PROMPT = 'Leave your changes in the task worktree and finish your step. Cezar publishes the pull request when the workflow reaches its PR step. Do not push, open a PR, or mark a PR ready yourself, even if asked in the brief.';
 
 /**
  * The DISPATCH prompt part of a run's system prompt (spec 2026-09-10-dispatch) — composed at
@@ -8492,7 +8494,7 @@ export class RunManager {
               return false;
             }
           }
-          const res = (await markAzurePrReady(this.repoRoot, url)) ?? await updatePr(this.repoRoot, url, { ready: true });
+          const res = (await markAzurePrReady(this.repoRoot, url, run.branch)) ?? await updatePr(this.repoRoot, url, { ready: true });
           note(res.ok ? `PR marked ready for review: ${url}` : `could not mark PR ready — ${res.error}`, res.ok ? undefined : 'danger');
           return res.ok;
         };
@@ -9680,6 +9682,7 @@ export class RunManager {
 
     // A read-only workflow is only as read-only as the backend holding its tool limits.
     const stepDef = this.store.getRun(runId)?.workflowDef;
+    const prPrompt = hasPrPublishStep(stepDef) ? WORKFLOW_PR_PROMPT : undefined;
     if (!state.enforceReadOnly) {
       const refusal = readOnlyWorkflowRefusal(stepDef, stepBackend);
       if (refusal) return refusal;
@@ -9718,12 +9721,13 @@ export class RunManager {
             state.automationsPrompt,
             extraSystemPrompt,
             capability,
+            prPrompt,
             artifactsPromptPart(artifactsDir(this.dataDir, runId)),
             followupsEnabled() && input.generateFollowups !== false
               ? HANDOFF_INSTRUCTIONS
               : HANDOFF_ONLY_INSTRUCTIONS,
           ),
-          resumeSystemPrompt: capability,
+          resumeSystemPrompt: prPrompt ? composeSystemPrompt(capability, prPrompt) : capability,
           userPrompt: [profile.trackerContext, prompt].filter(Boolean).join('\n\n'),
           images,
           cwd: state.cwd,
