@@ -12,7 +12,8 @@ const fixture = [
   "createServer((req, res) => {",
   "  const payload = req.url === '/api/v1/health' ? { instanceId: process.env.CEZ_INSTANCE_ID }",
   "    : req.url === '/api/v1/isolated' ? { workspace: process.env.CEZ_HOME, cwd: process.cwd(),",
-  "         runnerOverride: process.env.CEZ_OPENCODE_BIN, dry: process.env.CEZ_DRY_RUN, managers: process.env.CEZ_MANAGERS, automations: process.env.CEZ_AUTOMATIONS }",
+  "         runnerOverride: process.env.CEZ_OPENCODE_BIN, dry: process.env.CEZ_DRY_RUN, managers: process.env.CEZ_MANAGERS,",
+  "         automations: process.env.CEZ_AUTOMATIONS, scoring: process.env.CEZ_SCORING, codexHome: process.env.CODEX_HOME }",
   "    : { ...run, status: req.method === 'POST' ? 'queued' : 'done' };",
   "  res.setHeader('content-type', 'application/json');",
   "  res.end(JSON.stringify(payload));",
@@ -40,7 +41,7 @@ it('starts an independent cockpit and removes its workspace after a failed check
       scratch = dirname(workspace);
       expect(workspace).not.toBe(process.env.CEZ_HOME);
       expect(cwd).toBe(join(scratch, 'project'));
-      expect(modes).toEqual({ dry: '1', managers: '0', automations: '0' });
+      expect(modes).toEqual({ dry: '1', managers: '0', automations: '0', scoring: '0' });
       await access(scratch);
       throw new Error('fixture failed');
     };
@@ -48,6 +49,25 @@ it('starts an independent cockpit and removes its workspace after a failed check
     expect(scratch).toBeDefined();
     await expect(access(scratch!)).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(fetch(api + '/health')).rejects.toThrow();
+  } finally {
+    vi.unstubAllEnvs();
+    await rm(root, { recursive: true, force: true });
+  }
+}, 10_000);
+
+it('passes only the selected Codex home to an authenticated staging replay', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'cez-staging-test-'));
+  const codexHome = join(root, 'selected-profile');
+  vi.stubEnv('CODEX_HOME', join(root, 'different-profile'));
+  vi.stubEnv('CEZ_OPENCODE_BIN', 'example-runner-override');
+  vi.stubEnv('CEZ_SCORING', '1');
+  try {
+    const entry = join(root, 'fixture.mjs');
+    await writeFile(entry, fixture);
+    const modes = await withStagingCockpit(entry, async (api) =>
+      fetch(api + '/isolated').then((response) => response.json()), { dryRun: false, codexHome });
+    expect(modes).toMatchObject({ dry: '0', managers: '0', automations: '0', scoring: '0', codexHome });
+    expect(modes).not.toHaveProperty('runnerOverride');
   } finally {
     vi.unstubAllEnvs();
     await rm(root, { recursive: true, force: true });

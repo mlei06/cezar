@@ -1,18 +1,19 @@
 import { execFile } from 'node:child_process';
 import { constants, existsSync } from 'node:fs';
-import { mkdir, open, readFile, symlink } from 'node:fs/promises';
+import { mkdir, open, readFile, symlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { setTimeout as wait } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import {
-  changesPayloadSchema, replayRunResponseSchema, runRecordSchema, type ChangesPayload, type HarnessVersion,
+  changesPayloadSchema, MAX_ATTACHMENTS_PER_MESSAGE, MAX_ATTACHMENTS_TOTAL_BASE64, replayRunResponseSchema, runRecordSchema, type ChangesPayload, type HarnessVersion,
 } from '@open-mercato/cezar-contract';
 import { artifactsDir, readRunEvents, RunStore, type RunRecord } from '../runs/store.ts';
 import { findInstalled, listInstalled, versionDir, versionEntry } from '../self-update/layout.ts';
 import { withStagingCockpit } from '../self-update/staging.ts';
 import { getHeadCommit } from '../server/git.ts';
 import { atomicWriteJsonSync } from '../workspace/config.ts';
+import { resolveProfileEnvForRoot } from '../workspace/agent-profiles.ts';
 
 const SHA = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
 const exec = promisify(execFile);
@@ -39,7 +40,9 @@ export async function resolveReplayHarness(request: string): Promise<ReplayHarne
   return { id: installed.id, commit, entry };
 }
 
-async function seedProject(repoRoot: string, source: RunRecord, target: ReplayHarness, project: string, workspace: string, signal: AbortSignal) {
+async function seedProject(
+  repoRoot: string, sourceData: string, source: RunRecord, target: ReplayHarness, project: string, workspace: string, signal: AbortSignal,
+) {
   const commit = source.startCommit;
   if (!commit || !SHA.test(commit) || !source.workflowDef) throw new Error('Replay is missing exact input.');
   const git = (args: string[]) => exec('git', args, {
@@ -57,15 +60,48 @@ async function seedProject(repoRoot: string, source: RunRecord, target: ReplayHa
   await symlink(versionDir(target.id), join(versions, target.id), 'dir');
   const dataDir = join(project, '.ai/cezar');
   const store = RunStore.open(dataDir);
-  const baseline = store.createRun({ title: source.title, task: source.task, workflow: source.workflow, steps: [] });
+  const baseline = store.createRun({
+    title: source.title, task: source.task, workflow: source.workflow, steps: [],
+    runner: source.runner, model: source.model, reasoningEffort: source.reasoningEffort,
+  });
+  const images = await seedAttachments(sourceData, source, dataDir, baseline.id);
   const at = new Date().toISOString();
   store.updateRun(baseline.id, {
     status: 'done', startedAt: at, finishedAt: at, startCommit: commit, baseBranch: commit,
     harnessVersion: { id: target.id, commit: target.commit }, workflowDef: source.workflowDef,
-    systemPrompt: source.systemPrompt,
+    systemPrompt: source.systemPrompt, ...(images.length ? { taskImages: images } : {}),
   });
   store.flush();
   return { id: baseline.id, dataDir, entry: versionEntry(target.id, { CEZ_HOME: workspace }) };
+}
+
+async function seedAttachments(sourceData: string, source: RunRecord, dataDir: string, baselineId: string): Promise<string[]> {
+  const urls = source.taskImages ?? [];
+  if (!urls.length) return [];
+  if (urls.length > MAX_ATTACHMENTS_PER_MESSAGE) throw new Error('Too many replay attachments.');
+  const origin = join(sourceData, 'runs', source.id + '-images');
+  const destination = join(dataDir, 'runs', baselineId + '-images');
+  await mkdir(destination, { recursive: true, mode: 0o700 });
+  const images: string[] = [];
+  let remaining = MAX_ATTACHMENTS_TOTAL_BASE64;
+  for (const url of urls) {
+    const name = url.split('/').pop();
+    if (!name || name.includes('..') || name.includes('\\')) throw new Error('Invalid replay attachment name.');
+    const file = await open(join(origin, name), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    try {
+      const stat = await file.stat();
+      if (!stat.isFile() || Math.ceil(stat.size / 3) * 4 > remaining) throw new Error('Invalid replay attachment size.');
+      const buffer = Buffer.alloc(stat.size);
+      const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
+      if (bytesRead !== buffer.length) throw new Error('The replay attachment changed while copying.');
+      await writeFile(join(destination, name), buffer, { mode: 0o600, flag: 'wx' });
+      remaining -= Math.ceil(buffer.length / 3) * 4;
+      images.push('/api/v1/runs/' + baselineId + '/images/' + name);
+    } finally {
+      await file.close();
+    }
+  }
+  return images;
 }
 
 interface ReplayDiff {
@@ -95,9 +131,16 @@ export async function readStagedReplayDiff(dataDir: string, id: string): Promise
   return undefined;
 }
 
-/** A staged check replay uses the candidate's normal replay API. No user configuration,
- * service credentials or model sessions are copied into the scratch cockpit. */
-export async function stagedCheckReplay(repoRoot: string, source: RunRecord, signal: AbortSignal) {
+/** The candidate uses its normal replay API. Only Codex's selected account home is
+ * provided for real agent replays. Project config and service credentials stay out. */
+export async function stagedReplay(repoRoot: string, sourceData: string, source: RunRecord, agent: boolean, signal: AbortSignal) {
+  const dryRun = !agent || process.env.CEZ_DRY_RUN === '1';
+  let codexHome: string | undefined;
+  if (agent && !dryRun) {
+    const { profile } = await resolveProfileEnvForRoot(repoRoot, 'codex', source.agentProfile);
+    if (source.agentProfile && profile.id !== source.agentProfile) throw new Error('The original Codex account is unavailable.');
+    codexHome = profile.path;
+  }
   const version = source.harnessVersion;
   if (!version?.commit) throw new Error('Replay has no pinned harness version.');
   const target = await resolveReplayHarness(version.id);
@@ -134,9 +177,9 @@ export async function stagedCheckReplay(repoRoot: string, source: RunRecord, sig
     }
     throw new Error('The staged replay did not finish within 30 minutes.');
   }, {
-    signal,
+    signal, dryRun, codexHome,
     prepare: async (project, workspace) => {
-      seed = await seedProject(repoRoot, source, target, project, workspace, signal);
+      seed = await seedProject(repoRoot, sourceData, source, target, project, workspace, signal);
       return seed.entry;
     },
   });
