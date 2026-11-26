@@ -1,0 +1,53 @@
+import { access, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { expect, it } from 'vitest';
+import { smokeStagedHarness, withStagingCockpit } from './staging.ts';
+
+const fixture = [
+  "import { createServer } from 'node:http';",
+  "const port = Number(process.argv[process.argv.indexOf('--port') + 1]);",
+  "const run = { id: 'fixture', title: 'check', task: 'check', workflow: 'example',",
+  "  createdAt: '2026-01-01T00:00:00.000Z', tokensUsed: 0, archived: false, steps: [] };",
+  "createServer((req, res) => {",
+  "  const payload = req.url === '/api/v1/health' ? { instanceId: process.env.CEZ_INSTANCE_ID }",
+  "    : req.url === '/api/v1/isolated' ? { workspace: process.env.CEZ_HOME, cwd: process.cwd(),",
+  "         dry: process.env.CEZ_DRY_RUN, managers: process.env.CEZ_MANAGERS, automations: process.env.CEZ_AUTOMATIONS }",
+  "    : { ...run, status: req.method === 'POST' ? 'queued' : 'done' };",
+  "  res.setHeader('content-type', 'application/json');",
+  "  res.end(JSON.stringify(payload));",
+  "}).listen(port, '127.0.0.1');",
+].join('\n');
+
+it('starts an independent cockpit and removes its workspace after a failed check', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'cez-staging-test-'));
+  try {
+    const entry = join(root, 'fixture.mjs');
+    await writeFile(entry, fixture);
+    await smokeStagedHarness(entry);
+    let scratch: string | undefined;
+    let api: string | undefined;
+    const use = async (url: string) => {
+      api = url;
+      const { workspace, cwd, ...modes } = await fetch(api + '/isolated').then((response) => response.json()) as {
+        workspace: string;
+        cwd: string;
+        dry: string;
+        managers: string;
+        automations: string;
+      };
+      scratch = dirname(workspace);
+      expect(workspace).not.toBe(process.env.CEZ_HOME);
+      expect(cwd).toBe(join(scratch, 'project'));
+      expect(modes).toEqual({ dry: '1', managers: '0', automations: '0' });
+      await access(scratch);
+      throw new Error('fixture failed');
+    };
+    await expect(withStagingCockpit(entry, use)).rejects.toThrow('fixture failed');
+    expect(scratch).toBeDefined();
+    await expect(access(scratch!)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fetch(api + '/health')).rejects.toThrow();
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}, 10_000);
