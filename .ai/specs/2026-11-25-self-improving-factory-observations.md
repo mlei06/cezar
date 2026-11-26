@@ -82,6 +82,8 @@ Release `7dd520c` passed health and contained both playbooks and the charter loa
 | M2-5 | The historical cockpit event log can rank tool results, while the archived runner session contains the per-request context samples. | Replayed the upgrade window locally through the new collector and metrics summarizer. The request count, average context and largest output matched the roadmap acceptance. | harness | Use the task collector for new runs and omit unknown request metrics for older logs. Keep the original run and session out of the repository. |
 | M2-6 | Giving the first child all remaining token and time capacity can block normal fan-out. | Focused dispatch tests cover two children under a fixed parent budget and a settled child returning its unused share. | harness | Split these resources among free child slots. Keep the previous USD allocation behavior (D4, v5.19). |
 
+| M2-7 | The Codex and OpenCode runner paths received per-request usage but had not passed it into the task collector. | PR #16's runner regressions exercise Codex request context and the OpenCode completion readings, including a repeated event. | harness | Emit readings through the existing usage-status event. Keep the raw request measurements optional for older logs and unsupported runners. |
+
 
 ## Judge calibration
 
