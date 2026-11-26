@@ -275,6 +275,7 @@ import { getTeamSkillsCached, isSafeRef, refreshTeamSkills, safeRemoteFor, waitF
 import { appendHandoffHeartbeat, handoffProgressExcerpt, readHandoff } from '../handoff.ts';
 import { markStarted, onTodosChanged, readTodos, removeTodo, todoTaskText, type TodoItem } from '../todos.ts';
 import type { RunEvent, RunRecord, RunStatus, RunStore } from '../runs/store.ts';
+import { readStagedReplayDiff } from '../workflows/staged-replay.ts';
 import { artifactsDir, authParkForAccount, isIdleParked } from '../runs/store.ts';
 import { artifactsCdnEnabled, existingVersionDir, findArtifact, scanArtifacts } from '../runs/artifacts.ts';
 import {
@@ -6391,9 +6392,13 @@ export function createApp(deps: ServerDeps) {
 
     // Task diff (spec 006): what this run changed — its worktree vs its base.
     .get('/runs/:id/diff', async (c) => {
-      const { root: repoRoot, store } = c.get('project');
+      const { root: repoRoot, store, dataDir } = c.get('project');
       const run = store.getRun(c.req.param('id'));
       if (!run) return c.json({ error: 'not found' }, 404);
+      if (run.replayOf && !run.worktreePath) {
+        const snapshot = await readStagedReplayDiff(dataDir, run.id);
+        if (snapshot) return c.text(snapshot.patch);
+      }
       const kept = await reclaimedBranchOf(run, repoRoot);
       if (kept) return c.text(await branchDiff(repoRoot, run.baseBranch ?? 'HEAD', kept));
       if (!run.worktreePath || !existsSync(run.worktreePath)) {
@@ -6403,9 +6408,13 @@ export function createApp(deps: ServerDeps) {
     })
 
     .get('/runs/:id/changes', async (c) => {
-      const { root: repoRoot, store } = c.get('project');
+      const { root: repoRoot, store, dataDir } = c.get('project');
       const run = store.getRun(c.req.param('id'));
       if (!run) return c.json({ error: 'not found' }, 404);
+      if (run.replayOf && !run.worktreePath) {
+        const snapshot = await readStagedReplayDiff(dataDir, run.id);
+        if (snapshot) return c.json(snapshot.changes);
+      }
       const workingDirectory = workingDirectoryOf(run, repoRoot);
       if (!workingDirectory) return c.json({ error: run.worktreeReclaimedAt ? RECLAIMED_WORKTREE : NO_WORKTREE }, 409);
       const result = await collectChanges(workingDirectory, run.baseBranch ?? 'HEAD', {
@@ -7070,7 +7079,9 @@ export function createApp(deps: ServerDeps) {
             diffStat:
               r.worktreePath && existsSync(r.worktreePath)
                 ? await worktreeDiffStat(r.worktreePath, r.baseBranch ?? 'HEAD', !!r.replayOf)
-                : '',
+                : r.replayOf && r.diffStat?.files
+                  ? `${r.diffStat.files} files changed, ${r.diffStat.adds} insertions(+), ${r.diffStat.dels} deletions(-)`
+                  : '',
             handoffExcerpt: handoffProgressExcerpt(readHandoff(dataDir, r.id)),
           };
         }),

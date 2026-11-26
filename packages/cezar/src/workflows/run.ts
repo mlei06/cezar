@@ -3,7 +3,7 @@ import { readOnlyEnv } from '../core/read-only-env.ts';
 import { AgentUsageHolds } from '../workspace/agent-usage-holds.ts';
 import { completionReason } from './completion-reason.ts';
 import { prepareReplayCheck } from './replay-check.ts';
-import { resolveReplayHarness, stagedCheckReplay } from './staged-replay.ts';
+import { resolveReplayHarness, saveStagedReplayDiff, stagedCheckReplay } from './staged-replay.ts';
 import { WorktreeLifecycleCoordinator } from '../worktree-lifecycle/coordinator.ts';
 import type { RunParked, RunSubject, WebhookAttentionRequest, TrackerAssociation, UsageWindowsObservation } from '@open-mercato/cezar-contract';
 import { saveUsageWindows } from '../workspace/usage-windows.ts';
@@ -7879,6 +7879,9 @@ export class RunManager {
           type: entry.type, stepId: entry.stepId, text: entry.text, command: entry.command, exitCode: entry.exitCode,
         });
       }
+      if (result.diff) await saveStagedReplayDiff(this.dataDir, run.id, result.diff);
+      if (state.cancelled || this.active.get(run.id) !== state) return;
+      this.store.updateRun(run.id, { activeMs: result.run.activeMs, diffStat: result.diff?.changes.stat });
       if (result.run.status === 'done' || result.run.status === 'review') {
         await this.settleSuccess(run.id, state);
       } else {

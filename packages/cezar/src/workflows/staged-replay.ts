@@ -1,14 +1,14 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, symlink } from 'node:fs/promises';
+import { mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { setTimeout as wait } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import {
-  replayRunResponseSchema, runRecordSchema, type HarnessVersion,
+  changesPayloadSchema, replayRunResponseSchema, runRecordSchema, type ChangesPayload, type HarnessVersion,
 } from '@open-mercato/cezar-contract';
-import { readRunEvents, RunStore, type RunRecord } from '../runs/store.ts';
+import { artifactsDir, readRunEvents, RunStore, type RunRecord } from '../runs/store.ts';
 import { findInstalled, listInstalled, versionDir, versionEntry } from '../self-update/layout.ts';
 import { withStagingCockpit } from '../self-update/staging.ts';
 import { getHeadCommit } from '../server/git.ts';
@@ -67,6 +67,27 @@ async function seedProject(repoRoot: string, source: RunRecord, target: ReplayHa
   return { id: baseline.id, dataDir, entry: versionEntry(target.id, { CEZ_HOME: workspace }) };
 }
 
+interface ReplayDiff {
+  patch: string;
+  changes: ChangesPayload;
+}
+
+const diffFile = (dataDir: string, id: string) => join(artifactsDir(dataDir, id), 'staged-replay-diff.json');
+
+export async function saveStagedReplayDiff(dataDir: string, id: string, diff: ReplayDiff): Promise<void> {
+  await mkdir(artifactsDir(dataDir, id), { recursive: true });
+  await writeFile(diffFile(dataDir, id), JSON.stringify(diff), { mode: 0o600 });
+}
+
+export async function readStagedReplayDiff(dataDir: string, id: string): Promise<ReplayDiff | undefined> {
+  try {
+    const raw = JSON.parse(await readFile(diffFile(dataDir, id), 'utf8')) as { patch?: unknown; changes?: unknown };
+    const changes = changesPayloadSchema.safeParse(raw.changes);
+    if (typeof raw.patch === 'string' && changes.success) return { patch: raw.patch, changes: changes.data };
+  } catch { /* Older and failed replays have no comparison snapshot. */ }
+  return undefined;
+}
+
 /** A staged check replay uses the candidate's normal replay API. No user configuration,
  * service credentials or model sessions are copied into the scratch cockpit. */
 export async function stagedCheckReplay(repoRoot: string, source: RunRecord, signal: AbortSignal) {
@@ -78,23 +99,29 @@ export async function stagedCheckReplay(repoRoot: string, source: RunRecord, sig
   let seed: Awaited<ReturnType<typeof seedProject>> | undefined;
   return withStagingCockpit(target.entry, async (api) => {
     if (!seed) throw new Error('The staging replay did not create its baseline.');
-    const request = async (path: string, body?: object) => {
+    const get = async (path: string, body?: object) => {
       const response = await fetch(api + path, {
         redirect: 'error', signal: AbortSignal.any([signal, AbortSignal.timeout(5_000)]),
         ...(body ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {}),
       });
       if (!response.ok) throw new Error(`The staged replay returned HTTP ${response.status}.`);
-      return response.json() as Promise<unknown>;
+      return response;
     };
-    const admitted = replayRunResponseSchema.parse(await request('/runs/' + seed.id + '/replay', { times: 1 }));
+    const admitted = replayRunResponseSchema.parse(await (await get('/runs/' + seed.id + '/replay', { times: 1 })).json());
     const id = admitted.runs[0]!;
     const end = Date.now() + 30 * 60_000;
     while (Date.now() < end) {
-      const run = runRecordSchema.parse(await request('/runs/' + id));
+      const run = runRecordSchema.parse(await (await get('/runs/' + id)).json());
       if (run.status === 'done' || run.status === 'review' || run.status === 'failed' || run.status === 'cancelled') {
         if (run.harnessVersion?.id !== target.id || run.harnessVersion.commit !== target.commit ||
           run.startCommit !== source.startCommit) throw new Error('Staging replay did not preserve the pinned versions.');
-        return { run, events: readRunEvents(join(seed.dataDir, 'runs', id + '.ndjson')) };
+        const events = readRunEvents(join(seed.dataDir, 'runs', id + '.ndjson'));
+        if (!run.worktreePath) return { run, events };
+        const [patch, changes] = await Promise.all([
+          get('/runs/' + id + '/diff').then(response => response.text()),
+          get('/runs/' + id + '/changes').then(response => response.json()).then(value => changesPayloadSchema.parse(value)),
+        ]);
+        return { run, events, diff: { patch, changes } };
       }
       await wait(250, undefined, { signal });
     }
