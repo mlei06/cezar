@@ -41,6 +41,8 @@ These instructions apply when the owner restarts the harness manager. It remains
 
 ## Open overseer items
 
+- **Overseer audit of the first improvement run (A-1 to A-3):** the run's typecheck failure was in a file the draft didn't touch. The likely cause is the task worktree resolving the main checkout's dependencies, not the draft. Fix B29 (the commit's own dependencies plus a baseline check) before re-enabling the harness improvement automation. B28 alone won't stop the same failure from recurring.
+
 - **Owner decision (2026-11-26 20:50 UTC): the implementer finishes the roadmap on its own.** It may merge and release everything itself, including the owner-protected parts:
   - #29 and the first live `harness-release` run;
   - #33 and #36, the `improve-factory` skill and workflow;

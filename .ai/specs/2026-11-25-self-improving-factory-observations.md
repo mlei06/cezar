@@ -193,3 +193,12 @@ The live cockpit released `f1c8724` through the protected workflow. #38 passed 1
 ### First genuine improvement admission
 
 The live hourly harness check admitted a single run at 23:22 UTC and durably claimed 17 causes from the existing queue. The batch entered the improvement workflow without a run-now request. The validation loop caught a TypeScript error in the draft. The repair passed typecheck and then ran a full test suite although the workflow already has its own full-suite step. Preserve the workflow gate and make the focused-only repair guidance explicit in B28.
+
+### Overseer audit: the first genuine improvement run (2026-11-26)
+
+| # | Observation | Evidence | Class | Decision |
+|---|---|---|---|---|
+| A-1 | The first scheduled harness improvement run was cancelled at its token budget, and its 17 causes returned to the queue. Its draft matched the overseer's blind expectation: a fix to the review sandbox's restricted read tools (the access cluster). | Draft diff: `core/codex-restricted-tools.ts` and its test only. A blind expectation was written before reading the decisions (local audit folder). | none (good) | keep |
+| A-2 | **The typecheck failure that started the repair loop was in a file the draft didn't touch** (`webhooks/transport.ts`, an undici `maxRedirections` type error). That same file builds in every release. The task worktree had no installed dependencies of its own and resolved them from the main checkout's `node_modules`. So the failure was most likely environmental, not the draft's. B28 (focused checks only in repair) cuts the cost, but the next run would still fail the same way. | `check-2` output in the run log; the draft's diff; the worktree's `node_modules` held only Vite caches | harness | backlog B29 |
+| A-3 | A repair agent chasing a failure outside its diff spent 4M+ input tokens before the budget stopped it. | budget note: 5.1M input against the 4M ceiling | harness | B29 |
+
