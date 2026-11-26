@@ -2,7 +2,7 @@
 
 The overseer's resume point for the self-improving factory build. Updated and pushed at every milestone step and every overseer decision, so the work survives a crashed machine or a new session. Read this first, then the roadmap's Progress table and the observation log.
 
-Last updated: 2026-11-26 09:21 UTC.
+Last updated: 2026-11-26 09:34 UTC.
 
 ## Where the build stands
 
@@ -11,8 +11,8 @@ Last updated: 2026-11-26 09:21 UTC.
 - **Delegated routing.** The merge-writer applied `highReasoning`, `switchAbove: 0.8` and the ordered fallback list. Two installed `operate` fixtures verified the configured primary over the VPN and the first hosted fallback with an unreachable probe. The second recorded its effective runner, model and fallback note. The real probe was restored. M2 also verified run identity, historical metrics, budget alerts, the workflow PR gate, niceness 5 and the workspace cap of 2.
 - **Scoring.** #20–24 released the catalog, stateless judge, storage, `cez score`, cause routing and UI. Installed fixtures verified pending and recorded events, score summaries and reconstruction of both cause queues. The outage fixture recovered all four scores after 304 seconds. The configured judge needed 65 seconds and 82.2 seconds to record all four scores on two installed fixtures. Calibration is in flight, and the one-minute acceptance is open.
 - **Release controls.** #25–26 are live. Isolated fixtures from the installed entries verified draining before admission, expiry, resuming queued work, exact rollback selection, and all five benchmark cases. A failed restart or post-switch check rolled back in fixtures. A benchmark drop stopped before activation. Reporting and the exact-release revert PR passed with test sinks.
-- **In flight.** `impl/m4-staged-agent` (`8255921d3`) is in its full suite. Typecheck and 47 focused tests passed. An authenticated fixture used the previous installed release as its alternate harness. It preserved the project commit and reported model, read the original marker, and retained iteration and token measurements. `impl/m4-protected-release` (`5ede212aa`) passed typecheck and 148 focused tests. The YAML loaded and completed in a dry-run cockpit. A real authenticated fixture and a tool-free fixture judge passed separately. The full suite is queued after the alternate replay suite.
-- **Next.** Merge and release the alternate replay after validation, then open the protected workflow as an owner-review draft. The first live release through it still belongs to the owner. M5 waits for the scoring calibration gate, and M6 follows M5. Real harness project work stays paused.
+- **In flight.** Authenticated alternate replay merged as #28 (`4bba8b9)) and is releasing. Typecheck, 47 focused tests, all 18,644 full-suite tests, 54 unit checks, build and 35 package checks passed. An authenticated fixture used the previous installed release as its alternate harness. It preserved the project commit and reported model, read the original marker, and retained iteration and token measurements. `impl/m4-protected-release` (`5ede212aa`) passed typecheck and 148 focused tests. The YAML loaded and completed in a dry-run cockpit. A real authenticated fixture and a tool-free fixture judge passed separately. Its full suite started after the alternate replay suite completed.
+- **Next.** Verify #28 from the installed entry, then open the protected workflow as an owner-review draft. The first live release through it still belongs to the owner. M5 waits for the scoring calibration gate, and M6 follows M5. Real harness project work stays paused.
 
 ## Standing instructions given to the harness manager
 
