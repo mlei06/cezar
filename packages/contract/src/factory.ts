@@ -1,14 +1,15 @@
 import { z } from 'zod';
+import { reasoningEffortSchema } from './agent.ts';
 import { runnerSchema } from './runners.ts';
 import { harnessVersionSchema } from './runs.ts';
 
 export const replayRunInputSchema = z.object({
-  harness: z.string().trim().min(1).optional(),
-  workflow: z.string().trim().min(1).optional(),
-  model: z.string().trim().min(1).optional(),
+  harness: z.string().trim().min(1).max(190).optional(),
+  workflow: z.string().trim().min(1).max(190).optional(),
+  model: z.string().trim().min(1).max(190).optional(),
   runner: runnerSchema.optional(),
-  effort: z.string().trim().min(1).optional(),
-  skill: z.string().trim().min(1).optional(),
+  effort: reasoningEffortSchema.optional(),
+  skill: z.string().trim().min(1).max(190).optional(),
   brief: z.string().trim().min(1).max(100_000).optional(),
   times: z.number().int().min(1).max(5).default(1),
 }).strict().refine(({ times: _times, ...changes }) =>
