@@ -9,7 +9,7 @@ import { expect, it } from 'vitest';
 
 const exec = promisify(execFile);
 
-it.skipIf(process.platform === 'win32').each(['restart', 'health', 'manual', 'benchmark', 'post-switch', 'revert', 'unmerged'] as const)(
+it.skipIf(process.platform === 'win32').each(['restart', 'health', 'manual', 'benchmark', 'post-switch', 'revert', 'unmerged', 'validation'] as const)(
   'keeps a healthy release in the %s case',
   async (failure) => {
     const root = await mkdtemp(join(tmpdir(), 'cez-release-rollback-'));
@@ -53,6 +53,8 @@ it.skipIf(process.platform === 'win32').each(['restart', 'health', 'manual', 'be
         mkdir(shimDir), mkdir(scriptDir),
       ]);
       const service = join(shimDir, 'systemctl');
+      const npm = join(shimDir, 'npm');
+      const checksLog = join(workspace, 'checks.log');
       const release = join(scriptDir, 'harness-release.mjs');
       await Promise.all([
         copyFile(new URL('../../../../scripts/harness-release.mjs', import.meta.url), release),
@@ -70,14 +72,22 @@ it.skipIf(process.platform === 'win32').each(['restart', 'health', 'manual', 'be
           export const linkId = () => 'candidate';
         `),
         writeFile(service, failure === 'restart' ? '#!/bin/sh\ntest "$(cat "$RELEASE_TEST_STATE")" = previous\n' : '#!/bin/sh\nexit 0\n'),
+        writeFile(npm, [
+          '#!/bin/sh',
+          'printf "%s\\n" "$*" >> "$RELEASE_TEST_CHECKS"',
+          failure === 'validation' ? 'test "$*" != "run test:unit"' : 'exit 0',
+        ].join('\n')),
       ]);
-      await chmod(service, 0o755);
+      await Promise.all([chmod(service, 0o755), chmod(npm, 0o755)]);
       const args = [release, sha, '--force', '--health-url', `http://127.0.0.1:${address.port}/api/v1/health`];
       if (failure === 'health') args.push('--simulate-unhealthy');
       const releaseLog = join(workspace, 'factory', 'release-log.ndjson');
       const execute = () => exec(process.execPath, args, {
         timeout: 10_000,
-        env: { ...process.env, CEZ_HOME: workspace, RELEASE_TEST_STATE: stateFile, PATH: `${shimDir}:${process.env.PATH}` },
+        env: {
+          ...process.env, CEZ_HOME: workspace, RELEASE_TEST_STATE: stateFile, RELEASE_TEST_CHECKS: checksLog,
+          PATH: `${shimDir}:${process.env.PATH}`,
+        },
       });
       if (failure === 'manual' || failure === 'revert') {
         const activePackage = join(workspace, 'versions', 'current', 'node_modules', '@open-mercato', 'cezar', 'dist', 'self-update');
@@ -123,7 +133,7 @@ it.skipIf(process.platform === 'win32').each(['restart', 'health', 'manual', 'be
         }
         return;
       }
-      if (failure === 'benchmark' || failure === 'post-switch') {
+      if (failure === 'benchmark' || failure === 'post-switch' || failure === 'validation') {
         const benchmarks = join(candidate, 'dist', 'benchmarks');
         const settings = join(candidate, 'dist', 'workspace');
         await Promise.all([mkdir(benchmarks), mkdir(settings)]);
@@ -148,7 +158,18 @@ it.skipIf(process.platform === 'win32').each(['restart', 'health', 'manual', 'be
         expect(log).toEqual([expect.objectContaining({ action: 'switch', result: 'failed', reason: 'The candidate is not merged into origin/factory.' })]);
         return;
       }
+      if (failure === 'validation') {
+        expect((await readFile(checksLog, 'utf8')).trim().split('\n')).toEqual(['run typecheck', 'test', 'run test:unit']);
+        expect(log).toEqual([
+          expect.objectContaining({ action: 'build', sha, result: 'started' }),
+          expect.objectContaining({ action: 'build', sha, result: 'failed', reason: 'npm run test:unit failed (exit 1)' }),
+        ]);
+        return;
+      }
       if (failure === 'benchmark') {
+        expect((await readFile(checksLog, 'utf8')).trim().split('\n')).toEqual([
+          'run typecheck', 'test', 'run test:unit', 'run build', 'run test:package',
+        ]);
         expect(log.at(-1)).toMatchObject({ action: 'benchmark', baseline: 100, passRate: 60, result: 'failed' });
         expect(log.some((entry) => entry.action === 'switch')).toBe(false);
         return;

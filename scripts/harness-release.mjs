@@ -268,16 +268,32 @@ async function release() {
   say(`releasing ${sha7} (${spec})`);
   log({ action: 'build', sha, result: 'started' });
 
-  if (!existsSync(join(packageRoot, 'dist', 'index.js')) || !existsSync(join(packageRoot, 'web', 'dist'))) {
-    mkdirSync(BUILDS, { recursive: true });
-    if (!existsSync(dir)) run('git', ['worktree', 'add', '--force', '-B', branch, dir, sha]);
-    runLoud('npm', ['ci', '--no-audit', '--no-fund'], dir);
-    if (!flag('skip-checks')) runLoud('npm', ['run', 'typecheck'], dir);
-    runLoud('npm', ['run', 'build'], dir);
-    // The global `cezar`/`cez` (and the launchers) exec this entry: keep it executable.
-    spawnSync('chmod', ['+x', join(packageRoot, 'dist', 'index.js')]);
-  } else {
-    say(`build ${sha7} already exists`);
+  const built = existsSync(join(packageRoot, 'dist', 'index.js')) && existsSync(join(packageRoot, 'web', 'dist'));
+  const validateRelease = !stageOnly && flag('benchmark') && !flag('skip-checks');
+  try {
+    if (!built) {
+      mkdirSync(BUILDS, { recursive: true });
+      if (!existsSync(dir)) run('git', ['worktree', 'add', '--force', '-B', branch, dir, sha]);
+      runLoud('npm', ['ci', '--no-audit', '--no-fund'], dir);
+    }
+    // An existing build may have come from staging or from an interrupted validation.
+    if (!built || validateRelease) {
+      if (!flag('skip-checks')) runLoud('npm', ['run', 'typecheck'], dir);
+      if (validateRelease) {
+        runLoud('npm', ['test'], dir);
+        runLoud('npm', ['run', 'test:unit'], dir);
+      }
+      runLoud('npm', ['run', 'build'], dir);
+      if (validateRelease) runLoud('npm', ['run', 'test:package'], dir);
+      // The global `cezar`/`cez` (and the launchers) exec this entry: keep it executable.
+      spawnSync('chmod', ['+x', join(packageRoot, 'dist', 'index.js')]);
+    } else {
+      say(`build ${sha7} already exists`);
+    }
+  } catch (error) {
+    say(`build failed: ${error.message}`);
+    log({ action: 'build', sha, result: 'failed', reason: error.message });
+    return 1;
   }
   log({ action: 'build', sha, result: 'ok' });
 
