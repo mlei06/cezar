@@ -114,7 +114,7 @@ Release `7dd520c` passed health and contained both playbooks and the charter loa
 
 | M4-11 | An alternate-version agent replay needs the original account without inheriting the workstation config. | A distinct installed-format build replayed an authenticated Codex Plan with the original project commit and model. The scratch workspace recorded the expected read and left the active version unchanged. | harness | Pass the selected runner profile into staging and preserve the score inputs when importing the result. |
 
-| M4-12 | An external-operation regression fixture must go through replay admission to cover the recorded-worktree boundary. | The full #27 run exposed the fixture mutating a started task. The corrected graph and route checks passed together with the terminal handoff guard. Browser e2e read three variants and repeat averages from the staged cockpit. | harness | Use the real admission path in replay fixtures and verify Compare from the installed entry. |
+| M4-12 | An external-operation regression fixture must go through replay admission to cover the recorded-worktree boundary. | The full #27 run exposed the fixture mutating a started task. The corrected graph and route checks passed together with the terminal handoff guard. Browser e2e read three variants and repeat averages from the staged cockpit and a separate cockpit booted from the installed release. All four scores per variant were present. | harness | Use the real admission path in replay fixtures and verify Compare from the installed entry. |
 
 ## Judge calibration
 
