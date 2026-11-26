@@ -1,6 +1,6 @@
 # The self-improving factory
 
-Status: draft v5.22, 2026-11-26. Fork: `mlei06/cezar`, trunk `factory`. Spec owner: the overseer (see the roadmap). Implementation plan: `2026-11-25-self-improving-factory-roadmap.md`. Findings during the build: `2026-11-25-self-improving-factory-observations.md`.
+Status: draft v5.23, 2026-11-26. Fork: `mlei06/cezar`, trunk `factory`. Spec owner: the overseer (see the roadmap). Implementation plan: `2026-11-25-self-improving-factory-roadmap.md`. Findings during the build: `2026-11-25-self-improving-factory-observations.md`.
 
 ## TLDR
 
@@ -697,7 +697,7 @@ workflow implement · codex example-model · started by manager · status done �
 
 Every route has its zod schema in `packages/contract` first, per AGENTS.md.
 
-**Events** (the workspace SSE bus): `score.recorded`, `budget.exceeded`, `improvement.started`, `improvement.finished`, `release.switched`, `release.rolledBack`.
+**Events** (the workspace SSE bus): `score.recorded`, `score.changed` (pending and error invalidations with project and task IDs), `budget.exceeded`, `improvement.started`, `improvement.finished`, `release.switched`, `release.rolledBack`.
 
 ## Failure handling and edge cases
 
@@ -831,6 +831,7 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
 
 ## Changelog
 
+- **v5.23:** D5 emits an invalidation for pending and error scores so an open cockpit reflects outages, retries and failed evaluations.
 - **v5.22:** D5 redacts the full judge input, including the preserved brief, and redacts parsed verdicts before storage and events. Logging preferences apply to run logs. Scoring protects its own model boundary.
 - **v5.21:** D5 requires OpenCode's stateless text generation for the judge. When the installed version cannot provide it, scoring records a configuration error.
 - **v5.20:** D5 defines the two-attempt context limit fallback and accepts a single fenced JSON object. The scope scorer reads explicitly cited decision headings from the run's pinned commit. It excludes unrelated sections and working-copy edits.
