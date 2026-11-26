@@ -252,3 +252,10 @@ export const factoryWeeklyMetricsSchema = z.object({
   meanCostUsd: z.number().nonnegative().optional(),
   meanHumanTouchpoints: z.number().nonnegative().optional(),
 });
+
+/** `POST /factory/improve`: the owner's "Improve now" (spec D6); guards still apply. */
+export const factoryImproveResponseSchema = z.discriminatedUnion('started', [
+  z.object({ started: z.literal(true), improvementId: z.string(), runId: z.string(), causes: z.number().int().nonnegative() }),
+  z.object({ started: z.literal(false), reason: z.string() }),
+]);
+export type FactoryImproveResponse = z.infer<typeof factoryImproveResponseSchema>;
