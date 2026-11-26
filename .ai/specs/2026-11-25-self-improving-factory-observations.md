@@ -106,6 +106,8 @@ Release `7dd520c` passed health and contained both playbooks and the charter loa
 
 | M4-7 | Host-specific fixture inputs obscured regressions, and adding release routes exceeded declaration emission limits alongside the score routes. | #25 isolated the WSL and ledger inputs, named the existing workspace config response, and passed both workspace contract parity and the full suite with 18,623 passing tests. An independent real Codex fixture completed the same-commit read-only replay. | harness | Reuse the inferred config payload type to preserve API parity. Keep native replay verification on isolated repositories. |
 
+| M4-8 | A release must hold new admissions while running tasks drain, then wake the queue. | The installed `e2f4779` staging fixture counted one active task, drained to zero, preserved the next task as queued, and admitted it on lease release. All three live services remained active. | harness | Use the installed runtime for admission verification, and keep deliberately failed activations in isolated fixtures. |
+
 ## Judge calibration
 
 A new blind sample contains 20 archived runs. The installed scoring queue admitted all 20, for 78 scorer calls. Blind labels were recorded before admission. Local evidence and run identities stay out of the fork.
