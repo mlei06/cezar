@@ -43,7 +43,7 @@ export interface DraftFilters {
 }
 
 /** Shared editor kinds; each serializes only its own trigger. */
-export type EditableAutomationKind = AutomationKind
+export type EditableAutomationKind = Exclude<AutomationKind, 'factory'>
 
 export interface EditorDraft {
   name: string
@@ -190,7 +190,7 @@ export function fromDefinition(definition: AutomationDefinition): EditorDraft {
   return {
     ...base,
     name: definition.name,
-    kind: definition.kind,
+    kind: definition.kind === 'factory' ? 'schedule' : definition.kind,
     trackerTrigger: definition.trackerTrigger,
     schedule: definition.schedule ? { ...definition.schedule } : base.schedule,
     schedules: definition.schedules?.map(schedule => ({ ...schedule })),

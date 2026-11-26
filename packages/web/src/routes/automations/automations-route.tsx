@@ -59,6 +59,9 @@ export function AutomationsRoute({ mode = 'list' }: { mode?: 'list' | 'new' | 'e
   if (mode === 'edit') {
     const automation = data?.automations.find((item) => item.id === automationId)
     if (data && !automation) return <div data-route="automations" className="p-5"><PageState text="Automation not found." /></div>
+    if (automation?.kind === 'factory') {
+      return <AutomationLog automationId={automation.id} automation={automation} timeZone={data?.timeZone} onBack={back} />
+    }
     return automation
       ? <AutomationEditor data={data} automation={automation} actions={actions} onBack={back} onSaved={back} onLog={() => navigate(`/automations/${encodeURIComponent(automation.id)}/log`)} />
       : <div data-route="automations" className="p-5"><PageState text="Loading automation…" /></div>

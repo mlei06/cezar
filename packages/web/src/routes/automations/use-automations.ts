@@ -77,7 +77,7 @@ export function useAutomationActions(data: AutomationsResponse | undefined): Aut
 
   const run = useMutation({
     mutationFn: async (automation: AutomationListEntry) => {
-      if (automation.kind === 'schedule') {
+      if (automation.kind === 'schedule' || automation.kind === 'factory') {
         await runAutomationNow(automation.id)
         toast(`Started "${automation.name}" — the task is queued.`)
       } else {
@@ -112,6 +112,7 @@ export function useAutomationActions(data: AutomationsResponse | undefined): Aut
   })
   const duplicate = useMutation({
     mutationFn: (automation: AutomationListEntry) => {
+      if (automation.kind === 'factory') throw new Error('This factory automation is built in.')
       const body: CreateAutomationInput = {
         name: `${automation.name} (copy)`,
         ...(automation.description ? { description: automation.description } : {}),
@@ -146,6 +147,7 @@ export function useAutomationActions(data: AutomationsResponse | undefined): Aut
     duplicate: (automation) => duplicate.mutateAsync(automation).then(() => undefined, () => undefined),
     remove: (automation) => remove.mutateAsync(automation).then(() => undefined, () => undefined),
     copyCli: async (automation) => {
+      if (automation.kind === 'factory') return copyText('cez improve')
       const line = cliOf({
         name: automation.name,
         kind: automation.kind,
@@ -157,7 +159,7 @@ export function useAutomationActions(data: AutomationsResponse | undefined): Aut
         filters: automation.filters,
         task: automation.task,
       })
-      await copyText(line, trackerCliNeedsReview(automation) ? TRACKER_CLI_REVIEW_NOTE : undefined)
+      await copyText(line, trackerCliNeedsReview({ kind: automation.kind, trackerTrigger: automation.trackerTrigger }) ? TRACKER_CLI_REVIEW_NOTE : undefined)
     },
     busy: preview.isPending || run.isPending || toggle.isPending || cancelQueued.isPending || duplicate.isPending || remove.isPending,
   }

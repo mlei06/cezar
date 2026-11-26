@@ -1,5 +1,6 @@
 import { trackerAccessSchema } from './tracker-operations.ts';
 import { deferredStartStateSchema, deferredCreationRecordSchema } from './deferred-start-state.ts';
+import { deferredMutationQuerySchema } from './deferred-start.ts';
 import { z } from 'zod';
 import { trackerAssociationSchema, trackerAutomationEventSchema, trackerFailureSchema } from './tracker.ts';
 // An automation launches an ORDINARY cezar task, so the task it carries is the composer's own
@@ -96,8 +97,9 @@ export type AutomationFilters = z.infer<typeof automationFiltersSchema>;
  *
  * Tracker definitions use trackerTrigger for provider history events and a captured association.
  */
-export const automationKindSchema = z.enum(['github', 'schedule', 'tracker']);
+export const automationKindSchema = z.enum(['github', 'schedule', 'tracker', 'factory']);
 export type AutomationKind = z.infer<typeof automationKindSchema>;
+export const FACTORY_IMPROVEMENT_AUTOMATION_ID = 'factory-improvement';
 
 /**
  * The automation's own dispatch setting (spec 2026-09-14 Q4): on, with a subtask ceiling, and
@@ -411,6 +413,7 @@ export type AutomationRetryResponse = z.infer<typeof automationRetryResponseSche
 
 /** `POST /automations/:id/run` (202) — a schedule automation fired now, by hand. */
 export const automationRunResponseSchema = z.object({ runId: z.string() });
+export const automationRunQuerySchema = deferredMutationQuerySchema.extend({ fromManager: z.literal('1').optional() });
 export type AutomationRunResponse = z.infer<typeof automationRunResponseSchema>;
 
 /** One live run in a tree the automation launched on its own (#1980). `rootRunId` is present
@@ -492,7 +495,7 @@ export const createAutomationInputSchema = automationDefinitionSchema
   .extend({
     task: automationTaskSchema,
     /** Omitted = `github`, the shape every pre-schedule client sends. */
-    kind: automationKindSchema.optional(),
+    kind: automationKindSchema.exclude(['factory']).optional(),
     enable: z.boolean().optional(),
   });
 export type CreateAutomationInput = z.input<typeof createAutomationInputSchema>;

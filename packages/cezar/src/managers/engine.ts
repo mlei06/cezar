@@ -156,6 +156,7 @@ import { readLedger } from '../usage-ledger/store.ts';
 import { managerConsumerId } from '../usage-ledger/report.ts';
 import { FACTORY_REPORT_JOB } from '../factory/report.ts';
 import { hasProtectedPaths, protectedChanges } from '../improvement/protection.ts';
+import { automationRunResponseSchema, FACTORY_IMPROVEMENT_AUTOMATION_ID, type AutomationRunResponse } from '@open-mercato/cezar-contract';
 
 /**
  * The manager turn engine (spec 2026-10-31-managers § Turns, § Watching, § Safety). One turn per
@@ -3479,6 +3480,15 @@ ${guidance}` : ''}`,
     if (input.since) query.set('since', input.since);
     const response = await this.forward(`/p/${encodeURIComponent(input.projectId)}/scores?${query}`);
     return response.ok ? (await response.json()) as ScoresResponse : ManagerEngine.refusalOf(response);
+  }
+
+  async improve(id: string, projectId: string): Promise<AutomationRunResponse | ManagerRefusal> {
+    const scope = await this.toolScope(id, projectId, true);
+    if ('error' in scope) return scope;
+    if (managerAccessOf(scope.manager, projectId) === 'read') return { error: 'This project is read-only for this manager.', status: 403 };
+    const response = await this.forward('/p/' + encodeURIComponent(projectId) + '/automations/' +
+      FACTORY_IMPROVEMENT_AUTOMATION_ID + '/run?fromManager=1', { method: 'POST' });
+    return response.ok ? automationRunResponseSchema.parse(await response.json()) : ManagerEngine.refusalOf(response);
   }
 
   async raiseTaskBudget(id: string, input: ManagerTaskBudgetInput): Promise<RunBudgetResponse | ManagerRefusal> {
