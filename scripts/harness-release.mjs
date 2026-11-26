@@ -6,16 +6,18 @@
 // automatic rollback, build pruning, and the release log.
 //
 //   node scripts/harness-release.mjs [<commit>]   build, link, wait for idle, switch, health-check
-//   node scripts/harness-release.mjs --rollback   switch back to the previous release
+//   node scripts/harness-release.mjs --rollback   switch back to the previous release and open a draft revert PR
 //   flags: --force (skip the idle wait)  --wait-minutes N (default 15)  --no-restart
 //          --health-url URL (default http://127.0.0.1:4321/api/v1/health)  --keep N (default 5)
 //          --unit NAME (default cezar)  --skip-checks (build only; no typecheck/tests)
+//          --benchmark (stage and compare the harness smoke suite before switching)
 //          --hold-new-tasks (lease admission while waiting and switching; needs a compatible live cockpit)
 //          --stage-only (build and check an isolated cockpit; leave the live version active)
 //          --simulate-unhealthy (test the automatic rollback: the new version's health check fails)
 import { execFileSync, spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { randomUUID } from 'node:crypto';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -24,6 +26,7 @@ const HOME = process.env.CEZ_HOME || join(homedir(), '.cezar');
 const FACTORY = join(HOME, 'factory');
 const BUILDS = join(FACTORY, 'builds');
 const LOG = join(FACTORY, 'release-log.ndjson');
+const FACTORY_REF = 'refs/remotes/origin/factory';
 
 const args = process.argv.slice(2);
 const flag = (name) => args.includes(`--${name}`);
@@ -104,8 +107,8 @@ async function withReleaseHold(action) {
   if (!response.ok) throw new Error('Could not hold traffic for a release (HTTP ' + response.status + ').');
   const lease = await response.json();
   const path = endpoint + '/' + encodeURIComponent(lease.id);
-  // Leave a minute for restart and health verification within the lease.
-  const deadline = Date.parse(lease.expiresAt) - 60_000;
+  // Reserve time for restart, health, the post-switch check and rollback.
+  const deadline = Date.parse(lease.expiresAt) - (flag('benchmark') ? 150_000 : 60_000);
   try {
     log({ action: 'hold', result: 'started', expiresAt: lease.expiresAt });
     let status = lease;
@@ -147,7 +150,9 @@ async function healthy(priorRuntime) {
 
 function restart() {
   if (flag('no-restart')) return say('--no-restart: not restarting the service');
-  run('systemctl', ['--user', 'restart', UNIT]);
+  execFileSync('systemctl', ['--user', 'restart', UNIT], {
+    cwd: REPO, stdio: ['ignore', 'pipe', 'pipe'], timeout: 20_000,
+  });
 }
 
 /** Self-update's own code, from a built tree (the build being released, or the active one). */
@@ -158,14 +163,34 @@ async function selfUpdate(packageRoot) {
   return { ...layout, ...launcher };
 }
 
-function lastSwitch(id) {
-  if (!existsSync(LOG)) return undefined;
-  const lines = readFileSync(LOG, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
-  // An automatic rollback's 'from' is the failed candidate, never a rollback target.
-  return lines.reverse().find((e) => e.action === 'switch' && e.result === 'ok' && e.id === id);
+function releaseEntries() {
+  if (!existsSync(LOG)) return [];
+  return readFileSync(LOG, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)).reverse();
 }
 
-async function activateAndVerify(su, id, simulateFailure = false) {
+function lastSwitch(id) {
+  // An automatic rollback's 'from' is the failed candidate, never a rollback target.
+  return releaseEntries().find((e) => e.action === 'switch' && e.result === 'ok' && e.id === id);
+}
+
+async function benchmark(packageRoot, su, sha, id, previous) {
+  const dist = join(packageRoot, 'dist');
+  const { HARNESS_SMOKE_SUITE: suite, runHarnessSmokeSuite } =
+    await import(pathToFileURL(join(dist, 'benchmarks', 'harness-smoke.js')).href);
+  const { loadWorkspaceConfig } = await import(pathToFileURL(join(dist, 'workspace', 'config.js')).href);
+  const tolerance = (await loadWorkspaceConfig()).factory?.release?.benchmarkTolerance ?? 10;
+  log({ action: 'benchmark', suite, sha, id, result: 'started' });
+  const cached = previous && releaseEntries().find((entry) =>
+    entry.action === 'benchmark' && entry.suite === suite && entry.id === previous && entry.result === 'ok');
+  const baseline = cached?.passRate ?? (previous ? (await runHarnessSmokeSuite(su.versionEntry(previous))).passRate : 100);
+  const candidate = await runHarnessSmokeSuite(join(dist, 'index.js'));
+  const passed = candidate.passRate >= baseline - tolerance;
+  log({ action: 'benchmark', suite, sha, id, baseline, tolerance, ...candidate, result: passed ? 'ok' : 'failed' });
+  say('benchmark pass rate ' + candidate.passRate + '%, previous ' + baseline + '%, tolerance ' + tolerance + ' points');
+  return passed;
+}
+
+async function activateAndVerify(su, id, simulateFailure = false, verifyWorkload) {
   try {
     const priorRuntime = flag('no-restart') || simulateFailure ? undefined
       : (await getJson(HEALTH).catch(() => undefined))?.runtimeId;
@@ -174,14 +199,16 @@ async function activateAndVerify(su, id, simulateFailure = false) {
     restart();
     if (flag('no-restart')) return { ok: true };
     if (simulateFailure) return { ok: false, reason: 'simulated (--simulate-unhealthy)' };
-    return await healthy(priorRuntime);
+    const health = await healthy(priorRuntime);
+    if (health.ok && verifyWorkload) await verifyWorkload(su.versionEntry(id));
+    return health;
   } catch (error) {
     return { ok: false, reason: error.message };
   }
 }
 
-async function switchTo(su, id, previous, entry) {
-  const health = await activateAndVerify(su, id, flag('simulate-unhealthy') && entry.action === 'switch');
+async function switchTo(su, id, previous, entry, verifyWorkload) {
+  const health = await activateAndVerify(su, id, flag('simulate-unhealthy') && entry.action === 'switch', verifyWorkload);
   if (health.ok) {
     log({ ...entry, id, previous, result: 'ok' });
     say(`now running ${id}`);
@@ -214,10 +241,66 @@ function pruneBuilds(su, keepIds) {
   }
 }
 
+async function candidateSmoke(packageRoot, entry) {
+  const stagingModule = join(packageRoot, 'dist', 'self-update', 'staging.js');
+  const { smokeStagedHarness } = await import(pathToFileURL(stagingModule).href);
+  await smokeStagedHarness(entry);
+}
+
+let reportCandidate;
+const reportStarted = Date.now();
+
+/** Only the protected benchmarked path posts to the manager. The cockpit reads
+ * the local report file; it never accepts caller-supplied manager text. */
+async function reportRelease() {
+  if (!reportCandidate || !flag('benchmark') || flag('stage-only')) return;
+  const { sha, previous } = reportCandidate;
+  const entries = releaseEntries().filter(entry => Date.parse(entry.at) >= reportStarted);
+  const switched = entries.find(entry => entry.action === 'switch' && entry.sha === sha);
+  const benchmark = entries.find(entry => entry.action === 'benchmark' && entry.sha === sha && typeof entry.passRate === 'number');
+  const rolledBack = switched && entries.some(entry => entry.action === 'rollback' && entry.automatic &&
+    entry.from === switched.id && entry.result === 'ok');
+  const result = switched?.result === 'ok' ? 'switched' : rolledBack ? 'rolled-back' :
+    switched?.result === 'failed' ? 'failed' : process.exitCode === 0 ? 'already-active' : 'blocked';
+  const base = previous && lastSwitch(previous)?.sha;
+  let changes = [];
+  if (base && /^[a-f0-9]{40,64}$/.test(base)) {
+    changes = run('git', ['log', '--first-parent', '--max-count=20', '--format=%s', base + '..' + sha])
+      .split('\n').filter(subject => /\(#\d+\)$/.test(subject)).map(subject => subject.slice(0, 260));
+  }
+  const report = {
+    id: randomUUID(), commit: sha, result, changes,
+    ...(switched?.id || benchmark?.id ? { version: switched?.id ?? benchmark?.id } : {}),
+    ...(previous ? { previous } : {}),
+    ...(benchmark ? { benchmark: { passRate: benchmark.passRate, baseline: benchmark.baseline, tolerance: benchmark.tolerance } } : {}),
+  };
+  const path = join(FACTORY, 'last-release-report.json');
+  const temp = path + '.' + report.id;
+  writeFileSync(temp, JSON.stringify(report) + '\n', { mode: 0o600, flag: 'wx' });
+  renameSync(temp, path);
+  const response = await fetch(API + '/workspace/factory/release-report', {
+    method: 'POST', redirect: 'error', signal: AbortSignal.timeout(5_000),
+  });
+  const delivery = response.ok && await response.json();
+  say(delivery?.delivered ? 'release report delivered to the harness manager' : 'release report saved locally');
+}
+
 async function release() {
-  const spec = positional[0] ?? 'origin/factory';
-  spawnSync('git', ['fetch', '--quiet', 'origin', 'factory'], { cwd: REPO });
-  const sha = run('git', ['rev-parse', `${spec}^{commit}`]);
+  const stageOnly = flag('stage-only');
+  const spec = positional[0] ?? FACTORY_REF;
+  if (!stageOnly || !positional[0]) {
+    const fetched = spawnSync('git', ['fetch', '--quiet', '--no-tags', 'origin', '+refs/heads/factory:' + FACTORY_REF], {
+      cwd: REPO, timeout: 30_000, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+    });
+    if (fetched.status !== 0) throw new Error('Could not verify the current origin/factory branch.');
+  }
+  const sha = run('git', ['rev-parse', '--verify', '--end-of-options', `${spec}^{commit}`]);
+  if (!stageOnly) {
+    const ancestor = spawnSync('git', ['merge-base', '--is-ancestor', sha, FACTORY_REF], { cwd: REPO });
+    if (ancestor.status === 1) throw new Error('The candidate is not merged into origin/factory.');
+    if (ancestor.status !== 0) throw new Error('Could not verify the candidate against origin/factory.');
+  }
+  reportCandidate = { sha };
   const sha7 = sha.slice(0, 7);
   const dir = join(BUILDS, sha7);
   const branch = `release/${sha7}`;
@@ -225,23 +308,37 @@ async function release() {
   say(`releasing ${sha7} (${spec})`);
   log({ action: 'build', sha, result: 'started' });
 
-  if (!existsSync(join(packageRoot, 'dist', 'index.js')) || !existsSync(join(packageRoot, 'web', 'dist'))) {
-    mkdirSync(BUILDS, { recursive: true });
-    if (!existsSync(dir)) run('git', ['worktree', 'add', '--force', '-B', branch, dir, sha]);
-    runLoud('npm', ['ci', '--no-audit', '--no-fund'], dir);
-    if (!flag('skip-checks')) runLoud('npm', ['run', 'typecheck'], dir);
-    runLoud('npm', ['run', 'build'], dir);
-    // The global `cezar`/`cez` (and the launchers) exec this entry: keep it executable.
-    spawnSync('chmod', ['+x', join(packageRoot, 'dist', 'index.js')]);
-  } else {
-    say(`build ${sha7} already exists`);
+  const built = existsSync(join(packageRoot, 'dist', 'index.js')) && existsSync(join(packageRoot, 'web', 'dist'));
+  const validateRelease = !stageOnly && flag('benchmark') && !flag('skip-checks');
+  try {
+    if (!built) {
+      mkdirSync(BUILDS, { recursive: true });
+      if (!existsSync(dir)) run('git', ['worktree', 'add', '--force', '-B', branch, dir, sha]);
+      runLoud('npm', ['ci', '--no-audit', '--no-fund'], dir);
+    }
+    // An existing build may have come from staging or from an interrupted validation.
+    if (!built || validateRelease) {
+      if (!flag('skip-checks')) runLoud('npm', ['run', 'typecheck'], dir);
+      if (validateRelease) {
+        runLoud('npm', ['test'], dir);
+        runLoud('npm', ['run', 'test:unit'], dir);
+      }
+      runLoud('npm', ['run', 'build'], dir);
+      if (validateRelease) runLoud('npm', ['run', 'test:package'], dir);
+      // The global `cezar`/`cez` (and the launchers) exec this entry: keep it executable.
+      spawnSync('chmod', ['+x', join(packageRoot, 'dist', 'index.js')]);
+    } else {
+      say(`build ${sha7} already exists`);
+    }
+  } catch (error) {
+    say(`build failed: ${error.message}`);
+    log({ action: 'build', sha, result: 'failed', reason: error.message });
+    return 1;
   }
   log({ action: 'build', sha, result: 'ok' });
 
-  if (flag('stage-only')) {
-    const stagingModule = join(packageRoot, 'dist', 'self-update', 'staging.js');
-    const { smokeStagedHarness } = await import(pathToFileURL(stagingModule).href);
-    await smokeStagedHarness(join(packageRoot, 'dist', 'index.js'));
+  if (stageOnly) {
+    await candidateSmoke(packageRoot, join(packageRoot, 'dist', 'index.js'));
     log({ action: 'stage', sha, result: 'ok' });
     say('candidate completed its isolated smoke task');
     return 0;
@@ -249,26 +346,82 @@ async function release() {
 
   const su = await selfUpdate(packageRoot);
   const previous = su.activeId();
+  reportCandidate.previous = previous;
+  if (flag('benchmark')) {
+    const version = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')).version;
+    if (!await benchmark(packageRoot, su, sha, su.linkId(version, branch), previous)) return 1;
+  }
   const linked = su.linkCheckout(packageRoot, branch);
   say(`linked ${linked.id}${previous ? ` (current: ${previous})` : ''}`);
   if (linked.id === previous) {
     say('already the active release');
     return 0;
   }
-  const ok = await withReleaseHold(() => switchTo(su, linked.id, previous, { action: 'switch', sha }));
+  const verifyWorkload = flag('benchmark') ? async (entry) => {
+    await candidateSmoke(packageRoot, entry);
+    log({ action: 'post-switch-smoke', sha, result: 'ok' });
+  } : undefined;
+  const ok = await withReleaseHold(() => switchTo(su, linked.id, previous, { action: 'switch', sha }, verifyWorkload));
   pruneBuilds(su, [linked.id, previous].filter(Boolean));
   return ok ? 0 : 1;
 }
 
+async function openRollbackPr(entryRoot, sha) {
+  if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(sha)) throw new Error('The rolled-back build has no valid commit.');
+  const { parseRemote } = await import(pathToFileURL(join(entryRoot, 'dist', 'git-remotes.js')).href);
+  const remote = parseRemote(run('git', ['config', '--get', 'remote.origin.url']));
+  if (!remote || remote.host !== 'github.com') throw new Error('The factory fork needs a GitHub origin for a revert PR.');
+  const repo = [remote.host, remote.owner, remote.repo].join('/');
+  const branch = 'revert/harness-' + sha.slice(0, 12);
+  const existing = JSON.parse(run('gh', ['pr', 'list', '--repo', repo, '--base', 'factory', '--head', branch, '--json', 'url', '--limit', '1']));
+  if (existing[0]?.url) return existing[0].url;
+
+  run('git', ['fetch', '--quiet', 'origin', '+refs/heads/factory:refs/remotes/origin/factory']);
+  const base = 'refs/remotes/origin/factory';
+  run('git', ['merge-base', '--is-ancestor', sha, base]);
+  const account = JSON.parse(run('gh', ['api', 'user', '--hostname', remote.host]));
+  if (!Number.isSafeInteger(account.id) || typeof account.login !== 'string' || !/^[a-z0-9-]+$/i.test(account.login)) throw new Error('Could not identify the public GitHub account.');
+  const email = account.id + '+' + account.login + '@users.noreply.github.com';
+  const scratch = mkdtempSync(join(tmpdir(), 'cez-harness-revert-'));
+  const tree = join(scratch, 'checkout');
+  const body = join(scratch, 'pr.md');
+  try {
+    run('git', ['worktree', 'add', '--detach', tree, base]);
+    run('git', ['-c', 'user.name=Cezar Factory', '-c', 'user.email=' + email, '-c', 'commit.gpgSign=false', 'revert', '--no-edit', sha], tree);
+    run('git', ['push', 'origin', 'HEAD:refs/heads/' + branch], tree);
+    writeFileSync(body, 'The harness was rolled back after release ' + sha.slice(0, 12) + '. This reverts the release commit.\n');
+    return run('gh', [
+      'pr', 'create', '--repo', repo, '--base', 'factory', '--head', branch, '--draft',
+      '--title', 'Revert harness release ' + sha.slice(0, 12), '--body-file', body,
+    ], tree);
+  } finally {
+    if (existsSync(tree)) spawnSync('git', ['worktree', 'remove', '--force', tree], { cwd: REPO });
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
 async function rollback() {
-  const entryRoot = resolve(join(HOME, 'versions', 'current', 'node_modules', '@open-mercato', 'cezar'));
+  const entryRoot = realpathSync(join(HOME, 'versions', 'current', 'node_modules', '@open-mercato', 'cezar'));
   const su = await selfUpdate(entryRoot);
   const current = su.activeId();
-  const target = lastSwitch(current)?.previous;
+  const release = lastSwitch(current);
+  const target = release?.previous;
   if (!target || target === current) throw new Error('no previous release recorded to roll back to');
   say(`rolling back ${current} → ${target}`);
   const ok = await withReleaseHold(() => switchTo(su, target, current, { action: 'rollback', from: current }));
-  return ok ? 0 : 1;
+  if (!ok) return 1;
+  if (release.sha) {
+    try {
+      const url = await openRollbackPr(entryRoot, release.sha);
+      log({ action: 'revert-pr', sha: release.sha, id: target, result: 'ok', url });
+      say('opened revert PR ' + url);
+    } catch {
+      log({ action: 'revert-pr', sha: release.sha, id: target, result: 'failed' });
+      say('restored the previous version; could not open its revert PR');
+      return 4;
+    }
+  }
+  return 0;
 }
 
 try {
@@ -278,3 +431,5 @@ try {
   log({ action: flag('rollback') ? 'rollback' : flag('stage-only') ? 'stage' : 'switch', result: error.code === 'busy' ? 'busy' : 'failed', reason: error.message });
   process.exitCode = error.code === 'busy' ? 3 : 1;
 }
+
+await reportRelease().catch(() => say('could not deliver the harness release report'));

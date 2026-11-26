@@ -28,7 +28,7 @@ async function loopbackPort(): Promise<number> {
   });
 }
 
-async function stagingJson(url: string, body?: unknown): Promise<unknown> {
+export async function stagingJson(url: string, body?: unknown): Promise<unknown> {
   const response = await fetch(url, {
     signal: AbortSignal.timeout(3_000),
     redirect: 'error',
@@ -41,11 +41,16 @@ async function stagingJson(url: string, body?: unknown): Promise<unknown> {
 }
 
 /** Boot the candidate without the live project registry, managers or scheduler. */
-export async function withStagingCockpit<T>(entry: string, use: (api: string) => Promise<T>): Promise<T> {
+export async function withStagingCockpit<T>(
+  entry: string,
+  use: (api: string) => Promise<T>,
+  prepare?: (project: string) => Promise<void>,
+): Promise<T> {
   const scratch = await mkdtemp(join(tmpdir(), 'cez-staging-'));
   try {
     const project = join(scratch, 'project');
     await mkdir(project);
+    await prepare?.(project);
     const port = await loopbackPort();
     const instanceId = 'staging-' + randomUUID();
     const api = 'http://127.0.0.1:' + port + '/api/v1';

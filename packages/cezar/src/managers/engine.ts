@@ -40,6 +40,7 @@ import {
   type ManagerTaskAgent,
   type ManagerTaskBudgetInput,
   type QueuedCause,
+  type HarnessReleaseReport,
   type ManagerScoresQuery,
   type ScoresResponse,
   type RunBudgetResponse,
@@ -3415,6 +3416,26 @@ ${guidance}` : ''}`,
       fields: {},
       attentionKeys: [],
     });
+  }
+
+  reportHarnessRelease(projectId: string, report: HarnessReleaseReport): boolean {
+    if (this.disposed) return false;
+    const manager = this.deps.store.list().find(({ projects }) =>
+      projects !== 'all' && projects.length === 1 && projects[0] === projectId);
+    if (!manager) return false;
+    const messageId = `factory-release:${report.id}`;
+    if (this.deps.store.message(manager.id, messageId)) return true;
+    const current = report.version ?? report.commit.slice(0, 7);
+    const headline = `Harness release ${report.result.replaceAll('-', ' ')}`;
+    const text = [
+      `${headline} for ${current}${report.previous ? ` (previous ${report.previous})` : ''}.`,
+      ...(report.benchmark ? [
+        `Benchmark ${report.benchmark.passRate}%, baseline ${report.benchmark.baseline}%, tolerance ${report.benchmark.tolerance} points.`,
+      ] : []),
+      ...report.changes.map((change) => `- ${change}`),
+    ].join('\n');
+    this.postDirect(manager.id, { messageId, turn: 'watch', text, headline, fields: {}, attentionKeys: [] });
+    return true;
   }
 
   async scores(id: string, input: ManagerScoresQuery): Promise<ScoresResponse | ManagerRefusal> {
