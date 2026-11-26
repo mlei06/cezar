@@ -96,6 +96,7 @@ export function statusLabel(status: RunStatus): string {
 
 /** The trigger cell: `on issue.opened · every 5 min` for a poll, `scheduleLabel` for a schedule. */
 export function triggerLabel(automation: Pick<AutomationDefinition, 'kind' | 'events' | 'intervalSeconds' | 'schedule' | 'schedules' | 'trackerTrigger'>): string {
+  if (automation.kind === 'factory') return 'Check scored causes every hour'
   if (automation.kind === 'schedule') return schedulesOf(automation).map(scheduleLabel).join('; ')
   if (automation.kind === 'tracker') {
     const trigger = automation.trackerTrigger

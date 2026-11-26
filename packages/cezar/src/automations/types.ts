@@ -95,6 +95,7 @@ export const automationTaskSchema = z
 const fillGithubDefaults = (raw: unknown): unknown => {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
   const record = raw as Record<string, unknown>;
+  if (record.kind === 'factory') return { ...record, intervalSeconds: record.intervalSeconds ?? 3600 };
   if (record.kind === 'schedule') return { ...record, schedule: record.schedule ?? (Array.isArray(record.schedules) ? record.schedules[0] : undefined) };
   return {
     ...record,
@@ -112,7 +113,7 @@ export const automationDefinitionObjectSchema = z
     description: z.string().max(2_000).optional(),
     enabled: z.boolean().default(false),
     /** A definition written before schedules (spec 2026-09-14) has no `kind`: it is a poll. */
-    kind: z.enum(['github', 'schedule', 'tracker']).default('github'),
+    kind: z.enum(['github', 'schedule', 'tracker', 'factory']).default('github'),
     events: z.array(automationEventSchema).min(1).max(9).optional(),
     intervalSeconds: z.number().int().min(60).max(86_400).optional(),
     filters: automationFiltersSchema.optional(),
@@ -165,6 +166,12 @@ export const automationDefinitionObjectSchema = z
     }
     if (definition.deferredStart && (definition.kind !== 'schedule' || definition.schedule?.type !== 'once')) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['deferredStart'], message: 'a composer start requires a one-time schedule' });
+    }
+    if (definition.kind === 'factory') {
+      if (definition.id !== 'factory-improvement' || definition.task.workflow !== 'improve-factory' || definition.intervalSeconds !== 3600) {
+        ctx.addIssue({ code: 'custom', path: ['kind'], message: 'the built-in factory automation has a fixed workflow and hourly interval' });
+      }
+      return;
     }
     if (definition.kind === 'schedule') {
       if (!definition.schedule) {

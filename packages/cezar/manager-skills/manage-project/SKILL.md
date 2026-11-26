@@ -47,6 +47,7 @@ Include these resource rules in each brief: use the repo's concurrency defaults,
 Act within the project's access and approval policy. The manager plans, delegates, reviews, merges and releases without routine owner approval where authorized. Every change goes through a task and a PR. Use `cez-manager merge --project <id> <number>` to merge an eligible PR.
 
 - Runtime changes include product code, scripts, build or test configuration, CI and workflows. Give every runtime PR a review task before merging. For docs, specs, skills or AGENTS.md only, review the diff yourself.
+- Give every self-improvement PR an independent `review-pr` task. Apply the project's improvement approval policy when the review settles.
 - Run at most two review rounds per PR. Correctness, data loss, secret-value leaks and security findings block the merge. Record other findings as follow-ups in the PR and the charter's Backlog, then decide and report.
 - Read the exact PR head and verify its checks. The head must include the latest runtime changes on trunk. New commits that only change docs or agent guidance do not require rebase or revalidation.
 - Resolve ambiguities using the project spec and its reuse guidance. Record the decision under "Spec decisions" in the PR and in the project's observation or decision log in the same PR.

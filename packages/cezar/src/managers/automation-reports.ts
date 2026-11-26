@@ -17,6 +17,7 @@ export interface AutomationReportWatch {
   dataDir: string;
   store: RunStore;
   automation: (id: string) => AutomationDefinition | undefined;
+  factoryManager?: (projectId: string) => string | undefined;
   report: (input: AutomationRunReport) => 'posted' | 'duplicate' | 'skipped' | 'gone';
   /** The linked manager is gone: drop the link quietly. */
   unlink: (automationId: string) => void;
@@ -88,17 +89,18 @@ export function watchAutomationReports(watch: AutomationReportWatch): () => void
     const automationId = automationIdOf(run);
     if (!automationId || !watch.enabled()) return;
     const definition = watch.automation(automationId);
-    if (!definition?.report || definition.report.mode === 'none') return;
-    const { report } = definition;
+    if (!definition || (!definition.report && definition.kind !== 'factory') || definition.report?.mode === 'none') return;
     const outcome = SUCCESS.has(run.status) ? 'success' : 'failure';
     // Off the store's emit: the run's final events and index write land first.
     setImmediate(() => {
       void Promise.resolve(watch.projectId()).then((projectId) => {
+        const managerId = definition.report?.managerId ?? watch.factoryManager?.(projectId);
+        if (!managerId) return;
         const text = outcome === 'success' ? finalAssistantText(watch.dataDir, run.id) : undefined;
         const resumesAt = outcome === 'failure' ? resumeLabel(run.autoResumeAt, watch.timeZone) : undefined;
         const result = watch.report({
-          managerId: report.managerId,
-          mode: report.mode,
+          managerId,
+          mode: definition.report?.mode ?? 'post-result',
           projectId,
           automationId,
           automationName: definition.name,
@@ -109,7 +111,7 @@ export function watchAutomationReports(watch: AutomationReportWatch): () => void
           ...(resumesAt ? { resumesAt } : {}),
           attentionKeys: attentionKeys(projectId, run),
         });
-        if (result === 'gone') watch.unlink(automationId);
+        if (result === 'gone' && definition.report) watch.unlink(automationId);
       }).catch((error) => console.warn(`[cezar] automation report for ${run.id}: ${error instanceof Error ? error.message : String(error)}`));
     });
   };

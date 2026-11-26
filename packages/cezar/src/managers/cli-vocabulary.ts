@@ -3,7 +3,7 @@
  * them to tell routing from lookups (spec 2026-11-21-manager-short-sessions-and-memory § 2.3).
  */
 
-export const MANAGER_COMMANDS = ['status', 'attention', 'tasks', 'prs', 'task', 'workflows', 'secrets', 'skills', 'models', 'agents', 'scores', 'merge', 'automation', 'job', 'propose-action', 'rename', 'memory', 'history'] as const;
+export const MANAGER_COMMANDS = ['status', 'attention', 'tasks', 'prs', 'task', 'workflows', 'secrets', 'skills', 'models', 'agents', 'scores', 'improve', 'merge', 'automation', 'job', 'propose-action', 'rename', 'memory', 'history'] as const;
 export const MANAGER_TASK_SUBCOMMANDS = ['create', 'say', 'switch', 'cancel', 'retry', 'budget', 'follow', 'unfollow'] as const;
 export const MANAGER_JOB_SUBCOMMANDS = ['add', 'list', 'remove'] as const;
 export const MANAGER_MEMORY_SUBCOMMANDS = ['list', 'set', 'remove'] as const;
@@ -24,6 +24,7 @@ export const MANAGER_SUBCOMMANDS: Partial<Record<Command, readonly string[]>> = 
  *  itself acts; a set: those subcommands act. */
 export const MANAGER_ROUTES: Partial<Record<Command, true | ReadonlySet<string>>> = {
   merge: true,
+  improve: true,
   'propose-action': true,
   rename: true,
   task: new Set(['create', 'say', 'switch', 'follow', 'unfollow', 'cancel', 'retry', 'budget']),

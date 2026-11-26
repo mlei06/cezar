@@ -282,7 +282,7 @@ export const runRecordSchema = z.object({
       automationId: z.string(),
       automationRevision: z.number().int().positive(),
       receiptId: z.string(),
-      trigger: z.enum(['schedule', 'catch-up', 'manual']),
+      trigger: runRecordContract.shape.automationTrigger.unwrap().shape.trigger,
       occurrenceAt: z.string(),
     })
     .optional(),

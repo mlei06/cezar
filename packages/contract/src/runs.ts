@@ -385,7 +385,7 @@ export const runRecordSchema = z.object({
       automationId: z.string(),
       automationRevision: z.number(),
       receiptId: z.string(),
-      trigger: z.enum(['schedule', 'catch-up', 'manual']),
+      trigger: z.enum(['schedule', 'catch-up', 'manual', 'factory']),
       /** The scheduled wall-time instant (UTC ISO); for `manual`, the launch time. */
       occurrenceAt: z.string(),
     })

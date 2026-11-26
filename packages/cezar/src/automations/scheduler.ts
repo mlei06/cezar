@@ -47,6 +47,7 @@ export interface ProjectAutomationHandle {
   launch?: AutomationLauncher;
   launchSchedule?: ScheduleLauncher;
   launchTracker?: TrackerAutomationLauncher;
+  checkFactory?: (definition: import('./types.ts').AutomationDefinition) => Promise<{ runId: string } | { reason: string }>;
   onChange?: (automationId: string, revision: number) => void;
   now?: () => number;
 }
@@ -403,7 +404,20 @@ export class WorkspaceAutomationScheduler {
       for (const definition of store.list().filter((item) => item.enabled)) {
         const key = `${projectId}:${definition.id}`;
         live.add(key);
-        if (isGithubAutomation(definition)) {
+        const checkFactory = handle.checkFactory;
+        if (definition.kind === 'factory' && checkFactory) {
+          const at = Date.parse(store.state(definition.id)?.nextCheckAt ?? new Date(now).toISOString());
+          due.push({
+            key, at: this.notBefore(key, at, now, MIN_RETRY_MS), retryAfterMs: MIN_RETRY_MS,
+            fire: async () => {
+              const outcome = await checkFactory(definition);
+              if ('reason' in outcome && outcome.reason === 'another factory or automation check is in progress') {
+                throw new Error('Automation poll lease is held');
+              }
+              return outcome;
+            },
+          });
+        } else if (isGithubAutomation(definition)) {
           if (!handle.github) continue;
           const scheduler = new ProjectAutomationScheduler(handle);
           const at = Date.parse(store.state(definition.id)?.nextCheckAt ?? new Date(now).toISOString());
