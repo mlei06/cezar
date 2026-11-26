@@ -266,6 +266,21 @@ export function taskEventOf(projectId: string, run: RunRecord): TaskEvent | unde
   return undefined;
 }
 
+/** Threshold entries already form a durable ledger, including crossings missed at boot. */
+export function taskBudgetEvents(projectId: string, run: RunRecord): TaskEvent[] {
+  if (run.archived || !run.startedByManager || run.onBudget === 'park') return [];
+  return (run.budgetExceeded ?? []).map((entry) => {
+    const label = { usd: 'USD', tokens: 'input tokens', minutes: 'active minutes' }[entry.metric];
+    return {
+      state: 'budget',
+      at: entry.at,
+      ledger: `${projectId}/${run.id}:budget:${entry.metric}:${entry.limit}:${entry.multiple}`,
+      attentionKeys: [],
+      detail: `${entry.multiple}× the ${entry.limit} ${label} ceiling (${Number(entry.value.toFixed(2))} used)${entry.stepId ? ` in step ${entry.stepId}` : ''}`,
+    };
+  });
+}
+
 export function prAttention(projectId: string, prs: ManagerSnapshotPr[]): ManagerAttentionItem[] {
   const items: ManagerAttentionItem[] = [];
   for (const pr of prs) {

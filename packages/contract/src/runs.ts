@@ -129,6 +129,24 @@ export const runBudgetSchema = z.object({
 }).strict().refine((budget) => Object.values(budget).some((value) => value !== undefined), {
   message: 'budget must set usd, tokens or minutes',
 });
+export const runBudgetActionSchema = z.enum(['park', 'notify']);
+export const runBudgetResponseSchema = z.object({ budget: runBudgetSchema });
+export type RunBudgetResponse = z.infer<typeof runBudgetResponseSchema>;
+export const runBudgetThresholdSchema = z.object({
+  metric: z.enum(['usd', 'tokens', 'minutes']),
+  limit: usageCounterSchema,
+  value: usageCounterSchema,
+  multiple: z.union([z.literal(1), z.literal(2), z.literal(4)]),
+  at: z.string().datetime(),
+  stepId: z.string().optional(),
+});
+export type RunBudgetThreshold = z.infer<typeof runBudgetThresholdSchema>;
+export const runBudgetExceededEventSchema = z.object({
+  projectId: z.string(),
+  runId: z.string(),
+  threshold: runBudgetThresholdSchema,
+});
+export type RunBudgetExceededEvent = z.infer<typeof runBudgetExceededEventSchema>;
 
 /** Effective grants captured at launch, including nested/synthetic steps. Optional on old records. */
 /** Present after launch. An empty object records the omitted allowlist. */
@@ -468,6 +486,10 @@ export const runRecordSchema = z.object({
   /** An explicit task-wide agent-vault allowlist. The workflow still governs checks. */
   secretNames: agentStepSecretsSchema.optional(),
   budget: runBudgetSchema.optional(),
+  onBudget: runBudgetActionSchema.optional(),
+  budgetExceeded: z.array(runBudgetThresholdSchema).optional(),
+  /** Checkpointed wall time spent with an executing step. */
+  activeMs: usageCounterSchema.optional(),
   /** The PR head came from a fork: its check steps run without the project's or workspace's secrets. */
   untrustedHead: z.boolean().optional(),
   createdAt: z.string(),
@@ -1431,6 +1453,7 @@ export const createRunInputBaseSchema = z
     agentProfile: z.string().max(64).optional(),
     secrets: agentStepSecretsSchema.optional(),
     budget: runBudgetSchema.optional(),
+    onBudget: runBudgetActionSchema.optional(),
     /** 1–3. Above 1 the response is `{ runs }` rather than a single record. */
     variants: z.number().int().min(1).max(3).optional(),
     /** false → run in the repo working tree instead of an isolated worktree (read-only skills).

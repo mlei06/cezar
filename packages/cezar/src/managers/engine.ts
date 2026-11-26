@@ -38,6 +38,8 @@ import {
   type ManagerSummary,
   type ManagerTaskDetail,
   type ManagerTaskAgent,
+  type ManagerTaskBudgetInput,
+  type RunBudgetResponse,
   type ManagerAccountState,
   type ManagerAgentsResponse,
   type ManagerTaskMessageInput,
@@ -117,7 +119,7 @@ import { taskModelIssue, type TaskModelCatalog } from './task-model.ts';
 import { TurnStatsCollector } from './turn-stats.ts';
 import { chatPrompt, followupPrompt, jobPrompt, MANAGER_IMPORTANT, managerSystemPrompt, MANAGER_QUIET, sessionPreamble, watchPrompt } from './prompts.ts';
 import { claudeAutoMemory, memoryBytes, readMemory, removeMemoryEntry, renderMemory, setMemoryEntry, writeMemory, type MemoryFile } from './memory.ts';
-import { buildSnapshot, findRun, gateAttention, openTaskAskId, prTie, taskDetailRows, taskEventOf, type ManagerGithubFacts, type ManagerProjectSource, type TaskEvent } from './snapshot.ts';
+import { buildSnapshot, findRun, gateAttention, openTaskAskId, prTie, taskDetailRows, taskBudgetEvents, taskEventOf, type ManagerGithubFacts, type ManagerProjectSource, type TaskEvent } from './snapshot.ts';
 import {
   ageLabel,
   cardHeaders,
@@ -260,6 +262,7 @@ const TASK_STATE_LINE: Record<TaskEvent['state'], string> = {
   failed: 'Failed',
   'needs-you': 'Needs you',
   cancelled: 'Cancelled',
+  budget: 'Task budget reached',
 };
 
 const firstLine = (text: string | undefined, limit: number): string | undefined =>
@@ -2120,19 +2123,24 @@ export class ManagerEngine {
     });
     if (followers.length === 0) return;
     for (const run of runs) {
-      const event = taskEventOf(projectId, run);
-      if (!event) continue;
+      const settled = taskEventOf(projectId, run);
+      const events = taskBudgetEvents(projectId, run);
+      if (settled) events.push(settled);
       const rootId = run.dispatch?.parentRunId ? run.dispatch.rootRunId : run.id;
+      const ownKey = followKey(projectId, run.id);
       for (const { manager, follows } of followers) {
-        const key = follows[followKey(projectId, run.id)]
-          ? followKey(projectId, run.id)
-          : rootId !== run.id && event.state === 'needs-you' ? followKey(projectId, rootId) : undefined;
-        const follow = key ? follows[key] : undefined;
-        if (!key || !follow || msOf(event.at) < msOf(follow.at)) continue;
-        try {
-          this.postTaskEvent(manager, projectId, dataDir, run, event, key, rootId !== run.id ? getRun(rootId) ?? { id: rootId } : undefined);
-        } catch (error) {
-          console.warn(`[cezar] manager ${manager.id} task card: ${error instanceof Error ? error.message : String(error)}`);
+        for (const event of events) {
+          if (event.state === 'budget' && manager.id !== run.startedByManager?.id) continue;
+          const key = follows[ownKey]
+            ? ownKey
+            : rootId !== run.id && event.state === 'needs-you' ? followKey(projectId, rootId) : undefined;
+          const follow = key ? follows[key] : undefined;
+          if (!key || !follow || msOf(event.at) < msOf(follow.at)) continue;
+          try {
+            this.postTaskEvent(manager, projectId, dataDir, run, event, key, rootId !== run.id ? getRun(rootId) ?? { id: rootId } : undefined);
+          } catch (error) {
+            console.warn(`[cezar] manager ${manager.id} task card: ${error instanceof Error ? error.message : String(error)}`);
+          }
         }
       }
     }
@@ -3350,6 +3358,24 @@ export class ManagerEngine {
       status: after.get(run.id) ?? run.status,
       children: liveDescendants.filter((childId) => after.get(childId) === 'cancelled'),
     };
+  }
+
+  async raiseTaskBudget(id: string, input: ManagerTaskBudgetInput): Promise<RunBudgetResponse | ManagerRefusal> {
+    const scope = await this.toolScope(id, input.projectId, true);
+    if ('error' in scope) return scope;
+    if (managerAccessOf(scope.manager, input.projectId) === 'read') {
+      return { error: 'This project is read-only for this manager.', status: 403 };
+    }
+    const run = findRun(scope.source?.runs() ?? [], input.runId);
+    if (!run) return { error: 'task not found', status: 404 };
+    if (run.startedByManager?.id !== id) {
+      return { error: 'Only the manager that started this task can raise its budget.', status: 403 };
+    }
+    const response = await this.forward(`/p/${encodeURIComponent(input.projectId)}/runs/${encodeURIComponent(run.id)}/budget`, {
+      method: 'PATCH', body: input.budget,
+    });
+    if (!response.ok) return ManagerEngine.refusalOf(response);
+    return (await response.json()) as RunBudgetResponse;
   }
 
   async switchTask(id: string, input: ManagerSwitchTaskInput): Promise<ManagerCreateTaskResponse | ManagerRefusal> {

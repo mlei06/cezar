@@ -4477,6 +4477,33 @@ describe('ManagerEngine', () => {
       expect(Object.keys(store.state(id).reported)).toContain(`task-review:alpha:new-run:${done.finishedAt}`);
     });
 
+    it('follows up once for each newly crossed budget threshold while a task is running', async () => {
+      const engine = followedEngine();
+      const id = await started(engine);
+      const first = { metric: 'tokens', limit: 50000, value: 55000, multiple: 1, at: later(1), stepId: 'implement' } as const;
+      const working = run({ id: 'new-run', startedByManager: { id, name: 'Lead' }, budgetExceeded: [first] });
+      runs = [working];
+      backend.scripts.push(say('Reviewing the budget.'));
+      engine.taskChanged('alpha', dataDir(), working, () => undefined);
+      engine.taskChanged('alpha', dataDir(), working, () => undefined);
+      await vi.waitFor(() => expect(assistants(id)).toHaveLength(2), { timeout: 5000 });
+      await settled(engine);
+      expect(cards(id)).toHaveLength(1);
+      expect(cards(id)[0]).toMatchObject({ taskReport: { state: 'budget' } });
+      expect(prompts()[0]).toContain('1× the 50000 input tokens ceiling (55000 used) in step implement');
+
+      const laterRun = { ...working, budgetExceeded: [first, { ...first, value: 102000, multiple: 2 as const, at: later(2) }] };
+      runs = [laterRun];
+      backend.scripts.push(say('Reviewing the second alert.'));
+      engine.taskChanged('alpha', dataDir(), laterRun, () => undefined);
+      engine.reconcileProject('alpha', dataDir(), runs);
+      await vi.waitFor(() => expect(assistants(id)).toHaveLength(4), { timeout: 5000 });
+      await settled(engine);
+      expect(cards(id)).toHaveLength(2);
+      expect(prompts()).toHaveLength(2);
+      expect(prompts()[1]).toContain('2× the 50000 input tokens ceiling (102000 used)');
+    });
+
     it('hands a waiting task\'s own words to the follow-up, which asks them on a question card', async () => {
       const engine = followedEngine();
       const id = await started(engine);

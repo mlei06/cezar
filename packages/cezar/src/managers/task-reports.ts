@@ -1,6 +1,6 @@
 import type { RunRecord, RunStore } from '../runs/store.ts';
 import type { ManagerEngine } from './engine.ts';
-import { taskEventOf } from './snapshot.ts';
+import { taskBudgetEvents, taskEventOf } from './snapshot.ts';
 
 /**
  * Tells the manager engine when a run changes into something a follower hears about (spec
@@ -19,7 +19,11 @@ export interface TaskReportWatch {
 }
 
 /** The event's identity without the project id: only a change of it is worth a look. */
-const signature = (run: RunRecord): string | undefined => taskEventOf('', run)?.ledger;
+const signature = (run: RunRecord): string | undefined => {
+  const settled = taskEventOf('', run)?.ledger;
+  const budget = taskBudgetEvents('', run).at(-1)?.ledger;
+  return budget ? `${settled ?? ''}:${budget}` : settled;
+};
 
 /** What ends a manager card about the run (Questions inbox spec): archived, done, review, cancelled. */
 const endOf = (run: RunRecord): string | undefined =>

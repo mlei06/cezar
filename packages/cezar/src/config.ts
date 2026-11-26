@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { perRunner } from '@open-mercato/cezar-contract';
-import { worktreeLifecycleConfigSchema } from '@open-mercato/cezar-contract';
+import { runBudgetSchema, worktreeLifecycleConfigSchema } from '@open-mercato/cezar-contract';
 import { DEFAULT_ARCHIVED_TASK_DELETE_DAYS, DEFAULT_WORKTREE_IDLE_DAYS, loadWorkspaceConfig, type WorkspaceConfig } from './workspace/config.ts';
 import { RUNNER_IDS } from './core/agent-runner.ts';
 
@@ -33,6 +33,7 @@ export const DEFAULT_WORKTREE_RETENTION = 10;
 const worktreeRetentionSchema = z.number().int().min(0).max(1000);
 
 export const configSchema = z.object({
+  factory: z.object({ budget: runBudgetSchema.optional().catch(undefined) }).passthrough().optional().catch(undefined),
   // Runtime lifecycle gates use the strict reader, never this boot-safe fallback.
   worktreeLifecycle: worktreeLifecycleConfigSchema.optional().catch(undefined),
   skillsRepos: z.array(skillsRepoSchema).default(DEFAULT_SKILLS_REPOS),
