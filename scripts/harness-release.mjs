@@ -10,6 +10,7 @@
 //   flags: --force (skip the idle wait)  --wait-minutes N (default 15)  --no-restart
 //          --health-url URL (default http://127.0.0.1:4321/api/v1/health)  --keep N (default 5)
 //          --unit NAME (default cezar)  --skip-checks (build only; no typecheck/tests)
+//          --stage-only (build and check an isolated cockpit; leave the live version active)
 //          --simulate-unhealthy (test the automatic rollback: the new version's health check fails)
 import { execFileSync, spawnSync } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
@@ -194,6 +195,15 @@ async function release() {
   }
   log({ action: 'build', sha, result: 'ok' });
 
+  if (flag('stage-only')) {
+    const stagingModule = join(packageRoot, 'dist', 'self-update', 'staging.js');
+    const { smokeStagedHarness } = await import(pathToFileURL(stagingModule).href);
+    await smokeStagedHarness(join(packageRoot, 'dist', 'index.js'));
+    log({ action: 'stage', sha, result: 'ok' });
+    say('candidate completed its isolated smoke task');
+    return 0;
+  }
+
   const su = await selfUpdate(packageRoot);
   const previous = su.activeId();
   const linked = su.linkCheckout(packageRoot, branch);
@@ -226,6 +236,6 @@ try {
   process.exitCode = flag('rollback') ? await rollback() : await release();
 } catch (error) {
   say(`failed: ${error.message}`);
-  log({ action: flag('rollback') ? 'rollback' : 'switch', result: error.code === 'busy' ? 'busy' : 'failed', reason: error.message });
+  log({ action: flag('rollback') ? 'rollback' : flag('stage-only') ? 'stage' : 'switch', result: error.code === 'busy' ? 'busy' : 'failed', reason: error.message });
   process.exitCode = error.code === 'busy' ? 3 : 1;
 }
