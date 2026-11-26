@@ -1,6 +1,6 @@
 # The self-improving factory
 
-Status: draft v5.21, 2026-11-26. Fork: `mlei06/cezar`, trunk `factory`. Spec owner: the overseer (see the roadmap). Implementation plan: `2026-11-25-self-improving-factory-roadmap.md`. Findings during the build: `2026-11-25-self-improving-factory-observations.md`.
+Status: draft v5.22, 2026-11-26. Fork: `mlei06/cezar`, trunk `factory`. Spec owner: the overseer (see the roadmap). Implementation plan: `2026-11-25-self-improving-factory-roadmap.md`. Findings during the build: `2026-11-25-self-improving-factory-observations.md`.
 
 ## TLDR
 
@@ -724,7 +724,7 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
 
 ## Security and privacy
 
-- **What the judge sees:** transcripts are rendered with every value redacted that Cezar redacts today (host and run secrets, token shapes, `agents` and `checks` secret values), before they reach the judge.
+- **What the judge sees:** redact inputs before formatting and shortening them for the judge. Include the preserved brief and cited spec text with the transcript and metrics. Apply the existing token patterns, host values, live run values captured before teardown, and values in the workspace and project secret stores. Scoring requires redaction even when run logging opts out. If the secret store is unreadable, record a scoring error.
 - **Where the judge runs:** the default judge is self-hosted, so transcripts stay on the internal network. Choosing a hosted judge model is a settings change with a warning in Settings.
 - **Scores:** reasoning and evidence quote transcripts, so the same redaction applies before storing them.
 - **Improvement runs** are ordinary tasks, with the project's secrets and grants. They can't widen secrets or permissions without the owner (D6).
@@ -831,6 +831,7 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
 
 ## Changelog
 
+- **v5.22:** D5 redacts the full judge input, including the preserved brief, and redacts parsed verdicts before storage and events. Logging preferences apply to run logs. Scoring protects its own model boundary.
 - **v5.21:** D5 requires OpenCode's stateless text generation for the judge. When the installed version cannot provide it, scoring records a configuration error.
 - **v5.20:** D5 defines the two-attempt context limit fallback and accepts a single fenced JSON object. The scope scorer reads explicitly cited decision headings from the run's pinned commit. It excludes unrelated sections and working-copy edits.
 
