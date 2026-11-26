@@ -11839,10 +11839,21 @@ export class RunManager {
       let result = await checkImprovementStep(this.dataDir, this.repoRoot, state.cwd, run, step.id)
         .catch(() => ({ ok: false, output: 'Unable to validate this improvement.' }));
       if (result?.ok && step.id === IMPROVEMENT_CHECK) {
-        const benchmark = await checkImprovementBenchmarks({
-          project: { root: this.repoRoot, dataDir: this.dataDir, store: this.store, manager: this },
-          cwd: state.cwd, run, cancelled: () => state.cancelled,
-        }).catch(() => ({ ok: false, output: 'The improvement benchmark could not be verified.' }));
+        let benchmark: Awaited<ReturnType<typeof checkImprovementBenchmarks>>;
+        const parked = await this.parkGraphNode(runId, state, step.id, { activity: 'monitoring' }, (resume) => {
+          let abandoned = false;
+          // Replays use the same task queue. Yield the parent slot while their scores settle.
+          void checkImprovementBenchmarks({
+            project: { root: this.repoRoot, dataDir: this.dataDir, store: this.store, manager: this },
+            cwd: state.cwd, run, cancelled: () => state.cancelled || abandoned,
+          })
+            .then((value) => { benchmark = value; }, () => {
+              benchmark = { ok: false, output: 'The improvement benchmark could not be verified.' };
+            })
+            .then(() => resume({ kind: 'answer', text: '' }));
+          return () => { abandoned = true; };
+        });
+        if (parked.kind !== 'answer') benchmark = { ok: false, output: 'The improvement benchmark was stopped.' };
         if (benchmark) result = benchmark;
       }
       if (result) {

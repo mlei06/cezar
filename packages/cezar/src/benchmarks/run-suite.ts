@@ -45,12 +45,12 @@ function withTaskAgentSelection<T extends { runner?: string; model?: string; rea
 }
 
 async function replayTarget(project: BenchmarkProject, task: BenchmarkTask, workflow: WorkflowDef,
-  choice: BenchmarkConfiguration, meta: Awaited<ReturnType<typeof runHarnessVersion>>,
+  choice: BenchmarkConfiguration, meta: Awaited<ReturnType<typeof runHarnessVersion>>, useSavedSelection: boolean,
 ): Promise<{ input: StartRunInput; workflow: WorkflowDef } | { reason: string }> {
   const local = await loadConfig(project.root);
   const agentSteps = workflow.steps.filter((step) => !step.command);
   if (agentSteps.some((step) => step.runner && step.runner !== 'codex')) return { reason: 'A workflow agent is outside the current replay sandbox.' };
-  const saved = task.sourceRun ? project.store.getRun(task.sourceRun) : undefined;
+  const saved = useSavedSelection && task.sourceRun ? project.store.getRun(task.sourceRun) : undefined;
   const implicit = agentSteps[0]?.model;
   if (!choice.model && agentSteps.some((step) => step.model !== implicit)) return { reason: 'Name a model for this configuration to compare a mixed-model workflow.' };
   if ((choice.model || choice.effort) && agentModelsLocked(project.root)) return { reason: 'The project locks its configured agent models.' };
@@ -113,7 +113,7 @@ export async function runBenchmarkSuite(project: BenchmarkProject, name: string,
       const groupId = randomUUID();
       let variant = 0;
       for (const choice of choices) {
-        const target = available && workflow ? await replayTarget(project, task, workflow, choice, meta)
+        const target = available && workflow ? await replayTarget(project, task, workflow, choice, meta, !workflowOverrides)
           : { reason: 'The exact project commit or workflow is unavailable.' };
         if ('reason' in target) {
           batch.runs.push({ state: 'unavailable', task: taskId, config: choice.name, reason: target.reason });

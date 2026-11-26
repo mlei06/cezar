@@ -82,35 +82,51 @@ export async function checkImprovementBenchmarks(input: {
   const reportPath = join(project.dataDir, 'factory', 'improvement-benchmarks', run.id + '.json');
   const saved = await readFile(reportPath, 'utf8').then((raw) => gateReceiptSchema.parse(JSON.parse(raw))).catch(() => undefined);
   const receipt = saved?.commit === commit ? saved : { commit, batches: [] };
-  for (const entry of matches) {
-    if (input.cancelled()) return { ok: false, output: 'Benchmark admission was cancelled.' };
-    if (receipt.batches.some(({ suite }) => suite === entry.name)) continue;
-    const candidate = await runBenchmarkSuite(project, entry.name, entry.suite, entry.tasks, undefined, workflows);
-    if ('reason' in candidate) return { ok: false, output: candidate.reason };
-    receipt.batches.push({ suite: entry.name, id: candidate.batch.id });
-    await atomicWriteJson(reportPath, receipt);
-  }
-  const batches = receipt.batches.flatMap(({ suite, id }) =>
-    readBenchmarkBatches(project.dataDir, suite).filter((batch) => batch.id === id));
-  if (batches.length !== receipt.batches.length) return { ok: false, output: 'The benchmark batch records are incomplete.' };
-  const until = Date.now() + 10 * 60_000;
-  while (!input.cancelled() && Date.now() < until) {
-    const partial = (await Promise.all(batches.map((batch) => benchmarkResults(project, batch)))).flatMap(({ rows }) => rows);
-    if (partial.some(({ unavailable }) => unavailable > 0)) return { ok: false, output: 'A configured benchmark route is unavailable in replay.' };
-    if (partial.every(({ unsettled, pending }) => unsettled === 0 && pending === 0)) {
-      if (partial.some(({ missing, passed, failed }) => missing > 0 || passed + failed === 0)) {
-        return { ok: false, output: 'The benchmark finished without all required scores.' };
+  let complete = false;
+  try {
+    for (const entry of matches) {
+      if (input.cancelled()) return { ok: false, output: 'Benchmark admission was cancelled.' };
+      if (receipt.batches.some(({ suite }) => suite === entry.name)) continue;
+      const configured = entry.suite.configurations;
+      const inheritsCandidate = configured.some(({ runner, model, effort }) => !runner && !model && !effort);
+      if (!inheritsCandidate && configured.length >= 8) {
+        return { ok: false, output: 'Reserve a configuration without agent overrides for the candidate workflow.' };
       }
-      await atomicWriteJson(reportPath, { ...receipt, rows: partial });
-      await atomicWriteJson(join(artifactsDir(project.dataDir, run.id), 'improvement-benchmarks.json'), { commit, rows: partial });
-      return { ok: true, output: 'The benchmark matrix was recorded with this improvement.' };
+      let name = 'candidate';
+      while (configured.some((configuration) => configuration.name === name)) name += '-new';
+      const suite = inheritsCandidate ? entry.suite : { ...entry.suite, configurations: [...configured, { name }] };
+      const candidate = await runBenchmarkSuite(project, entry.name, suite, entry.tasks, undefined, workflows);
+      if ('reason' in candidate) return { ok: false, output: candidate.reason };
+      receipt.batches.push({ suite: entry.name, id: candidate.batch.id });
+      await atomicWriteJson(reportPath, receipt);
     }
-    await setTimeout(2500);
+    const batches = receipt.batches.flatMap(({ suite, id }) =>
+      readBenchmarkBatches(project.dataDir, suite).filter((batch) => batch.id === id));
+    if (batches.length !== receipt.batches.length) return { ok: false, output: 'The benchmark batch records are incomplete.' };
+    const until = Date.now() + 10 * 60_000;
+    while (!input.cancelled() && Date.now() < until) {
+      const partial = (await Promise.all(batches.map((batch) => benchmarkResults(project, batch)))).flatMap(({ rows }) => rows);
+      if (partial.some(({ unavailable }) => unavailable > 0)) return { ok: false, output: 'A configured benchmark route is unavailable in replay.' };
+      if (partial.every(({ unsettled, pending }) => unsettled === 0 && pending === 0)) {
+        if (partial.some(({ missing, passed, failed }) => missing > 0 || passed + failed === 0)) {
+          return { ok: false, output: 'The benchmark finished without all required scores.' };
+        }
+        await atomicWriteJson(reportPath, { ...receipt, rows: partial });
+        await atomicWriteJson(join(artifactsDir(project.dataDir, run.id), 'improvement-benchmarks.json'), { commit, rows: partial });
+        complete = true;
+        return { ok: true, output: 'The benchmark matrix was recorded with this improvement.' };
+      }
+      await setTimeout(2500);
+    }
+    return { ok: false, output: 'The benchmark check did not finish in time.' };
+  } finally {
+    if (!complete) {
+      for (const { suite, id } of receipt.batches) {
+        const batch = readBenchmarkBatches(project.dataDir, suite).find((candidate) => candidate.id === id);
+        for (const row of batch?.runs ?? []) if (row.state === 'started') project.manager.cancel(row.runId);
+      }
+    }
   }
-  for (const batch of batches) {
-    for (const row of batch.runs) if (row.state === 'started') project.manager.cancel(row.runId);
-  }
-  return { ok: false, output: 'The benchmark check did not finish in time.' };
 }
 
 export async function improvementBenchmarkSummary(dataDir: string, run: RunRecord, currentCommit: string | null) {

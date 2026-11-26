@@ -1,6 +1,6 @@
 # The self-improving factory
 
-Status: draft v5.36, 2026-11-26. Fork: `mlei06/cezar`, trunk `factory`. Spec owner: the overseer (see the roadmap). Implementation plan: `2026-11-25-self-improving-factory-roadmap.md`. Findings during the build: `2026-11-25-self-improving-factory-observations.md`.
+Status: draft v5.37, 2026-11-26. Fork: `mlei06/cezar`, trunk `factory`. Spec owner: the overseer (see the roadmap). Implementation plan: `2026-11-25-self-improving-factory-roadmap.md`. Findings during the build: `2026-11-25-self-improving-factory-observations.md`.
 
 ## TLDR
 
@@ -496,7 +496,7 @@ startCommit: 97d817021174027d647df63c890423771ef9d330
 - **Growing a suite:** `cez benchmark add <run> --suite s` writes a task file from a run's identity and inputs: its brief as the prompt, its outcome as the success criteria, its start commit.
 - **Running a suite:** `cez benchmark <suite> [--config c]` replays every task under every configuration, `times` each, as one variant group per task. It reports the matrix (pass rate, cost and time per configuration), stored as a task artifact and shown in the Factory view.
 - **When suites run automatically:**
-  - an improvement run that changes a workflow's model runs the matching suite and puts the matrix in its PR;
+  - an improvement run that changes a workflow's model runs the matching suite and puts the matrix in its PR. It yields its workspace task slot while the scheduled replays and their scores settle;
   - a harness release always runs the harness suite (D9).
 
 ### D9. The self-maintaining harness
@@ -854,6 +854,7 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
 
 ## Changelog
 
+- **v5.37:** D8 releases an improvement's queue slot while it waits for its own benchmark. Failed, interrupted and timed-out gates cancel their remaining queued or active replay variants. An automatic matrix includes a configuration that inherits the exact candidate workflow's agent selection.
 - **v5.36:** D5 prioritizes ready Outcome and Efficiency during a run's first minute. A single worker processes each ready priority group newest first.
 - **v5.35:** D8 allows the configured OpenCode route for explicitly tool-free text benchmarks. Use the existing stateless generation mechanism and empty scratch directory. Workflows with tool grants still require the Codex replay broker.
 - **v5.34:** D6 records the checked commit and the decisions before submitting a PR. Final autosave must retain the same commit. Recovery tracks an already-open PR even if the decisions artifact has been removed. The checkpoint preserves recorded outcomes.
