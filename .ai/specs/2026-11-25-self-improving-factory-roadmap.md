@@ -346,6 +346,8 @@ New features and improvements found so far, not yet scheduled into a milestone. 
 | B22 | **Test runs overload the host:** tasks override the repository's 2-worker Vitest cap (`--maxWorkers=5`) and start a second full suite in the same worktree while one runs; with several tasks in parallel the laptop crashed. Cezar could give each task a CPU share (for example `nice` and a cgroup CPU limit per run) and the `implement` check steps should run the suite once, with the default | M1, after the crashes | M2 (#19 released; niceness 5 verified live) |
 | B23 | **Read-only review tasks have no `gh`,** so they can't confirm a PR's live head or target and compare against their local `origin/factory` instead | review 30fe42f2 | M2 (read-only forge commands verified in code) |
 | B24 | **OpenCode 2.x read-only sessions:** verify that watch and read-only tasks use native controls throughout. The ordinary session request currently sends an allow rule, and the legacy configuration cannot by itself enforce the V2 boundary. | M3-3 judge review | M3 follow-up |
+| B25 | **Finish live judge calibration and latency verification:** keep the input-preservation and cited-cause requirements. Compare the settled blind sample before enabling improvement. Revisions to rubrics or the judge route need the owner. | The first 45 minutes yielded 16 usable verdicts, 11 errors and 51 pending calls. Two installed fixture timings exceeded 60 seconds. | M3 acceptance |
+| B26 | **Verify replay isolation for more runners:** replay requires an enforced filesystem and tool boundary before a runner is eligible. | D8 Codex and check fixtures passed; OpenCode and Claude replay remain outside the verified boundary. | after M4 |
 
 ## Risks
 
