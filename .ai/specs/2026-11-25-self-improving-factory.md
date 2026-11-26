@@ -1,6 +1,6 @@
 # The self-improving factory
 
-Status: draft v5.16, 2026-11-25. Fork: `mlei06/cezar`, trunk `factory`. Spec owner: the overseer (see the roadmap). Implementation plan: `2026-11-25-self-improving-factory-roadmap.md`. Findings during the build: `2026-11-25-self-improving-factory-observations.md`.
+Status: draft v5.17, 2026-11-25. Fork: `mlei06/cezar`, trunk `factory`. Spec owner: the overseer (see the roadmap). Implementation plan: `2026-11-25-self-improving-factory-roadmap.md`. Findings during the build: `2026-11-25-self-improving-factory-observations.md`.
 
 ## TLDR
 
@@ -157,21 +157,25 @@ steps:
 | `plan` | ordinary task route, read-only | 1.5M, 20 min | specs, investigation, design |
 | `review-pr` (exists) | ordinary task route, read-only | 1.5M, 20 min | PR review |
 | `operate` | the machine's low-reasoning model (`factory.models.lowReasoning`) | 800k, 20 min | running known workflows or scripts, status, summaries, moving docs |
-| `improve-factory` | codex, gpt-6.2-sol | 4M, 45 min | improvement runs (D6); owner-protected |
+| `improve-factory` | project default | 4M, 45 min | improvement runs (D6); owner-protected |
 
 **`implement` validates with check steps, not with the model.** Its graph is an agent step, then one check step per validation command, with a failing check looping back to the agent (at most twice). Waiting for the tests is then the engine's job. The commands come from the project's existing `.ai/agentic.config.json` (`validation.commands`, which the om-* skills already read). When the file is missing, or has no `validation.commands`, they come from the project's `test` script. With neither, `implement` runs no checks and opens the PR with a note that no validation is configured (v5.9). Guidance in a skill wasn't enough: the M0 warm-up task polled its test run across eight model turns although `factory-work` told it not to (observation M0-6).
 
-The model `low-reasoning` is an alias that resolves, per machine, to the `factory.models.lowReasoning` setting (a runner and a model). The harness names no provider: a machine points it at whatever cheap or self-hosted model it has. Unset, it resolves to the project's default runner at low effort, with a note on the task. A project overrides a built-in by committing a workflow with the same name.
+The `low-reasoning` and `high-reasoning` aliases resolve to `factory.models.lowReasoning` and `factory.models.highReasoning`, each a runner and model pair in local workspace settings. An unset alias uses the project's default runner and model, with low or high effort where supported and a note on the task. A project overrides a built-in by committing a workflow with the same name.
 
 **Delegated task routing (M2).** The manager chooses a workflow and decides whether the work needs high reasoning. Cezar resolves the task's route at admission using the workspace's configured accounts and models:
 
 | Work | Owner's preferred route |
 |---|---|
 | Following a known playbook, routine checks and summaries | Mistral through OpenCode via `low-reasoning`. Keep side effects in deterministic check steps when the workflow supports it. The OpenAI cutoff does not apply to this route. |
-| Ordinary implementation, investigation and review | GPT‑6.2 Sol through Codex. For new work, switch to Opus 5.5 through Claude Code when a current applicable OpenAI usage window for the selected account is above 80%. Use Sol again when the window resets or the current reading is at or below 80%. |
+| Ordinary implementation, investigation and review | The project default runner and model, for example GPT‑6.2 Sol through Codex. For new work, use the configured `high-reasoning` route when current applicable usage for the selected OpenAI account exceeds the threshold. |
 | Work explicitly requiring high reasoning | Opus 5.5 through Claude Code from the start. |
 
-Use the existing account usage readings and limit holds. Treat stale or unavailable percentages as unknown and keep the normal account-capacity checks. If the selected account is unavailable, use the existing eligible-account and queue rules without silently switching a low- or high-reasoning task to a different tier. Do not move a running task just because a reading changed. Record the effective runner, model and reason on the run. Preserve explicit step settings in project workflows, and preserve the current defaults where no new routing profile is configured. Machine-specific model identifiers and credentials stay in workspace settings.
+Extend the existing manager account selection in `managers/task-agent-choice.ts`. It already skips accounts held at their usage limits. Apply `factory.models.switchAbove` to the same account's applicable usage readings at admission. It is a share with a default of `0.8`. Stale or unknown readings leave the ordinary route in place. The existing eligible-account and queue rules still govern capacity. An admitted run keeps its selected route when usage changes. Explicit workflow pins take precedence.
+
+When the primary low-reasoning model is unreachable, use the first eligible pair with capacity from the ordered `factory.models.lowReasoningFallback` list. The owner's local order is a cheap hosted Codex model followed by a cheap hosted Claude Code model. Resolve reachability at admission with a short cached probe of the primary's model endpoint through its configured relay. Target a five-second timeout and a one-minute cache. When every reachable allowed route is at its usage limit, use the existing account queue. When the low tier has no configured primary or fallbacks, preserve its zero-config behavior. Low-to-low hosted fallback is the only tier substitution for an explicitly low or high task. The run stores the selected runner and model and adds a note when the low-tier fallback is used.
+
+Keep model identifiers and endpoint details in local settings. Use generic placeholders in repo code, tests and fixtures.
 
 The manager's **own chat model stays user-selected**. The owner's preferred selection is GPT‑6.2 Sol. The 80% policy only routes delegated tasks and never changes the manager's chat model.
 
@@ -448,7 +452,7 @@ Two extensions to variants make this work:
 description: Deploy-status tasks for a deployment project
 configurations:
   - { name: low-reasoning, model: low-reasoning }
-  - { name: sol-low, runner: codex, model: gpt-6.2-sol, effort: low }
+  - { name: comparison, runner: codex, model: example-model, effort: low }
 tasks: [ci-status, prod-health]
 scorers: [outcome, efficiency]
 times: 3
@@ -590,7 +594,7 @@ The manager still never writes code itself (every change is a task, D11), and ha
 **Metrics summary:**
 
 ```json
-{ "runId": "…", "workflow": "implement", "runner": "codex", "model": "gpt-6.2-sol",
+{ "runId": "…", "workflow": "implement", "runner": "codex", "model": "example-model",
   "startedBy": "manager | owner | automation | improvement | benchmark | replay",
   "startCommit": "<sha>", "harnessVersion": { "id": "…", "commit": "<sha>" },
   "wallMs": 0, "activeMs": 0, "modelMs": 0, "toolMs": 0,
@@ -618,7 +622,7 @@ The manager still never writes code itself (every change is a task, D11), and ha
 
 ```
 # Run <id8>: <title>
-workflow implement · codex gpt-6.2-sol · started by manager · status done · PR <url>
+workflow implement · codex example-model · started by manager · status done · PR <url>
 ## Brief
 <task text>
 ## Metrics
@@ -643,6 +647,9 @@ workflow implement · codex gpt-6.2-sol · started by manager · status done · 
 |---|---|---|
 | `judge.runner`, `judge.model` | unset (the project's default runner at low effort) | no |
 | `models.lowReasoning.runner`, `models.lowReasoning.model` | unset (the project's default runner at low effort) | no |
+| `models.highReasoning.runner`, `models.highReasoning.model` | unset (the project's default runner at high effort) | no |
+| `models.switchAbove` | `0.8` | no |
+| `models.lowReasoningFallback` | empty ordered list of runner and model pairs | no |
 | `scoring.enabled` | true | yes |
 | `scoring.sampling.<scorer>` | 100 | yes |
 | `budget.tokens`, `budget.minutes` | 3,000,000, 30 | yes |
@@ -818,6 +825,8 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
 4. **Scoring the managers:** apply the same metrics, scorers and improvement to manager turns, after D6.
 
 ## Changelog
+
+- **v5.17:** D2 keeps ordinary tasks on project defaults, adds the high-reasoning alias and configurable usage threshold to existing account selection, and adds cached admission-time probing and ordered hosted fallbacks for the low tier. Manager chat stays user-selected.
 
 - **v5.16:** D2 adds a three-tier delegated task ladder and an 80% OpenAI usage threshold for admitting new ordinary tasks. Manager chat stays user-selected. M2 owns adoption and acceptance.
 

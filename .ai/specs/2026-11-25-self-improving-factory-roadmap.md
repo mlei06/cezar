@@ -131,7 +131,7 @@ The weekly report's project section is part of D10 and ships with M5.
 3. **`TurnStatsCollector` for task sessions,** per step.
 4. **The metrics summary:** tool durations and output sizes from the event log; `GET /runs/:id/metrics`.
 5. **Cockpit:** metrics in the task detail and budget state on the row.
-6. **Task model routing:** implement D2’s delegated-task ladder using existing usage readings. Keep the manager’s chat model user-selected.
+6. **Task model routing:** implement D2’s delegated-task ladder through existing account selection and usage readings. Add the high-reasoning alias, configurable threshold, and low-tier hosted fallback. Keep the manager’s chat model user-selected.
 
 **The prompt:**
 
@@ -143,6 +143,8 @@ The weekly report's project section is part of D10 and ships with M5.
 - live: a task given `--budget-tokens 50000` wakes the manager exactly once at 1× and again at 2×;
 - queued and parked time don't count;
 - new delegated tasks use the effective route from D2 at and above the 80% boundary. Routine operations and explicit workflow pins retain their own routes. Manager chat keeps its user-selected model.
+- the low tier uses its reachable primary. When the primary is unreachable, it uses the first hosted fallback with capacity. If the first is held, it tries the next. If all are held, the account queue applies. With no settings it preserves today’s defaults.
+- live: record one `operate` task using its primary with the VPN available and one using its fallback while the primary is unreachable. Verify the recorded runner, model and fallback note.
 
 **The overseer watches** whether the manager uses `task budget` sensibly when woken.
 
