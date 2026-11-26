@@ -9,6 +9,7 @@ import { connectionStatus, nativeConnectionStatus } from './connection-status'
 import { reconnectTopics } from './ws'
 import {
   runArtifactsEventSchema,
+  scoreChangedEventSchema,
   trackerChangedEventSchema,
   type ArtifactsBySubjectResponse,
   type RunArtifactsResponse,
@@ -951,6 +952,23 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
           if (name !== 'manager-delta') {
             noteQuestionsMaybeChanged(queryClient)
             noteAttentionMaybeChanged(queryClient)
+          }
+        })
+      }
+
+      for (const name of ['score.recorded', 'score.changed']) {
+        current.addEventListener(name, (event) => {
+          if (disposed || source !== current) return
+          lastFrameAt = Date.now()
+          try {
+            const parsed = scoreChangedEventSchema.safeParse(JSON.parse((event as MessageEvent<string>).data))
+            if (!parsed.success) return
+            const id = parsed.data.runId
+            void queryClient.invalidateQueries({
+              predicate: ({ queryKey }) => queryKey[1] === 'runs' && queryKey[2] === 'scores' && queryKey[3] === id,
+            })
+          } catch {
+            // Ignore a malformed event.
           }
         })
       }

@@ -40,6 +40,8 @@ import {
   type ManagerTaskAgent,
   type ManagerTaskBudgetInput,
   type QueuedCause,
+  type ManagerScoresQuery,
+  type ScoresResponse,
   type RunBudgetResponse,
   type ManagerAccountState,
   type ManagerAgentsResponse,
@@ -3400,6 +3402,15 @@ ${guidance}` : ''}`,
       fields: {},
       attentionKeys: [],
     });
+  }
+
+  async scores(id: string, input: ManagerScoresQuery): Promise<ScoresResponse | ManagerRefusal> {
+    const scope = await this.toolScope(id, input.projectId, false);
+    if ('error' in scope) return scope;
+    const query = new URLSearchParams({ groupBy: input.groupBy });
+    if (input.since) query.set('since', input.since);
+    const response = await this.forward(`/p/${encodeURIComponent(input.projectId)}/scores?${query}`);
+    return response.ok ? (await response.json()) as ScoresResponse : ManagerEngine.refusalOf(response);
   }
 
   async raiseTaskBudget(id: string, input: ManagerTaskBudgetInput): Promise<RunBudgetResponse | ManagerRefusal> {

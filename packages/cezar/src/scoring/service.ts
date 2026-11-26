@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import type { RecordedScore, ScoreRecordedEvent, TaskScoreEntry } from '@open-mercato/cezar-contract';
+import { isDeepStrictEqual } from 'node:util';
+import type { RecordedScore, RunScoreSummary, ScoreChangedEvent, ScoreRecordedEvent, TaskScoreEntry } from '@open-mercato/cezar-contract';
 import { loadConfig } from '../config.ts';
 import { ScorerCatalog } from '../factory/scorers.ts';
 import type { RunRecord, RunStore } from '../runs/store.ts';
@@ -39,6 +40,23 @@ function sampled(runId: string, scorer: string, percent: number): boolean {
   return hash / 2 ** 32 * 100 < percent;
 }
 
+function summarizeScores(scores: Record<string, TaskScoreEntry>, finishedAt: string): RunScoreSummary {
+  const ordered = [...new Set(['outcome', 'efficiency', 'procedure', 'scope', ...Object.keys(scores)])];
+  const scored = (name: string) => {
+    const entry = scores[name];
+    return entry?.status === 'scored' && entry.finishedAt === finishedAt ? entry.score : undefined;
+  };
+  const outcome = scored('outcome');
+  const efficiency = scored('efficiency');
+  const mainCause = ordered.map((name) => scored(name)?.causes[0]?.target).find((cause) => cause !== undefined);
+  return {
+    finishedAt,
+    ...(outcome ? { outcome: { label: outcome.label, pass: outcome.pass } } : {}),
+    ...(efficiency ? { efficiency: { label: efficiency.label, pass: efficiency.pass } } : {}),
+    ...(mainCause ? { mainCause } : {}),
+  };
+}
+
 export class ScoringService {
   private readonly catalog = new ScorerCatalog(true);
   private readonly queue = new JudgeQueue();
@@ -46,7 +64,8 @@ export class ScoringService {
   constructor(private readonly onScore: (event: ScoreRecordedEvent, project: ScoringProject, run: RunRecord) => void,
     private readonly judgeFor: (repoRoot: string) => Promise<JudgeRoute | { error: string }> = resolveJudgeRoute,
     private readonly secrets = new SecretStore(),
-    private readonly reconcileScores?: (project: ScoringProject, scores: readonly SettledScore[]) => void) {}
+    private readonly reconcileScores?: (project: ScoringProject, scores: readonly SettledScore[]) => void,
+    private readonly onChanged?: (event: ScoreChangedEvent) => void) {}
 
   watch(project: ScoringProject, recoveredSince?: number): () => void {
     if (!scoringEnabled()) return () => undefined;
@@ -140,7 +159,13 @@ export class ScoringService {
       let route: JudgeRoute | undefined;
       const stillCurrent = () => project.store.getRun(run.id) === run && settledAt(run) === finishedAt;
       const save = (value: TaskScoreEntry) => {
-        if (stillCurrent()) writeRunScore(project.dataDir, run.id, scorer.name, value);
+        if (!stillCurrent()) return;
+        writeRunScore(project.dataDir, run.id, scorer.name, value);
+        if (value.status === 'scored' || run.scoreSummary) {
+          const scoreSummary = summarizeScores(readRunScores(project.dataDir, run.id), finishedAt);
+          if (!isDeepStrictEqual(scoreSummary, run.scoreSummary)) project.store.updateRun(run.id, { scoreSummary });
+        }
+        if (value.status !== 'scored') this.onChanged?.({ projectId: project.id, runId: run.id });
       };
       const accepted = this.queue.enqueue({
         id: JSON.stringify([project.id, run.id, finishedAt, scorer.name]),

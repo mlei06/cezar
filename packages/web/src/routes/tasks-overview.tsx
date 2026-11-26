@@ -319,12 +319,16 @@ export function TasksOverview({
   const strips = React.useMemo(() => compareGroups(matching, view), [matching, view])
   const finished = React.useMemo(() => finishedRunCount(all), [all])
   // The time column is headed for what it prints, which follows the sort.
-  const columns = React.useMemo(
+  const columnChoices = React.useMemo(
     () =>
       taskColumnsForCapabilities({ tokens: showTokens, cost: showCost }).map((column) =>
         column.id === 'started' ? { ...column, label: sortTimeLabel(sortBy) } : column,
       ),
     [showTokens, showCost, sortBy],
+  )
+  const columns = React.useMemo(
+    () => columnChoices.filter((column) => !column.hideWhileFolded || isColumnExpanded(column.id, expandedColumns)),
+    [columnChoices, expandedColumns],
   )
   const unread = React.useMemo(() => unreadDoneCount(all), [all])
   const tableWindow = useWindowedRows<HTMLTableSectionElement>(items.length)
@@ -423,7 +427,7 @@ export function TasksOverview({
             onSortByChange={setSortBy}
             columns={
               <TaskColumnsMenu
-                columns={columns}
+                columns={columnChoices}
                 expandedColumns={expandedColumns}
                 onToggle={onToggleColumn}
                 disabled={columnsPending}
@@ -1444,6 +1448,18 @@ function TaskTableCell({
           {cost || <Dash />}
         </td>
       )
+    case 'outcomeScore':
+    case 'efficiencyScore':
+    case 'mainCause': {
+      const summary = run.scoreSummary?.finishedAt === run.finishedAt ? run.scoreSummary : undefined
+      const score = column.id === 'outcomeScore' ? summary?.outcome : column.id === 'efficiencyScore' ? summary?.efficiency : undefined
+      const label = column.id === 'mainCause' ? summary?.mainCause : score?.label
+      return (
+        <td data-column-id={column.id} className={cn(TD_BASE, 'text-xs capitalize')}>
+          {label ? <span title={score ? score.pass ? 'Pass' : 'Fail' : undefined}>{label.replaceAll('-', ' ')}</span> : <Dash />}
+        </td>
+      )
+    }
     case 'planLimit': {
       const cell = planLimitCell(run, planWindows, defaultRunner)
       return (

@@ -148,6 +148,15 @@ export const runBudgetExceededEventSchema = z.object({
 });
 export type RunBudgetExceededEvent = z.infer<typeof runBudgetExceededEventSchema>;
 
+const scoreColumnSchema = z.object({ label: z.string(), pass: z.boolean() });
+export const runScoreSummarySchema = z.object({
+  finishedAt: z.string().datetime(),
+  outcome: scoreColumnSchema.optional(),
+  efficiency: scoreColumnSchema.optional(),
+  mainCause: z.string().optional(),
+});
+export type RunScoreSummary = z.infer<typeof runScoreSummarySchema>;
+
 /** Effective grants captured at launch, including nested/synthetic steps. Optional on old records. */
 /** Present after launch. An empty object records the omitted allowlist. */
 export const sessionSecretPolicySchema = z.object({ names: agentStepSecretsSchema.optional() });
@@ -490,6 +499,7 @@ export const runRecordSchema = z.object({
   budgetExceeded: z.array(runBudgetThresholdSchema).optional(),
   /** Checkpointed wall time spent with an executing step. */
   activeMs: usageCounterSchema.optional(),
+  scoreSummary: runScoreSummarySchema.optional(),
   /** The PR head came from a fork: its check steps run without the project's or workspace's secrets. */
   untrustedHead: z.boolean().optional(),
   createdAt: z.string(),
@@ -783,6 +793,7 @@ export const runIndexEntrySchema = z.object({
   /** What the run has cost so far. Absent means nothing was recorded, which is NOT `$0` — the
    *  cockpit prints an em dash rather than claiming a measurement that never happened. */
   costUsd: z.number().optional(),
+  scoreSummary: runScoreSummarySchema.optional(),
   /** The requested model and the one the agent reported running — the row's hover line. */
   model: z.string().optional(),
   actualModel: z.string().optional(),

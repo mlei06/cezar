@@ -70,13 +70,17 @@ export type RunScoresResponse = z.infer<typeof runScoresResponseSchema>;
 export const scoreRunInputSchema = z.object({ scorer: scorerNameSchema.optional() }).strict();
 export const scoreRunResponseSchema = z.object({ queued: z.array(scorerNameSchema) });
 export type ScoreRunResponse = z.infer<typeof scoreRunResponseSchema>;
-export const scoreRecordedEventSchema = z.object({
+export const scoreChangedEventSchema = z.object({
   projectId: z.string(),
   runId: z.string(),
+});
+export type ScoreChangedEvent = z.infer<typeof scoreChangedEventSchema>;
+export const scoreRecordedEventSchema = scoreChangedEventSchema.extend({
   score: recordedScoreSchema,
 });
 export type ScoreRecordedEvent = z.infer<typeof scoreRecordedEventSchema>;
 
+const causeStateSchema = z.enum(['open', 'processing', 'processed', 'dismissed', 'escalated', 'deferred']);
 export const queuedCauseSchema = z.object({
   id: z.string(),
   projectId: z.string(),
@@ -86,7 +90,41 @@ export const queuedCauseSchema = z.object({
   reasoning: z.string(),
   cause: scoreCauseSchema,
   at: z.string().datetime(),
-  state: z.enum(['open', 'processing', 'processed', 'dismissed', 'escalated', 'deferred']),
+  state: causeStateSchema,
 });
 export type QueuedCause = z.infer<typeof queuedCauseSchema>;
 export const causeQueueSchema = z.array(queuedCauseSchema);
+export const causeQueueResponseSchema = z.object({ causes: causeQueueSchema });
+export type CauseQueueResponse = z.infer<typeof causeQueueResponseSchema>;
+export const causeQueueCountsSchema = z.partialRecord(causeStateSchema, z.number().int().nonnegative());
+export type CauseQueueCounts = z.infer<typeof causeQueueCountsSchema>;
+
+export const scoresQuerySchema = z.object({
+  since: z.union([z.string().datetime(), z.string().date(), z.string().regex(/^[1-9][0-9]{0,3}d$/)]).optional(),
+  groupBy: z.enum(['scorer', 'category', 'target']).default('scorer'),
+});
+export type ScoresQuery = z.infer<typeof scoresQuerySchema>;
+
+const scoreGroupSchema = z.object({
+  key: z.string(),
+  passed: z.number().int().nonnegative(),
+  failed: z.number().int().nonnegative(),
+  pending: z.number().int().nonnegative(),
+  errors: z.number().int().nonnegative(),
+});
+export type ScoreGroup = z.infer<typeof scoreGroupSchema>;
+export const scoresResponseSchema = z.object({
+  groups: z.array(scoreGroupSchema),
+  queue: z.object({ counts: causeQueueCountsSchema, openCauses: causeQueueSchema }).nullable(),
+});
+export type ScoresResponse = z.infer<typeof scoresResponseSchema>;
+export const workspaceScoresResponseSchema = z.object({
+  projects: z.array(scoresResponseSchema.extend({ projectId: z.string() })),
+});
+export type WorkspaceScoresResponse = z.infer<typeof workspaceScoresResponseSchema>;
+export const managerScoresQuerySchema = scoresQuerySchema.extend({ projectId: z.string().min(1).max(200) });
+export type ManagerScoresQuery = z.infer<typeof managerScoresQuerySchema>;
+export const factoryCheckResponseSchema = z.object({
+  issues: z.array(z.object({ path: z.string(), message: z.string() })),
+});
+export type FactoryCheckResponse = z.infer<typeof factoryCheckResponseSchema>;

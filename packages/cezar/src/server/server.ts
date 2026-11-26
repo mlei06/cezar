@@ -158,6 +158,13 @@ import {
   switchRunAgentInputSchema,
   runBudgetSchema,
   scoreRunInputSchema,
+  scoresQuerySchema,
+  managerScoresQuerySchema,
+  type FactoryCheckResponse,
+  type WorkspaceScoresResponse,
+  type CauseQueueResponse,
+  type ScoreRunResponse,
+  type ScoresResponse,
   type RunScoresResponse,
   type RunBudgetExceededEvent,
   runBudgetUsd,
@@ -290,7 +297,9 @@ import { readRunUserMessages } from '../runs/user-messages.ts';
 import { summarizeRunMetrics } from '../runs/task-metrics.ts';
 import { ScoringService, type ScoringProject, type SettledScore } from '../scoring/service.ts';
 import { readRunScores } from '../scoring/store.ts';
-import { detectHarnessProject, harnessCauseQueuePath, projectCauseQueuePath, recordCauses, routeCauses } from '../factory/causes.ts';
+import { aggregateScores } from '../scoring/summary.ts';
+import { checkFactory } from '../factory/check.ts';
+import { detectHarnessProject, harnessCauseQueuePath, projectCauseQueuePath, readCauseQueue, recordCauses, routeCauses } from '../factory/causes.ts';
 import { byLastActivityDesc, compareIsoDesc, lastActivityAt, readRunIndexDiagnostic, readRunIndexFromDisk } from '../runs/run-index.ts';
 import { isV2WireEventType } from '../runs/ui-event-sink.ts';
 import { onRunDeleted, onRunEvent } from './sse-subscriptions.ts';
@@ -934,6 +943,7 @@ export type WorkspaceEventName =
   | 'manager-delta'
   | 'budget.exceeded'
   | 'score.recorded'
+  | 'score.changed'
   | 'phone-pairing'
   /** The attention list may have changed (spec 2026-11-23-needs-you-triage): payload `{}`, re-read it. */
   | 'attention-change';
@@ -991,6 +1001,12 @@ async function workflowCatalog(repoRoot: string) {
 
 // Give both mounts a named response so declaration emit doesn't inline the full catalog twice.
 interface WorkflowCatalogBody extends Awaited<ReturnType<typeof workflowCatalog>> {}
+interface FactoryCheckBody extends FactoryCheckResponse {}
+interface ScoresBody extends ScoresResponse {}
+interface WorkspaceScoresBody extends WorkspaceScoresResponse {}
+interface CauseQueueBody extends CauseQueueResponse {}
+interface RunScoresBody extends RunScoresResponse {}
+interface ScoreRunBody extends ScoreRunResponse {}
 interface RunWithUsageBody extends RunRecord {
   usage?: ReturnType<typeof currentUsage>;
 }
@@ -1851,7 +1867,7 @@ export function createApp(deps: ServerDeps) {
   const scoring = new ScoringService((event, project, run) => {
     workspaceEvents.emit('score.recorded', event);
     routeSavedScores(project, [{ run, score: event.score }]);
-  }, undefined, secretStore, routeSavedScores);
+  }, undefined, secretStore, routeSavedScores, (event) => workspaceEvents.emit('score.changed', event));
   deps.onDispose?.(() => scoring.dispose());
   const emitAutomationChange = (
     project: ProjectContext,
@@ -5727,19 +5743,33 @@ export function createApp(deps: ServerDeps) {
       return c.json(summarizeRunMetrics(run, store.readEvents(id), now, activeMs));
     })
 
-    .get('/runs/:id/scores', paramZodValidator(runIdParamSchema), (c) => {
+    .get('/scores', queryZodValidator(scoresQuerySchema), (c): Response & TypedResponse<ScoresBody, 200, 'json'> => {
+      const { dataDir, store } = c.get('project');
+      return c.json(aggregateScores(dataDir, store.listRuns(), c.req.valid('query')));
+    })
+
+    .get('/factory/check', async (c): Promise<Response & TypedResponse<FactoryCheckBody, 200, 'json'>> => {
+      const response: FactoryCheckResponse = { issues: await checkFactory(c.get('project').root) };
+      return c.json(response);
+    })
+
+    .get('/runs/:id/scores', paramZodValidator(runIdParamSchema), (c): Response & (
+      TypedResponse<RunScoresBody, 200, 'json'> | TypedResponse<{ error: string }, 404 | 409, 'json'>
+    ) => {
       const { store, dataDir } = c.get('project');
       const { id } = c.req.valid('param');
       if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
       try {
         const response: RunScoresResponse = { scores: readRunScores(dataDir, id) };
-        return c.json(response);
+        return c.json(response, 200);
       } catch {
         return c.json({ error: 'The score file is unreadable.' }, 409);
       }
     })
 
-    .post('/runs/:id/score', paramZodValidator(runIdParamSchema), jsonZodValidator(scoreRunInputSchema, { absent: ({}) }), async (c) => {
+    .post('/runs/:id/score', paramZodValidator(runIdParamSchema), jsonZodValidator(scoreRunInputSchema, { absent: ({}) }), async (c): Promise<Response & (
+      TypedResponse<ScoreRunBody, 202, 'json'> | TypedResponse<{ error: string }, 404 | 409, 'json'>
+    )> => {
       const project = c.get('project');
       const run = project.store.getRun(c.req.valid('param').id);
       if (!run) return c.json({ error: 'not found' }, 404);
@@ -9142,6 +9172,7 @@ export function createApp(deps: ServerDeps) {
       : {}),
     ...(run.markerRefs !== undefined ? { markerRefs: run.markerRefs } : {}),
     ...(run.costUsd !== undefined ? { costUsd: run.costUsd } : {}),
+    ...(run.scoreSummary?.finishedAt === run.finishedAt && run.scoreSummary ? { scoreSummary: run.scoreSummary } : {}),
     ...(run.model !== undefined ? { model: run.model } : {}),
     ...(run.actualModel !== undefined ? { actualModel: run.actualModel } : {}),
     ...(run.peakRssBytes !== undefined ? { peakRssBytes: run.peakRssBytes } : {}),
@@ -9164,6 +9195,31 @@ export function createApp(deps: ServerDeps) {
    * search box must not resume work; see `runs/run-index.ts`.
    */
   const runsIndexRoutes = new Hono()
+    .get('/workspace/factory/harness-queue', async (c): Promise<Response & (
+      TypedResponse<CauseQueueBody, 200, 'json'> | TypedResponse<{ error: string }, 409, 'json'>
+    )> => {
+      try {
+        const causes = readCauseQueue(harnessCauseQueuePath());
+        const projectId = capabilities().singleProject ? await resolveBootProject() : undefined;
+        return c.json({ causes: projectId ? causes.filter((cause) => cause.projectId === projectId) : causes }, 200);
+      } catch {
+        return c.json({ error: 'The harness cause queue is unreadable.' }, 409);
+      }
+    })
+    .get('/workspace/scores', queryZodValidator(scoresQuerySchema), async (c): Promise<Response & TypedResponse<WorkspaceScoresBody, 200, 'json'>> => {
+      const selector = capabilities().singleProject ? { projectId: await resolveBootProject() } : undefined;
+      const projects = await listProjects(selector).catch(() => []);
+      const bootId = await resolveBootProject(projects);
+      const query = c.req.valid('query');
+      const response: WorkspaceScoresResponse = { projects: projects.flatMap((project) => {
+        if (project.status === 'missing') return [];
+        const owned = project.id === bootId ? bootContext : contexts.peek(project.id);
+        const dataDir = owned?.dataDir ?? join(project.root, '.ai/cezar');
+        const runs = owned ? owned.store.listRuns() : readRunIndexFromDisk(dataDir);
+        return [{ projectId: project.id, ...aggregateScores(dataDir, runs, query) }];
+      }) };
+      return c.json(response);
+    })
     .get('/workspace/runs-index', async (c) => {
       let projects: ProjectListEntry[] = [];
       try {
@@ -9770,6 +9826,12 @@ export function createApp(deps: ServerDeps) {
       const { projectId, runId } = c.req.valid('query');
       const detail = await managerEngine.taskDetail(c.req.valid('param').id, projectId, runId);
       return 'error' in detail ? c.json({ error: detail.error }, detail.status) : c.json(detail);
+    })
+    .get('/workspace/managers/:id/scores', paramZodValidator(managerIdParamSchema), queryZodValidator(managerScoresQuerySchema), async (c): Promise<Response & (
+      TypedResponse<ScoresBody, 200, 'json'> | TypedResponse<{ error: string }, 400 | 403 | 404 | 409 | 502, 'json'>
+    )> => {
+      const result = await managerEngine.scores(c.req.valid('param').id, c.req.valid('query'));
+      return 'error' in result ? c.json({ error: result.error }, result.status) : c.json(result, 200);
     })
     .post('/workspace/managers/:id/tasks', paramZodValidator(managerIdParamSchema), jsonZodValidator(managerCreateTaskInputSchema), async (c) => {
       const created = await managerEngine.createTask(c.req.valid('param').id, c.req.valid('json'));
