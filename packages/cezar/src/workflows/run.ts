@@ -2,6 +2,7 @@ import type { StepToolPolicy, SwitchRunAgentInput } from '@open-mercato/cezar-co
 import { readOnlyEnv } from '../core/read-only-env.ts';
 import { AgentUsageHolds } from '../workspace/agent-usage-holds.ts';
 import { completionReason } from './completion-reason.ts';
+import { prepareReplayCheck } from './replay-check.ts';
 import { WorktreeLifecycleCoordinator } from '../worktree-lifecycle/coordinator.ts';
 import type { RunParked, RunSubject, WebhookAttentionRequest, TrackerAssociation, UsageWindowsObservation } from '@open-mercato/cezar-contract';
 import { saveUsageWindows } from '../workspace/usage-windows.ts';
@@ -11527,14 +11528,33 @@ export class RunManager {
   ): Promise<{ ok: boolean; output: string; exitCode: number }> {
     const command = step.command as string;
     emit({ type: 'note', stepId: step.id, message: `$ ${command}` });
-    const env = await this.checkStepEnv(runId, state, step, emit);
+    let sandbox: Awaited<ReturnType<typeof prepareReplayCheck>> | undefined;
+    if (this.store.getRun(runId)?.replayOf) {
+      try {
+        if (state.cwd === this.repoRoot) throw new Error('A replay check requires a separate worktree.');
+        sandbox = await prepareReplayCheck(command);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'The replay check sandbox is unavailable.';
+        emit({ type: 'check-output', stepId: step.id, command, text: message, exitCode: -1 });
+        return { ok: false, output: message, exitCode: -1 };
+      }
+    }
+    const env = sandbox?.env ?? await this.checkStepEnv(runId, state, step, emit);
     // A cancel that landed during the read had no child to interrupt; do not spawn one now.
-    if (state.cancelled) return { ok: false, output: 'cancelled', exitCode: -1 };
-    return new Promise((resolve) => {
+    if (state.cancelled) {
+      await sandbox?.close();
+      return { ok: false, output: 'cancelled', exitCode: -1 };
+    }
+    return new Promise<{ ok: boolean; output: string; exitCode: number }>((resolve) => {
       // Check steps run in the same cwd as the agent steps — the worktree.
-      const child = spawn('bash', ['-lc', command], { cwd: state.cwd, env });
+      const child = spawn(sandbox?.file ?? 'bash', sandbox?.args ?? ['-lc', command], {
+        cwd: state.cwd, env, ...(sandbox ? { detached: true } : {}),
+      });
       lowerTaskProcessPriority(child.pid);
-      state.interrupt = () => child.kill('SIGTERM');
+      state.interrupt = () => {
+        if (!sandbox || !child.pid) { child.kill('SIGTERM'); return; }
+        try { process.kill(-child.pid, 'SIGTERM'); } catch { /* The group has already exited. */ }
+      };
 
       let output = '';
       const collect = (chunk: Buffer) => {
@@ -11561,7 +11581,7 @@ export class RunManager {
         emit({ type: 'check-output', stepId: step.id, command, text: trimmed, exitCode });
         resolve({ ok: code === 0, output: trimmed, exitCode });
       });
-    });
+    }).finally(() => sandbox?.close());
   }
 
   private finishStep(

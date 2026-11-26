@@ -50,6 +50,7 @@ describe('graph workflows run through RunManager', () => {
 
   afterEach(() => {
     manager.dispose();
+    vi.unstubAllEnvs();
     if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
     else process.env.CEZ_DRY_RUN = savedDryRun;
     store.flush();
@@ -92,9 +93,23 @@ describe('graph workflows run through RunManager', () => {
     expect(Number(output?.text)).toBeGreaterThanOrEqual(5);
   });
 
-  it.each([false, true])('skips side-effect checks and follows the success edge during replay (graph: %s)', async (graph) => {
+  it.skipIf(process.platform !== 'linux').each([false, true])('isolates local checks and skips side-effect checks during replay (graph: %s)', async (graph) => {
+    const sandbox = join(repoRoot, '.ai', 'cezar', 'fixture-sandbox');
+    writeFileSync(sandbox, [
+      '#!/bin/sh',
+      '[ "$1" = sandbox ] || exit 1',
+      'case "$*" in *sandbox_workspace_write.network_access=false*) ;; *) exit 2;; esac',
+      '[ -z "$FIXTURE_PASSWORD" ] || exit 3',
+      'while [ "$#" -gt 0 ] && [ "$1" != -- ]; do shift; done',
+      '[ "$#" -gt 0 ] || exit 4',
+      'shift',
+      'export FIXTURE_SANDBOX_USED=1',
+      'exec "$@"',
+    ].join('\n'), { mode: 0o700 });
+    vi.stubEnv('CEZ_CODEX_BIN', sandbox);
+    vi.stubEnv('FIXTURE_PASSWORD', 'fixture-secret');
     const riskyCheck = { id: 'external', command: 'exit 7', sideEffects: true };
-    const localCheck = { id: 'local', command: 'printf verified' };
+    const localCheck = { id: 'local', command: 'test "$FIXTURE_SANDBOX_USED" = 1 && printf verified' };
     const workflow: WorkflowDef = graph ? def({
       nodes: [{ id: 'start', type: 'start' }, { ...riskyCheck, type: 'check' }, { ...localCheck, type: 'check' }],
       edges: [{ from: 'start.next', to: 'external' }, { from: 'external.pass', to: 'local' }],
