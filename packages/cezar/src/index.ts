@@ -82,6 +82,7 @@ import {
 } from './runtime/cockpit-runtime.ts';
 import { handoffMarkerLine, handoffProject } from './runtime/cockpit-handoff.ts';
 import { checkFactory } from './factory/check.ts';
+import { runScoreCommand } from './scoring/cli.ts';
 
 const HELP = `cezar — local cockpit for AI agent tasks in your repo
 
@@ -101,6 +102,7 @@ Usage:
   cezar impact <evidence|render>  collect evidence for, and render, an impact report
                             (local, no cockpit; paths default to $CEZ_ARTIFACTS_DIR)
   cezar factory check       validate workflows, referenced skills, and scorers
+  cezar score <run> [--scorer <name>]  queue scoring for a finished run
   cezar init                scaffold .ai/cezar/ (example workflow + skill)
   cezar projects            list the projects this cockpit serves
                             (also: projects add [<dir>] · projects remove <id>)
@@ -154,6 +156,12 @@ Skills live in .ai/skills/, .ai/cezar/skills/ and your team skills repo
 workflows in .ai/cezar/workflows/.`;
 
 async function main(): Promise<void> {
+  if (process.argv[2] === 'score') {
+    const cwd = process.cwd();
+    const repo = await getRepoInfo(cwd);
+    process.exitCode = await runScoreCommand(process.argv.slice(3), repo?.root ?? cwd);
+    return;
+  }
   if (process.argv[2] === 'tracker') {
     process.exitCode = await runTrackerCommand(process.argv.slice(3));
     return;

@@ -3,6 +3,10 @@ import { runnerSchema } from './runners.ts';
 import { harnessVersionSchema } from './runs.ts';
 
 export const scorerNameSchema = z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/);
+export const factoryScoringSettingsSchema = z.object({
+  enabled: z.boolean().optional().catch(undefined),
+  sampling: z.record(scorerNameSchema, z.number().min(0).max(100)).optional().catch(undefined),
+}).passthrough();
 const scorerLabelSchema = z.object({
   value: scorerNameSchema,
   score: z.number().min(0).max(1),
@@ -60,3 +64,15 @@ export const taskScoreEntrySchema = z.discriminatedUnion('status', [
   z.object({ status: z.literal('scored'), finishedAt: z.string().datetime(), score: recordedScoreSchema }),
 ]);
 export type TaskScoreEntry = z.infer<typeof taskScoreEntrySchema>;
+
+export const runScoresResponseSchema = z.object({ scores: z.record(scorerNameSchema, taskScoreEntrySchema) });
+export type RunScoresResponse = z.infer<typeof runScoresResponseSchema>;
+export const scoreRunInputSchema = z.object({ scorer: scorerNameSchema.optional() }).strict();
+export const scoreRunResponseSchema = z.object({ queued: z.array(scorerNameSchema) });
+export type ScoreRunResponse = z.infer<typeof scoreRunResponseSchema>;
+export const scoreRecordedEventSchema = z.object({
+  projectId: z.string(),
+  runId: z.string(),
+  score: recordedScoreSchema,
+});
+export type ScoreRecordedEvent = z.infer<typeof scoreRecordedEventSchema>;

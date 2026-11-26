@@ -2651,7 +2651,10 @@ export class RunStore extends EventEmitter {
         rmSync(join(this.dataDir, 'dispatch', tree), { recursive: true, force: true });
       }
       rmSync(this.eventsPath(id), { force: true });
-      if (runIdParamSchema.safeParse({ id }).success) rmSync(this.metricsPath(id), { force: true });
+      if (runIdParamSchema.safeParse({ id }).success) {
+        rmSync(this.metricsPath(id), { force: true });
+        rmSync(join(this.dataDir, 'runs', `${id}.scores.json`), { force: true });
+      }
       rmSync(this.handoffPath(id), { force: true }); // spec 007: the journal goes with the task
       rmSync(this.imagesDir(id), { recursive: true, force: true }); // agent screenshots
       rmSync(artifactsDir(this.dataDir, id), { recursive: true, force: true });

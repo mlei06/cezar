@@ -157,6 +157,8 @@ import {
   continueInputSchema,
   switchRunAgentInputSchema,
   runBudgetSchema,
+  scoreRunInputSchema,
+  type RunScoresResponse,
   type RunBudgetExceededEvent,
   runBudgetUsd,
   cancelRunInputSchema,
@@ -286,6 +288,8 @@ import {
 } from '../runs/event-history.ts';
 import { readRunUserMessages } from '../runs/user-messages.ts';
 import { summarizeRunMetrics } from '../runs/task-metrics.ts';
+import { ScoringService } from '../scoring/service.ts';
+import { readRunScores } from '../scoring/store.ts';
 import { byLastActivityDesc, compareIsoDesc, lastActivityAt, readRunIndexDiagnostic, readRunIndexFromDisk } from '../runs/run-index.ts';
 import { isV2WireEventType } from '../runs/ui-event-sink.ts';
 import { onRunDeleted, onRunEvent } from './sse-subscriptions.ts';
@@ -512,6 +516,7 @@ import {
 export interface ServerDeps {
   /** Register app-owned cleanup for the hosting server lifecycle. */
   onDispose?: (cleanup: () => void) => void;
+  enableFactoryScoring?: boolean;
   repoRoot: string;
   store: RunStore;
   manager: RunManager;
@@ -926,6 +931,7 @@ export type WorkspaceEventName =
   | 'manager-message'
   | 'manager-delta'
   | 'budget.exceeded'
+  | 'score.recorded'
   | 'phone-pairing'
   /** The attention list may have changed (spec 2026-11-23-needs-you-triage): payload `{}`, re-read it. */
   | 'attention-change';
@@ -1821,6 +1827,8 @@ export function createApp(deps: ServerDeps) {
   // Workspace-level SSE bus (step 2.8) — the registry mutators and the
   // checkout flow (Phase 4) emit here; /api/workspace/events relays.
   const workspaceEvents = deps.workspaceEvents ?? new WorkspaceEventBus();
+  const scoring = new ScoringService((event) => workspaceEvents.emit('score.recorded', event));
+  deps.onDispose?.(() => scoring.dispose());
   const emitAutomationChange = (
     project: ProjectContext,
     automationId: string,
@@ -5693,6 +5701,30 @@ export function createApp(deps: ServerDeps) {
       const now = Date.now();
       const activeMs = run.activeMs === undefined ? undefined : store.activeWorkMs(id, now);
       return c.json(summarizeRunMetrics(run, store.readEvents(id), now, activeMs));
+    })
+
+    .get('/runs/:id/scores', paramZodValidator(runIdParamSchema), (c) => {
+      const { store, dataDir } = c.get('project');
+      const { id } = c.req.valid('param');
+      if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
+      try {
+        const response: RunScoresResponse = { scores: readRunScores(dataDir, id) };
+        return c.json(response);
+      } catch {
+        return c.json({ error: 'The score file is unreadable.' }, 409);
+      }
+    })
+
+    .post('/runs/:id/score', paramZodValidator(runIdParamSchema), jsonZodValidator(scoreRunInputSchema, { absent: ({}) }), async (c) => {
+      const project = c.get('project');
+      const run = project.store.getRun(c.req.valid('param').id);
+      if (!run) return c.json({ error: 'not found' }, 404);
+      try {
+        const result = await scoring.rescore(project, run, c.req.valid('json').scorer);
+        return result.queued.length ? c.json(result, 202) : c.json({ error: 'No scoring job was admitted.' }, 409);
+      } catch {
+        return c.json({ error: 'The score file could not be updated.' }, 409);
+      }
     })
 
     .patch('/runs/:id/budget', paramZodValidator(runIdParamSchema), jsonZodValidator(runBudgetSchema), (c) => {
@@ -9572,7 +9604,16 @@ export function createApp(deps: ServerDeps) {
       }).catch((error: unknown) => console.warn('[cezar] budget event:', error));
     };
     project.store.on('budget.exceeded', publishBudget);
-    return [watchReports(project), watchTasks(project), () => project.store.off('budget.exceeded', publishBudget)];
+    const detach = [watchReports(project), watchTasks(project), () => { project.store.off('budget.exceeded', publishBudget); }];
+    if (deps.enableFactoryScoring) {
+      let stopped = false;
+      let offScoring: (() => void) | undefined;
+      void Promise.resolve(project === bootContext ? resolveBootProject() : project.id).then((id) => {
+        if (!stopped) offScoring = scoring.watch({ ...project, id });
+      }).catch(() => undefined);
+      detach.push(() => { stopped = true; offScoring?.(); });
+    }
+    return detach;
   };
   const offReports = watchProject(bootContext);
   for (const id of contexts.ids()) {
@@ -10068,6 +10109,7 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
     skillsUpdate,
     socketHub,
     automationsChanged: () => rescheduleAutomations(),
+    enableFactoryScoring: true,
   });
   // SECURITY: default to loopback. This server executes agents locally and its endpoints are
   // same-origin-trusted (only /api/health is CORS-open); binding to a non-loopback host would
