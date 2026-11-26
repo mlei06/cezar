@@ -154,3 +154,10 @@ Blind comparisons: the overseer's verdict is written before the judge's is read,
 Rubric revisions: efficiency v2 (2026-11-25), anchored labels after the the upgrade task disagreement. Judge prompt: target definitions added after the same run.
 
 Rubric revisions made from disagreements are listed under the run that prompted them.
+
+## M5 implementation observations
+
+| Observation | Evidence | Class | Decision |
+|---|---|---|---|
+| A batch claim must precede task admission. | An awaited start allowed concurrent calls to read the same open rows. The guarded fixture admits one task, validates each cause exactly once and keeps the draft development path off the public forge. | correctness | Use one fenced automation admission and carry the claimed ID in the run record. Keep raw evidence in the cockpit for the public harness. |
+| An improvement merge needs its exact head and product-code line count. | A route-level manager fixture held 401 changed code lines, owner-policy PRs, and an unreadable or moved head. It allowed 400 lines even with a large documentation diff. | correctness | Retain the existing owner card and refuse unverifiable autonomous improvement merges. |
