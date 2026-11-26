@@ -406,6 +406,12 @@ Whatever the policy, these always need the owner:
 
 Cezar enforces this. A PR that touches a protected path is marked owner-only, and the manager's merge of it is refused.
 
+**How (v5.31):**
+- **The paths:** the protected paths are `.ai/cezar/scorers/`, the `improve-factory` and `harness-release` workflow files, and any `skills/improve-factory/` folder.
+- **The check:** an autonomous manager's merge card is checked against the PR's changed files, renames included, before it runs. A hit leaves the card waiting for the owner with the reason, and the owner can approve it as usual.
+- **An unreadable file list** (a forge without the changes view) is held only when the project already has protected paths.
+- **Not yet covered:** the 400-line limit applies to improvement PRs, so it's checked once improvement runs record their PRs (the workflow slice). Widened secrets or permissions aren't repository paths and aren't detected here.
+
 **Scope.** A project's policy can limit what its improvement runs may touch: `docs`, `agents-md`, `skills`, `workflows`, `code`. The check step rejects changes outside it.
 
 **After a merge.** Cezar records the merged commit as the improvement's start. Then:
@@ -848,6 +854,7 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
 
 ## Changelog
 
+- **v5.31:** D6 protection: owner-protected paths hold an autonomous manager's merge for the owner, with renames counted and a fallback for forges without a file list. The 400-line limit waits for improvement PR records.
 - **v5.30:** D6 bookkeeping edge cases: batches of at most 50 open causes, a closed unmerged PR reopens its causes, harness escalations return to the harness queue, a three-failure pause on automatic starts, and the cooldown ends at its first limit.
 - **v5.29:** D5 defines each cause target, after calibration showed blind labels putting Cezar's own sandbox, grants and built-in workflows under `infra` or `workflow` instead of `harness`.
 - **v5.28:** D8 uses the original Codex profile for authenticated alternate-version agent replay. Input attachments stay limited to the recorded task, and staged execution returns usage data for comparison. Durable scoring remains outside the scratch cockpit.
