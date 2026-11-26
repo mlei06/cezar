@@ -6,7 +6,7 @@ Last updated: 2026-11-26 00:39 UTC.
 
 ## Where the build stands
 
-- **Milestone:** M0 done. M1 is released with live New task acceptance passed. The configured low-reasoning check remains pending. M1.5 is released and waiting on the two-project live acceptance.
+- **Milestone:** M0 done. M1 is done: live New task acceptance passed, and the low-reasoning check passed on 2026-11-26 02:15 UTC (`operate` ran on OpenCode with the machine's low-reasoning model, capability block present in its prompt; `factory.models.lowReasoning` is now set in the workspace config, written through the config merge-writer). M1.5 is released and waiting on the two-project live acceptance.
 - **Live harness:** `0.21.0+release-7dd520c`. PR #12 installed and healthy. The installed charter loader and both manager playbooks were verified. The harness manager remains inactive and idle.
 - **M1 PRs:** #2 (known host test failures), #3 (secret descriptions), #4 (workflow budgets and agent-step secrets), #5 (typecheck repair), #6 (built-in `implement`, `plan`, `operate`), #7 (the capability block), #8 (manager discovery and task flags), #9 (`manage-project` update), #10 (test-resource rules in `factory-work`).
 - **M1 follow-ups** (from reviews, not blocking): generated validation checks get an explicit secrets allowlist; forge-adapter-level draft-PR assertions; check-artifact exclusions survive a cockpit restart (tracked before M1).
