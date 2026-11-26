@@ -148,6 +148,11 @@ describe('graph workflows run through RunManager', () => {
       expect(manager.continueRun(id)).toMatchObject({ ok: false, error: expect.stringContaining('Replay') });
       expect(manager.switchAgent(id, { runner: 'codex', agentProfile: 'default', changedBy: 'user' }))
         .toHaveProperty('error', expect.stringContaining('Replay'));
+      const terminal = await apiRequest(app, `/api/v1/runs/${id}/terminal`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+      });
+      expect(terminal.status).toBe(409);
+      expect(await terminal.json()).toEqual({ error: 'Replay variants cannot open an ordinary terminal.' });
       expect(store.readEvents(id)).toContainEqual(expect.objectContaining({ type: 'check-output', text: 'one' }));
       expect(await (await apiRequest(app, `/api/v1/runs/${id}/diff`)).text()).toContain('+changed');
       const changes = await apiRequest(app, `/api/v1/runs/${id}/changes`);

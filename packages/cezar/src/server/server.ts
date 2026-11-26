@@ -6327,6 +6327,7 @@ export function createApp(deps: ServerDeps) {
       // and what the client's cliTargetResumes now labels. Resume-after-finish is untouched.
       const cliRunner = agentCliRunner(target);
       if (cliRunner) {
+        if (run.replayOf) return c.json({ error: 'Replay variants cannot open an ordinary agent.' }, 409);
         const engineOwnsSession = (run.status === 'running' || run.status === 'queued' || run.status === 'waiting') && !isIdleParked(run);
         const sessionStep = engineOwnsSession ? undefined : [...run.steps].reverse().find((s) => s.sessionId);
         const sessionId = sessionStep?.sessionId;
@@ -8908,6 +8909,7 @@ export function createApp(deps: ServerDeps) {
       const { root: repoRoot, store } = c.get('project');
       const run = store.getRun(c.req.param('id'));
       if (!run) return c.json({ error: 'not found' }, 404);
+      if (run.replayOf) return c.json({ error: 'Replay variants cannot open an ordinary terminal.' }, 409);
       const refusal = terminalPolicyRefusal(capabilities());
       if (refusal) return c.json({ error: refusal }, 409);
       // The task's OWN tree or nothing. Falling back to the repo root the way open-in-cli
