@@ -3,8 +3,9 @@ import { readOnlyEnv } from '../core/read-only-env.ts';
 import { AgentUsageHolds } from '../workspace/agent-usage-holds.ts';
 import { completionReason } from './completion-reason.ts';
 import { prepareReplayCheck, runReplayShell } from './replay-check.ts';
+import { checkImprovementBenchmarks, improvementBenchmarkSummary } from '../improvement/benchmarks.ts';
 import { checkImprovementStep, improvementPrSummary, runImprovementDecisions } from '../improvement/lifecycle.ts';
-import { hasImprovementSkill, IMPROVE_FACTORY } from '../improvement/workflow.ts';
+import { hasImprovementSkill, IMPROVE_FACTORY, IMPROVEMENT_CHECK } from '../improvement/workflow.ts';
 import { resolveReplayHarness, saveStagedReplayDiff, stagedReplay } from './staged-replay.ts';
 import { WorktreeLifecycleCoordinator } from '../worktree-lifecycle/coordinator.ts';
 import type { RunParked, RunSubject, WebhookAttentionRequest, TrackerAssociation, UsageWindowsObservation } from '@open-mercato/cezar-contract';
@@ -8791,13 +8792,15 @@ export class RunManager {
           return 'nothing';
         }
         const title = node.title ? render(node.title) : undefined;
+        const benchmarkSummary = improvement && run.worktreePath
+          ? await improvementBenchmarkSummary(this.dataDir, run, await getHeadCommit(run.worktreePath)) : '';
         const outcome = await createTaskPr({
           repoRoot: this.repoRoot,
           run: improvement ? { ...run, title: 'Improve factory reliability' } : title ? { ...run, title } : run,
           handoffText: improvement ? '' : readHandoff(this.dataDir, runId),
-          ...(improvement ? { body: !improvement.harness && improvement.decisions.pullRequestDescription
+          ...(improvement ? { body: (!improvement.harness && improvement.decisions.pullRequestDescription
             ? this.store.redactRunText(runId, improvement.decisions.pullRequestDescription)
-            : improvementPrSummary(improvement.decisions) } : {}),
+            : improvementPrSummary(improvement.decisions)) + benchmarkSummary } : {}),
           ...(excludedPaths.size ? { excludedPaths: [...excludedPaths] } : {}),
           ...(readyPr ? { draft: false } : {}),
           ...(run.pullRequestUrl && updateExistingPr ? { updateExisting: true } : {}),
@@ -11795,8 +11798,15 @@ export class RunManager {
     emit({ type: 'note', stepId: step.id, message: `$ ${command}` });
     const run = this.store.getRun(runId);
     if (run?.improvementId) {
-      const result = await checkImprovementStep(this.dataDir, this.repoRoot, state.cwd, run, step.id)
+      let result = await checkImprovementStep(this.dataDir, this.repoRoot, state.cwd, run, step.id)
         .catch(() => ({ ok: false, output: 'Unable to validate this improvement.' }));
+      if (result?.ok && step.id === IMPROVEMENT_CHECK) {
+        const benchmark = await checkImprovementBenchmarks({
+          project: { root: this.repoRoot, dataDir: this.dataDir, store: this.store, manager: this },
+          cwd: state.cwd, run, cancelled: () => state.cancelled,
+        }).catch(() => ({ ok: false, output: 'The improvement benchmark could not be verified.' }));
+        if (benchmark) result = benchmark;
+      }
       if (result) {
         const exitCode = result.ok ? 0 : 1;
         emit({ type: 'check-output', stepId: step.id, command, text: result.output, exitCode });
