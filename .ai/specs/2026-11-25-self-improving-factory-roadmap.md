@@ -342,6 +342,7 @@ New features and improvements found so far, not yet scheduled into a milestone. 
 | B21 | **A runner failing right after a machine restart** (Codex read-only startup) made the manager switch runners; Cezar could retry the original runner once after a short delay before falling back | M1, after the crash | M4 |
 | B22 | **Test runs overload the host:** tasks override the repository's 2-worker Vitest cap (`--maxWorkers=5`) and start a second full suite in the same worktree while one runs; with several tasks in parallel the laptop crashed. Cezar could give each task a CPU share (for example `nice` and a cgroup CPU limit per run) and the `implement` check steps should run the suite once, with the default | M1, after the crashes | M2 (#19 released; niceness 5 verified live) |
 | B23 | **Read-only review tasks have no `gh`,** so they can't confirm a PR's live head or target and compare against their local `origin/factory` instead | review 30fe42f2 | M2 (read-only forge commands verified in code) |
+| B24 | **OpenCode 2.x read-only sessions:** verify that watch and read-only tasks use native controls throughout. The ordinary session request currently sends an allow rule, and the legacy configuration cannot by itself enforce the V2 boundary. | M3-3 judge review | M3 follow-up |
 
 ## Risks
 

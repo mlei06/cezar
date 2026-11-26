@@ -1,6 +1,6 @@
 # The self-improving factory
 
-Status: draft v5.20, 2026-11-25. Fork: `mlei06/cezar`, trunk `factory`. Spec owner: the overseer (see the roadmap). Implementation plan: `2026-11-25-self-improving-factory-roadmap.md`. Findings during the build: `2026-11-25-self-improving-factory-observations.md`.
+Status: draft v5.21, 2026-11-26. Fork: `mlei06/cezar`, trunk `factory`. Spec owner: the overseer (see the roadmap). Implementation plan: `2026-11-25-self-improving-factory-roadmap.md`. Findings during the build: `2026-11-25-self-improving-factory-observations.md`.
 
 ## TLDR
 
