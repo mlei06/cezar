@@ -311,11 +311,17 @@ function refuseBelowDiskFloor(worktreePath: string): void {
  * (`uniqueBranchName`), because an existing branch of that name is treated as this run's own
  * surviving branch and reattached — that is what rematerializing a reclaimed worktree needs.
  */
+interface CreateWorktreeOptions {
+  branch?: string;
+  onCreated?: (startCommit: string) => void;
+  skipCheckoutHooks?: boolean;
+}
+
 export async function createWorktree(
   repoRoot: string,
   runId: string,
   baseBranch: string,
-  opts: { branch?: string; onCreated?: (startCommit: string) => void } = {},
+  opts: CreateWorktreeOptions = {},
 ): Promise<WorktreeInfo> {
   const {materialized: _materialized, ...info} = await createWorktreeWithOutcome(repoRoot, runId, baseBranch, opts);
   return info;
@@ -326,7 +332,7 @@ export async function createWorktreeWithOutcome(
   repoRoot: string,
   runId: string,
   baseBranch: string,
-  opts: { branch?: string; onCreated?: (startCommit: string) => void } = {},
+  opts: CreateWorktreeOptions = {},
 ): Promise<WorktreeInfo & { materialized: boolean }> {
   let base = baseBranch;
   if (!base || base === 'HEAD') {
@@ -343,6 +349,8 @@ export async function createWorktreeWithOutcome(
   if (!isSafeGitRef(branch)) throw new Error(`refusing option-like branch name: ${branch}`);
   const absolutePath = join(canonicalPath(repoRoot), WORKTREES_DIR, runId);
   const branchRef = `refs/heads/${branch}`;
+  const checkout = (args: string[]) => git(repoRoot, opts.skipCheckoutHooks
+    ? ['-c', 'core.hooksPath=/dev/null', ...args] : args);
 
   // A missing directory can leave stale administrative metadata behind.
   // Prune first so the checks below describe the filesystem as it exists now.
@@ -393,7 +401,7 @@ export async function createWorktreeWithOutcome(
       return {...worktreeInfo(byBranch.path, branch, base), materialized: false};
     }
     refuseBelowDiskFloor(absolutePath);
-    const attach = await git(repoRoot, ['worktree', 'add', absolutePath, branch]);
+    const attach = await checkout(['worktree', 'add', absolutePath, branch]);
     if (!attach.ok) {
       throw new Error(`git worktree reattach failed: ${attach.stderr.trim() || attach.stdout.trim()}`);
     }
@@ -408,7 +416,7 @@ export async function createWorktreeWithOutcome(
   const revision = await git(repoRoot, ['rev-parse', '--verify', `${base}^{commit}`]);
   if (!revision.ok) throw new Error(`git worktree add failed: ${revision.stderr.trim()}`);
   const startCommit = revision.stdout.trim();
-  const create = await git(repoRoot, ['worktree', 'add', '--no-track', '-b', branch, absolutePath, startCommit]);
+  const create = await checkout(['worktree', 'add', '--no-track', '-b', branch, absolutePath, startCommit]);
   if (!create.ok) {
     throw new Error(`git worktree add failed: ${create.stderr.trim() || create.stdout.trim()}`);
   }

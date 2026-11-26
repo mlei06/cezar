@@ -92,11 +92,12 @@ export class WorktreeLifecycleCoordinator {
     return gate?.needsAttention === true || lifecycleBusy(gate);
   }
   async requiresGate(runId: string): Promise<boolean> {
+    const run = this.runs.getRun(runId);
+    if (run?.replayOf) return false;
     const record = await this.readRecord(runId);
     // A pending operation always gates; a settled record gates only while scripts exist, so a
     // hook-free variant discard (which enrolls a record) leaves the legacy routes unchanged.
     if (record?.activeOperationId) return true;
-    const run = this.runs.getRun(runId);
     if (!record && run && !run.worktreePath) return false;
     if (record) {
       try { const config = await readLifecycleConfig(this.root); return config.config.afterCreate.length > 0 || config.config.beforeRemove.length > 0; }
@@ -146,9 +147,10 @@ export class WorktreeLifecycleCoordinator {
     };
   }
   private async enroll(runId: string): Promise<WorktreeLifecycleRecord> {
+    const run = this.runs.getRun(runId);
+    if (run?.replayOf) throw new LifecycleConflict('Replay worktrees use cleanup without lifecycle scripts.');
     const prior = await this.store.readWorktree(runId);
     if (prior) { this.context(prior); return prior; }
-    const run = this.runs.getRun(runId);
     if (!run) throw new LifecycleNotFound('Unknown task');
     if (!run.worktreePath) throw new LifecycleConflict('Task has no managed worktree');
     const record: WorktreeLifecycleRecord = {schemaVersion: 1, worktreeId: randomUUID(), runId,
@@ -172,6 +174,13 @@ export class WorktreeLifecycleCoordinator {
     };
     const initialBranch = choice.branch ?? branchFor(runId);
     this.runs.flush();
+    if (this.runs.getRun(runId)?.replayOf) {
+      if (signal?.aborted) throw new Error('Preparation cancelled before materialization');
+      const wt = await this.materialize(choice, branch => createWorktree(this.root, runId, base, {
+        branch, onCreated, skipCheckoutHooks: true,
+      }));
+      return { ready: true, ...wt };
+    }
     const prior = await this.readRecord(runId);
     let configured: Awaited<ReturnType<typeof readLifecycleConfig>>;
     try { configured = prior ? await readLifecycleConfig(this.root) : await readLifecycleConfigOrDefault(this.root); }

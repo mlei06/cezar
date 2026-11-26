@@ -76,6 +76,24 @@ afterEach(async () => {
 // A flow can prepare, fail, retry and remove real worktrees. Its overall budget must cover
 // several operations; `settled` and the individual liveness checks keep their own deadlines.
 describe('worktree lifecycle coordinator with real Git and command fixtures', { timeout: 20_000 }, () => {
+  it.skipIf(process.platform !== 'linux')('checks out a replay without running the Git or lifecycle hooks', async () => {
+    const p = await project();
+    const marker = join(p.root, '.git', 'fixture-hook-ran');
+    await writeFile(join(p.root, '.git', 'hooks', 'post-checkout'),
+      '#!/bin/sh\nprintf "fixture" > ' + JSON.stringify(marker) + '\n', { mode: 0o700 });
+    await p.config([entry('exit 19')], [entry('exit 17')]);
+    p.runs.updateRun(p.id, { replayOf: 'baseline' });
+    const commit = p.git('rev-parse', 'HEAD').trim();
+    const result = await p.coordinator.prepare(p.id, commit, { kind: 'initial', runId: p.id });
+    expect(result).toMatchObject({ ready: true, baseBranch: commit });
+    expect(p.git('-C', result.path, 'rev-parse', 'HEAD').trim()).toBe(commit);
+    expect(existsSync(marker)).toBe(false);
+    p.runs.updateRun(p.id, { worktreePath: result.path, branch: result.branch });
+    expect(await p.coordinator.requiresGate(p.id)).toBe(false);
+    await expect(p.coordinator.startRemoval({ runId: p.id, requestId: randomUUID(), intent: 'remove-worktree' }))
+      .rejects.toThrow('Replay worktrees use cleanup without lifecycle scripts');
+  });
+
   it('keeps the fork commit when a setup hook adds a commit', async () => {
     const p = await project();
     const startCommit = p.git('rev-parse', 'HEAD').trim();
