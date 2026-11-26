@@ -177,3 +177,7 @@ Rubric revisions made from disagreements are listed under the run that prompted 
 | The live workflow catalog comes from the registered checkout. | The catalog listed the committed release workflow after the clean registered checkout moved to factory. | harness | Keep the registered harness checkout on the factory branch so live releases can use the normal workflow entry. |
 | The protected skill now rolls out with its guard and event source. | #33, #36 and #37 passed the rebased validation with 18,675 tests. The named workflow was admitted in the live cockpit and scheduled the release. | harness | Use the shared automation source and keep real outcome windows open until enough genuine runs exist. |
 | A model-change check can consume the last slot or replay only the baseline. | The one-slot graph test failed with the parent holding its slot. It also failed when the suite specified a baseline and never ran the changed model. Both cases passed after the changes. | correctness | Yield the slot using the existing graph pause and include a variant that inherits the candidate’s selection. |
+
+### M5 release review
+
+The live cockpit released `a0766b2` through its named workflow. Staging, the authenticated replay, admission hold and smoke passed. The installed entry automatically admitted one synthetic batch, enforced the check and returned the open-PR refusal on a second start. Both live outcome windows await genuine improvement PRs and matched post-release scores.
