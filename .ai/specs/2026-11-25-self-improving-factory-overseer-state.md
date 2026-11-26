@@ -2,17 +2,17 @@
 
 The overseer's resume point for the self-improving factory build. Updated and pushed at every milestone step and every overseer decision, so the work survives a crashed machine or a new session. Read this first, then the roadmap's Progress table and the observation log.
 
-Last updated: 2026-11-26 04:29 UTC.
+Last updated: 2026-11-26 04:31 UTC.
 
 ## Where the build stands
 
 - **Milestone:** M0 done. M1 is done: live New task acceptance passed, and the low-reasoning check passed on 2026-11-26 02:15 UTC (`operate` ran on OpenCode with the machine's low-reasoning model, capability block present in its prompt; `factory.models.lowReasoning` is now set in the workspace config, written through the config merge-writer). M1.5 is released and waiting on the two-project live acceptance.
-- **Live harness:** `0.21.0+release-0349ad4`. PR #14 is installed and healthy. Run identity shipped in PR #13 and was verified on the previous release using an isolated task. The harness manager remains inactive.
+- **Live harness:** `0.21.0+release-6466703`. PR #15 is installed and healthy. An isolated check workflow dispatched a child whose run recorded its USD ceiling in the shared run budget. Run identity (#13) and model routing (#14) were verified on earlier releases. The harness manager remains inactive.
 - **M1 PRs:** #2 (known host test failures), #3 (secret descriptions), #4 (workflow budgets and agent-step secrets), #5 (typecheck repair), #6 (built-in `implement`, `plan`, `operate`), #7 (the capability block), #8 (manager discovery and task flags), #9 (`manage-project` update), #10 (test-resource rules in `factory-work`).
 - **M1 follow-ups** (from reviews, not blocking): generated validation checks get an explicit secrets allowlist; forge-adapter-level draft-PR assertions; check-artifact exclusions survive a cockpit restart (tracked before M1).
 - **Live delegated routing:** applied `highReasoning`, `switchAbove: 0.8` and the ordered hosted fallback list through the config merge-writer. With the VPN available, an isolated `operate` task completed on the configured OpenCode primary. With a temporary unreachable probe target, a second `operate` completed on the first hosted fallback and recorded the runner, model and fallback note. Restored the real probe URL immediately after admission.
-- **In flight:** PR #15 merged as `646670323` (shared dispatch USD storage). Release `6466703` is running. Task metrics are pushed on `impl/m2-task-stats` at `07f9ce7d2`, with initial typecheck and 279 focused tests passed. That branch is now based on the #15 squash and needs the full validation sequence. Budget enforcement is in the `impl/m2-budget-enforcement` worktree, pending the latest focused checks and the metrics branch. `impl/m1-pr-publishing` at `0236f7f53` still needs to be updated before its PR.
-- **Next:** confirm release `6466703` and smoke-test it. Then finish validation of the metrics and budget branches, add the five largest outputs to budget follow-up messages, and verify the M2 acceptance cases. The concurrent two-project live acceptance remains open. One manager completed a live rollout and created a workflow PR.
+- **In flight:** Task metrics are pushed on `impl/m2-task-stats` at `07f9ce7d2`, with typecheck and 280 focused tests passed after rebasing onto #15. The full validation sequence is running. Budget enforcement is in the `impl/m2-budget-enforcement` worktree, pending the latest focused checks and the metrics branch. `impl/m1-pr-publishing` at `0236f7f53` still needs to be updated before its PR.
+- **Next:** finish metrics validation and release, then add the five largest outputs to budget follow-ups, finish budget enforcement validation, and verify the remaining M2 acceptance cases. The concurrent two-project live acceptance remains open. One manager completed a live rollout and created a workflow PR.
 
 ## Standing instructions given to the harness manager
 
