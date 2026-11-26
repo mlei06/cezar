@@ -2,16 +2,17 @@
 
 The overseer's resume point for the self-improving factory build. Updated and pushed at every milestone step and every overseer decision, so the work survives a crashed machine or a new session. Read this first, then the roadmap's Progress table and the observation log.
 
-Last updated: 2026-11-26 03:44 UTC.
+Last updated: 2026-11-26 04:05 UTC.
 
 ## Where the build stands
 
 - **Milestone:** M0 done. M1 is done: live New task acceptance passed, and the low-reasoning check passed on 2026-11-26 02:15 UTC (`operate` ran on OpenCode with the machine's low-reasoning model, capability block present in its prompt; `factory.models.lowReasoning` is now set in the workspace config, written through the config merge-writer). M1.5 is released and waiting on the two-project live acceptance.
-- **Live harness:** `0.21.0+release-417a93c`. PR #13 is installed and healthy. An isolated task on the live cockpit completed and recorded the exact fork commit, harness id and harness commit. The harness manager remains inactive.
+- **Live harness:** `0.21.0+release-0349ad4`. PR #14 is installed and healthy. Run identity shipped in PR #13 and was verified on the previous release using an isolated task. The harness manager remains inactive.
 - **M1 PRs:** #2 (known host test failures), #3 (secret descriptions), #4 (workflow budgets and agent-step secrets), #5 (typecheck repair), #6 (built-in `implement`, `plan`, `operate`), #7 (the capability block), #8 (manager discovery and task flags), #9 (`manage-project` update), #10 (test-resource rules in `factory-work`).
 - **M1 follow-ups** (from reviews, not blocking): generated validation checks get an explicit secrets allowlist; forge-adapter-level draft-PR assertions; check-artifact exclusions survive a cockpit restart (tracked before M1).
-- **In flight:** v5.17 delegated routing on `impl/m2-delegated-routing` at `1db8453aa`. Typecheck and 489 focused tests passed across the routing, workflow and manager interfaces. Full validation restarted after restoring compatibility with the existing task creation interface. The USD storage slice is on `impl/m2-budget-storage` at `751271be4`, typechecked with 335 focused tests passing. The PR publication handoff patch is local on `impl/m1-pr-publishing` and has passed typecheck and focused tests.
-- **Next:** release routing after validation, configure its local model pairs through the config merge-writer and verify both live `operate` paths. Remaining M2 work includes full budget enforcement, active time, manager alerts and metrics. The concurrent two-project live acceptance remains open. One manager completed a live rollout and created a workflow PR.
+- **Live delegated routing:** applied `highReasoning`, `switchAbove: 0.8` and the ordered hosted fallback list through the config merge-writer. With the VPN available, an isolated `operate` task completed on the configured OpenCode primary. With a temporary unreachable probe target, a second `operate` completed on the first hosted fallback and recorded the runner, model and fallback note. Restored the real probe URL immediately after admission.
+- **In flight:** the USD storage slice is on `impl/m2-budget-storage` at `751271be4`, typechecked with 335 focused tests passing. The PR publication handoff patch is on `impl/m1-pr-publishing` at `0236f7f53` and has passed typecheck and focused tests on its existing base. Update both branches to current factory before opening PRs.
+- **Next:** finish D4 budget enforcement, active time, manager alerts and their cockpit indicators. Then add task metrics. The concurrent two-project live acceptance remains open. One manager completed a live rollout and created a workflow PR.
 
 ## Standing instructions given to the harness manager
 

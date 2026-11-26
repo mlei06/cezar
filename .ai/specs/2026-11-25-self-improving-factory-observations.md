@@ -77,6 +77,7 @@ Release `7dd520c` passed health and contained both playbooks and the charter loa
 |---|---|---|---|---|
 | M2-1 | Worktree setup or a later Continue can start from a different revision than the initial fork. The running harness release also needs to stay attributable across upgrades. | PR #13 verified dispatch, setup-hook commits, persisted Continue identity and the linked CLI. Release `417a93c` passed health and returned the expected project and harness commits for an isolated task. | harness | Record the initial identity once and the Continue identity on its step. Keep commit metadata optional for older or unidentifiable records (D8, v5.18). |
 | M2-2 | The routine model depends on network reachability, and default model pins in built-ins preempt project settings. | Owner's D2 routing decision. | policy | Keep project defaults for ordinary work, add a configurable threshold and high alias, and probe the low-tier primary before selecting a hosted fallback (v5.17). |
+| M2-3 | The relay forwards a credential-free probe upstream. An authentication challenge confirms the path is reachable. | PR #14 and release `0349ad4`. A live `operate` completed with the VPN available. Another completed on the first hosted fallback after switching just the probe to an unreachable target, then restoring the real URL. The run stored its runner, model and fallback note. | harness | Use the configured relay endpoint as the probe. Treat an authentication challenge as reachable and use account holds to select hosted fallbacks when the probe fails. |
 
 ## Judge calibration
 
