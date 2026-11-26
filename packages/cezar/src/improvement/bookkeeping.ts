@@ -78,10 +78,12 @@ export function startImprovement(paths: ImprovementPaths, input: {
   batch: readonly QueuedCause[];
 }): ImprovementRecord {
   const { batch, ...rest } = input;
-  const ids = new Set(batch.map((cause) => cause.id));
-  const claimed = setStates(paths.queue, ids, (cause) => (cause.state === 'open' ? 'processing' : cause.state));
+  const wanted = new Set(batch.map((cause) => cause.id));
+  // Claim only causes still open: one another run holds, or a decision already settled, stays out.
+  const open = new Set(readCauseQueue(paths.queue).filter((cause) => wanted.has(cause.id) && cause.state === 'open').map((cause) => cause.id));
+  setStates(paths.queue, open, () => 'processing');
   const record: ImprovementRecord = {
-    ...rest, queue: paths.harnessQueue ? 'project' : 'harness', causeIds: claimed.map((cause) => cause.id), state: 'running',
+    ...rest, queue: paths.harnessQueue ? 'project' : 'harness', causeIds: [...open], state: 'running',
   };
   atomicWriteJsonSync(paths.records, [...readImprovementRecords(paths.records), record]);
   return record;

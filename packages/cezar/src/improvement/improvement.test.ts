@@ -114,6 +114,17 @@ describe('improvement bookkeeping', () => {
     expect(readCauseQueue(paths.harnessQueue!)).toEqual([expect.objectContaining({ id: 'up', state: 'open', projectId: 'fixture' })]);
   });
 
+  it('claims only causes that are still open', () => {
+    atomicWriteJsonSync(paths.queue, [cause('free'), cause('held', undefined, 'processing'), cause('gone', undefined, 'dismissed')]);
+    const claimed = startImprovement(paths, {
+      id: 'imp2', projectId: 'fixture', startedBy: 'owner', startedAt: now.toISOString(),
+      batch: [cause('free'), cause('held'), cause('gone')],
+    });
+    expect(claimed.causeIds).toEqual(['free']);
+    failImprovement(paths, 'imp2', now);
+    expect(states()).toEqual({ free: 'open', held: 'processing', gone: 'dismissed' });
+  });
+
   it('returns the batch on failure, and fixed causes when the PR closes unmerged', () => {
     start();
     failImprovement(paths, 'imp1', now);
