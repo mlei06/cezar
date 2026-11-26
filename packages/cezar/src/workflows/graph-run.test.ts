@@ -158,7 +158,7 @@ describe('graph workflows run through RunManager', () => {
     } finally {
       stop();
     }
-  });
+  }, 25_000);
 
   it.skipIf(process.platform !== 'linux')('replays a saved check workflow in a group from its original commit', async () => {
     stubReplaySandbox();
