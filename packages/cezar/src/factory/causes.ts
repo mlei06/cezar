@@ -13,6 +13,7 @@ interface CauseOrigin {
   harness: boolean;
   improvement?: boolean;
   benchmark?: boolean;
+  replay?: boolean;
 }
 
 export function routeCauses(score: RecordedScore, origin: CauseOrigin): {
@@ -21,7 +22,7 @@ export function routeCauses(score: RecordedScore, origin: CauseOrigin): {
   infra: QueuedCause[];
 } {
   const queues = { project: [] as QueuedCause[], harness: [] as QueuedCause[], infra: [] as QueuedCause[] };
-  if (score.pass || origin.benchmark) return queues;
+  if (score.pass || origin.benchmark || origin.replay) return queues;
   for (const cause of score.causes) {
     const id = createHash('sha256').update(JSON.stringify([origin.projectId, origin.runId, score.scorer, cause])).digest('hex').slice(0, 24);
     const entry: QueuedCause = {

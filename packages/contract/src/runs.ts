@@ -570,6 +570,9 @@ export const runRecordSchema = z.object({
   /** Set when count-based retention (#483) reclaimed the worktree DIRECTORY (the branch is
    *  kept): the dir is gone but recoverable. */
   worktreeReclaimedAt: z.string().optional(),
+  /** For D8 experiments, the original task and the single changed input. */
+  replayOf: z.string().optional(),
+  replayChange: z.string().max(200).optional(),
   /** Parallel variants (spec 010): runs sharing a groupId are one group. */
   groupId: z.string().optional(),
   /** Variant letter within the group — 'A' | 'B' | 'C'. */
@@ -647,7 +650,7 @@ export const runMetricsSchema = z.object({
   workflow: z.string(),
   runner: runnerSchema.optional(),
   model: z.string().optional(),
-  startedBy: z.enum(['owner', 'manager', 'automation']),
+  startedBy: z.enum(['owner', 'manager', 'automation', 'replay']),
   startCommit: z.string().optional(),
   harnessVersion: harnessVersionSchema.optional(),
   wallMs: usageCounterSchema,
@@ -1096,6 +1099,7 @@ export const groupVariantSchema = z.object({
   costUsd: z.number().optional(),
   activeMs: usageCounterSchema.optional(),
   scores: z.array(scoreColumnSchema.extend({ scorer: z.string() })).optional(),
+  replayChange: z.string().optional(),
   diffStat: z.string(),
   /** First lines of the handoff journal's "## Progress log" section, as markdown. */
   handoffExcerpt: z.string(),
@@ -1105,6 +1109,7 @@ export type GroupVariant = z.infer<typeof groupVariantSchema>;
 /** `GET /groups/:groupId` — every run sharing a groupId, side by side. */
 export const groupResponseSchema = z.object({
   groupId: z.string(),
+  replay: z.literal(true).optional(),
   runs: z.array(groupVariantSchema),
 });
 export type GroupResponse = z.infer<typeof groupResponseSchema>;

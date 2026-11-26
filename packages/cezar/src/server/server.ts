@@ -134,6 +134,7 @@ import {
   setWorkspaceUiStateInputSchema,
   setWorkspaceConfigInputSchema,
   type GroupResponse,
+  type CreateRunResponse,
   type GroupVariant,
   type PickVariantResponse,
   type RunIndexEntry,
@@ -1008,6 +1009,9 @@ interface WorkflowCatalogBody extends Awaited<ReturnType<typeof workflowCatalog>
 interface FactoryCheckBody extends FactoryCheckResponse {}
 interface ScoresBody extends ScoresResponse {}
 interface WorkspaceScoresBody extends WorkspaceScoresResponse {}
+interface GroupCompareBody extends GroupResponse {}
+interface CreatedRunBody extends RunRecord {}
+interface CreatedVariantsBody extends Extract<CreateRunResponse, { runs: unknown }> {}
 interface CauseQueueBody extends CauseQueueResponse {}
 interface RunScoresBody extends RunScoresResponse {}
 interface ScoreRunBody extends ScoreRunResponse {}
@@ -1862,6 +1866,7 @@ export function createApp(deps: ServerDeps) {
           projectId: project.id, runId: run.id, workflowSource: run.workflowDef?.source,
           harness: harnessId === project.id,
           improvement: run.workflow === 'improve-factory',
+          replay: run.replayOf !== undefined,
         };
         const queues = routeCauses(score, origin);
         recordCauses(projectCauseQueuePath(project.dataDir), origin, score.scorer, queues.project);
@@ -5623,7 +5628,9 @@ export function createApp(deps: ServerDeps) {
       return run ? c.json(run) : c.json({ error: 'not found' }, 404);
     })
 
-    .post('/runs', jsonZodValidator(createRunInputSchema), async (c) => {
+    .post('/runs', jsonZodValidator(createRunInputSchema), async (c): Promise<Response & (
+      TypedResponse<CreatedRunBody | CreatedVariantsBody, 201, 'json'> | TypedResponse<{ error: string }, 400 | 403 | 404 | 409, 'json'>
+    )> => {
       const { root: repoRoot, dataDir, manager, store, id: projectId } = c.get('project');
       const parsed = { data: c.req.valid('json') };
       // A manager fallback policy bypasses the project's Automatic fallback setting: only the
@@ -5738,10 +5745,12 @@ export function createApp(deps: ServerDeps) {
       return c.json(store.getRun(run.id) ?? run, 201);
     })
 
-    .get('/runs/:id', (c) => {
+    .get('/runs/:id', (c): Response & (
+      TypedResponse<RunWithUsageBody, 200, 'json'> | TypedResponse<{ error: string }, 404, 'json'>
+    ) => {
       const { store } = c.get('project');
       const run = store.getRun(c.req.param('id'));
-      return run ? c.json(withUsage(run)) : c.json({ error: 'not found' }, 404);
+      return run ? c.json(withUsage(run), 200) : c.json({ error: 'not found' }, 404);
     })
 
     .get('/runs/:id/metrics', paramZodValidator(runIdParamSchema), (c) => {
@@ -6101,7 +6110,9 @@ export function createApp(deps: ServerDeps) {
     .post('/runs/:id/land', async (c) => {
       const { store, manager } = c.get('project');
       const id = c.req.param('id');
-      if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
+      const run = store.getRun(id);
+      if (!run) return c.json({ error: 'not found' }, 404);
+      if (run.replayOf) return c.json({ error: 'Replay variants cannot land changes.' }, 409);
       const answer = await manager.land(id);
       if (answer.outcome === 'landed') track('review_decided', { label: 'landed' }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
       return c.json({
@@ -6655,6 +6666,7 @@ export function createApp(deps: ServerDeps) {
       const { root: repoRoot, store } = c.get('project');
       const run = store.getRun(c.req.param('id'));
       if (!run) return c.json({ error: 'not found' }, 404);
+      if (run.replayOf) return c.json({ error: 'Replay variants cannot push changes.' }, 409);
       const worktree = worktreeOf(run);
       if (!worktree) return c.json({ error: NO_WORKTREE }, 409);
       let result;
@@ -6711,6 +6723,7 @@ export function createApp(deps: ServerDeps) {
       const id = c.req.param('id');
       const activeRun = store.getRun(id);
       if (!activeRun) return c.json({ error: 'not found' }, 404);
+      if (activeRun.replayOf) return c.json({ error: 'Replay variants cannot publish pull requests.' }, 409);
       if (manager.isActive(id)) {
         return c.json({
           error: hasPrPublishStep(activeRun.workflowDef)
@@ -7012,10 +7025,13 @@ export function createApp(deps: ServerDeps) {
 
   // ---- chained family: variant groups (project-scoped) ----
   const groupsRoutes = new Hono<ProjectApiEnv>()
-    .get('/groups/:groupId', async (c) => {
+    .get('/groups/:groupId', async (c): Promise<Response & (
+      TypedResponse<GroupCompareBody, 200, 'json'> | TypedResponse<{ error: string }, 404, 'json'>
+    )> => {
       const { dataDir, store } = c.get('project');
       const runs = groupRuns(store, c.req.param('groupId'));
       if (runs.length === 0) return c.json({ error: 'not found' }, 404);
+      const replay = runs.some((run) => run.replayOf !== undefined);
       const detailed = await Promise.all(
         runs.map(async (r): Promise<GroupVariant> => {
           const scores = groupScoreColumns(dataDir, r);
@@ -7031,6 +7047,7 @@ export function createApp(deps: ServerDeps) {
             ...(r.costUsd !== undefined ? { costUsd: r.costUsd } : {}),
             ...(r.activeMs !== undefined ? { activeMs: r.activeMs } : {}),
             ...(scores.length ? { scores } : {}),
+            ...(r.replayChange ? { replayChange: r.replayChange } : {}),
             diffStat:
               r.worktreePath && existsSync(r.worktreePath)
                 ? await worktreeDiffStat(r.worktreePath, r.baseBranch ?? 'HEAD')
@@ -7042,7 +7059,8 @@ export function createApp(deps: ServerDeps) {
       return c.json({
         groupId: c.req.param('groupId'),
         runs: detailed,
-      } satisfies GroupResponse);
+        ...(replay ? { replay: true as const } : {}),
+      } satisfies GroupResponse, 200);
     })
 
     // "Pick this one": the winner rests at `review` (spec 009 takes it from
@@ -7052,6 +7070,9 @@ export function createApp(deps: ServerDeps) {
       const { root: repoRoot, dataDir, store, manager } = c.get('project');
       const runs = groupRuns(store, c.req.param('groupId'));
       if (runs.length === 0) return c.json({ error: 'not found' }, 404);
+      if (runs.some((run) => run.replayOf !== undefined)) {
+        return c.json({ error: 'Replay comparisons do not choose a winner.' }, 409);
+      }
       const parsed = { data: c.req.valid('json') };
       const winner = runs.find((r) => r.id === parsed.data.runId);
       if (!winner) return c.json({ error: 'runId is not part of this group' }, 404);

@@ -101,6 +101,7 @@ export function CompareVariantsRoute() {
     <CompareView
       groupId={groupId as string}
       variants={group.data.runs}
+      replay={group.data.replay === true}
       showTokens={metricVisibility.tokens}
       showCost={metricVisibility.cost}
     />
@@ -110,11 +111,13 @@ export function CompareVariantsRoute() {
 function CompareView({
   groupId,
   variants,
+  replay,
   showTokens,
   showCost,
 }: {
   groupId: string
   variants: GroupVariant[]
+  replay: boolean
   showTokens: boolean
   showCost: boolean
 }) {
@@ -150,8 +153,9 @@ function CompareView({
 
         </h1>
         <p className="text-ui text-muted-foreground">
-          {variants.length} variants of the same task, each in its own worktree — pick the diff you
-          want to keep. The others are cancelled and archived, their worktrees and branches removed.
+          {replay
+            ? 'Compare the original task and its replays.'
+            : `${variants.length} variants of the same task, each in its own worktree — pick the diff you want to keep. The others are cancelled and archived, their worktrees and branches removed.`}
         </p>
       </header>
 
@@ -168,12 +172,14 @@ function CompareView({
             variant={variant}
             allTerminal={allTerminal}
             pickPending={pick.isPending}
-            onPick={() => setConfirming(variant)}
+            onPick={replay ? undefined : () => setConfirming(variant)}
             showTokens={showTokens}
             showCost={showCost}
           />
         ))}
       </div>
+
+      {replay ? <ReplayAverages variants={variants} showTokens={showTokens} showCost={showCost} /> : null}
 
       <section aria-label="Full diffs" className="flex flex-col gap-2">
         {variants.map((variant) => (
@@ -213,6 +219,68 @@ function CompareView({
   )
 }
 
+function average(values: Array<number | undefined>): number | undefined {
+  const measured = values.filter((value): value is number => value !== undefined)
+  return measured.length ? measured.reduce((sum, value) => sum + value, 0) / measured.length : undefined
+}
+
+function ReplayAverages({
+  variants, showTokens, showCost,
+}: {
+  variants: GroupVariant[]
+  showTokens: boolean
+  showCost: boolean
+}) {
+  const groups = new Map<string, GroupVariant[]>()
+  for (const variant of variants) {
+    if (!variant.replayChange) continue
+    const repeats = groups.get(variant.replayChange) ?? []
+    repeats.push(variant)
+    groups.set(variant.replayChange, repeats)
+  }
+  const repeated = [...groups].filter(([, repeats]) => repeats.length > 1)
+  if (!repeated.length) return null
+
+  return (
+    <section aria-label="Replay averages" className="flex flex-col gap-2">
+      {repeated.map(([change, repeats]) => {
+        const verdicts = new Map<string, { pass: number; total: number }>()
+        for (const run of repeats) {
+          for (const score of run.scores ?? []) {
+            const count = verdicts.get(score.scorer) ?? { pass: 0, total: 0 }
+            count.total++
+            if (score.pass) count.pass++
+            verdicts.set(score.scorer, count)
+          }
+        }
+        const active = average(repeats.map((run) => run.activeMs))
+        const tokens = average(repeats.map((run) => run.tokensUsed))
+        const cost = showCost ? formatCost(average(repeats.map((run) => run.costUsd))) : ''
+        return (
+          <article key={change} className="rounded-lg border border-border bg-card px-3.5 py-2.5 text-label">
+            <h2 className="font-medium">{change} ({repeats.length} runs)</h2>
+            <dl className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-muted-foreground">
+              {active !== undefined ? (
+                <div className="flex gap-1"><dt>Average active time</dt><dd>{formatDuration(active)}</dd></div>
+              ) : null}
+              {showTokens && tokens !== undefined ? (
+                <div className="flex gap-1"><dt>Average tokens</dt><dd>{Math.round(tokens).toLocaleString()}</dd></div>
+              ) : null}
+              {cost ? <div className="flex gap-1"><dt>Average cost</dt><dd>{cost}</dd></div> : null}
+              {[...verdicts].map(([name, { pass, total }]) => (
+                <div className="flex gap-1" key={name}>
+                  <dt className="capitalize">{name}</dt>
+                  <dd>{Math.round(pass / total * 100)}% pass ({pass}/{total})</dd>
+                </div>
+              ))}
+            </dl>
+          </article>
+        )
+      })}
+    </section>
+  )
+}
+
 /** One variant column: letter, status, spend, git's own --stat summary, the Progress excerpt,
  *  and the accent CTA. */
 function VariantColumn({
@@ -226,7 +294,7 @@ function VariantColumn({
   variant: GroupVariant
   allTerminal: boolean
   pickPending: boolean
-  onPick: () => void
+  onPick?: () => void
   showTokens: boolean
   showCost: boolean
 }) {
@@ -278,6 +346,8 @@ function VariantColumn({
           </span>
         ) : null}
       </div>
+
+      {variant.replayChange ? <p className="text-label text-muted-foreground">{variant.replayChange}</p> : null}
 
       {variant.scores?.length || variant.activeMs !== undefined ? (
         <dl aria-label="Scores and active time" className="grid grid-cols-[1fr_auto] items-center gap-x-2 gap-y-1 text-label">
@@ -332,7 +402,7 @@ function VariantColumn({
 
       {/* A disabled button cannot carry a tooltip, so the gate's reason is a visible line; the
           enabled button's consequence rides the Radix tooltip instead of a native title. */}
-      {allTerminal ? (
+      {onPick && (allTerminal ? (
         <IconTooltip label={`Keep variant ${variant.variant}'s changes and archive the others`}>
           <Button data-slot="variant-pick" disabled={pickPending} onClick={onPick}>
             <CheckIcon aria-hidden="true" />
@@ -349,7 +419,7 @@ function VariantColumn({
             Every variant must finish before you can pick.
           </p>
         </>
-      )}
+      ))}
     </article>
   )
 }
