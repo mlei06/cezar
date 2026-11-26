@@ -2,7 +2,7 @@
 
 The overseer's resume point for the self-improving factory build. Updated and pushed at every milestone step and every overseer decision, so the work survives a crashed machine or a new session. Read this first, then the roadmap's Progress table and the observation log.
 
-Last updated: 2026-11-26 23:02 UTC.
+Last updated: 2026-11-26 23:17 UTC.
 
 ## Where the build stands
 
@@ -14,8 +14,8 @@ Last updated: 2026-11-26 23:02 UTC.
 - **Protected release workflow.** #29 merged after independent review as `64a902a`. The committed workflow ran on the live harness. Five staging cases passed at 100%, the real authenticated replay passed, the hold reached idle before the switch, post-switch smoke and health passed, and the release report was delivered. The live catalog lists `harness-release` from the registered clean factory checkout.
 - **M5 released.** Protected #33 merged with #36 as `2b6c817` after independent review. #37 merged the hourly source, commands, outcome comparisons and manager approval controls. The combined rebase passed 1,415 focused and 18,675 full-suite tests, unit, build and package checks. The live cockpit released `a0766b2` through the named workflow after all five smoke cases and authenticated replay passed. Three registered projects expose enabled hourly automations. An isolated cockpit booted from that installed entry auto-claimed five causes, checked the patch, recorded one simulated PR and refused another start. Real merged improvements and before/after windows remain pending genuine use.
 - **M6 released.** #38 shipped saved benchmark suites, the Factory view, candidate model gates and proactive automation in `f1c8724`. The final full suite passed 18,684 tests, with unit, build and package checks. The installed cockpit recorded three passing Outcome scores on each configured route and an artifact. The browser rendered both comparison rows and loaded the artifact. Installed fixtures verified credential access failure and main CI deduplication. Tool-using OpenCode replays and other CI providers remain backlog items.
-- **Score-status follow-up.** `impl/m6-score-status` (`e8e40ea`) exposes pending and errored scores in the Factory view and refreshes them on existing score events. The regression failed before the fix. Typecheck and 545 focused tests passed. The exact head is `d8b5c16`. Its full suite started after the `f1c8724` release.
-- **Remaining acceptance.** Complete validation and release of the scoring-status follow-up. Observe the first genuine hourly harness check at 23:22 UTC, then follow any resulting PR and comparable scored runs. Retain the open judge timing and blind calibration cases under B25. The other projects’ production deploy and bug-to-production trial are outside the delegated scope. B26 covers more replay boundaries and B27 covers other CI providers.
+- **Score-status follow-up.** #39 merged after independent review as `8180201`. The regression failed before the fix, and the exact head passed typecheck, 545 focused tests, 18,685 full-suite tests, unit, build and package checks. The compiled candidate displayed both counts through the real Factory API in a browser. Release follows the genuine scheduled improvement run so their workloads stay separate.
+- **Remaining acceptance.** Observe the first genuine hourly harness check at 23:22 UTC, then release the merged score-status follow-up and verify it in the installed browser. Follow any resulting improvement PR and comparable scored runs. Retain the open judge timing and blind calibration cases under B25. The other projects’ production deploy and bug-to-production trial are outside the delegated scope. B26 covers more replay boundaries and B27 covers other CI providers.
 
 ## Standing instructions for when the harness manager resumes
 
