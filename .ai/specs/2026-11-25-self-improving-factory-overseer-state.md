@@ -2,16 +2,16 @@
 
 The overseer's resume point for the self-improving factory build. Updated and pushed at every milestone step and every overseer decision, so the work survives a crashed machine or a new session. Read this first, then the roadmap's Progress table and the observation log.
 
-Last updated: 2026-11-26 00:12 UTC.
+Last updated: 2026-11-26 00:15 UTC.
 
 ## Where the build stands
 
 - **Milestone:** M1 (agents know what they have) is merged and live; its live acceptance check is pending. M0 done.
-- **Live harness:** `0.21.0+release-41a8ac9` (released by the manager itself, detached, 23:06 UTC), which has every M1 PR: #2–#9.
+- **Live harness:** `0.21.0+release-f1747bd`. PR #11 installed and healthy.
 - **M1 PRs:** #2 (known host test failures), #3 (secret descriptions), #4 (workflow budgets and agent-step secrets), #5 (typecheck repair), #6 (built-in `implement`, `plan`, `operate`), #7 (the capability block), #8 (manager discovery and task flags), #9 (`manage-project` update), #10 (test-resource rules in `factory-work`).
 - **M1 follow-ups** (from reviews, not blocking): generated validation checks get an explicit secrets allowlist; forge-adapter-level draft-PR assertions; check-artifact exclusions survive a cockpit restart (tracked before M1).
-- **In flight:** PR #11 fixed the missing slash-selected skill in the capability block and merged as `f1747bd`. Detached release unit `harness-release-f1747bd` is running. M1 focused tests passed (1,866), along with typecheck, unit tests, build and package tests. The full suite reported 18,555 passes and three documented host failures (Explorer path translation and the plan-usage ledger). Isolated checks verified the New task form, legacy workflow compatibility and secret descriptions without disclosing values.
-- **Next:** confirm release #11 and finish M1 acceptance where possible. M1.5 charter and manager playbook are in validation on `impl/m1.5-manager-playbook`. Stop before giving managers any real project work. The owner will onboard a second project to test two managers on separate projects.
+- **In flight:** M1.5 charter and manager-playbook changes are in validation on `impl/m1.5-manager-playbook`. The concurrent-manager regression failed on the earlier behavior and passed with the change in isolated fixtures.
+- **Next:** finish M1.5 validation, review and release. Stop before giving managers real project work so the owner can onboard a second project. Then verify two live managers on separate projects and continue to M2.
 
 ## Standing instructions given to the harness manager
 
@@ -43,7 +43,8 @@ Since 2026-11-25 17:25 the manager runs the harness project on its own (owner de
 - **Handoff (roadmap v3.1):** the manager finishes M1 and stops. M1.5 (spec D11, D12) and M2–M6 go to an implementer agent started from `2026-11-25-self-improving-factory-handoff.md`.
 
 
-- The M1 milestone review: metrics, observations into spec, backlog or nothing.
+- **M1 acceptance:** the released New task form submitted a description, workflow, model and slash skill. The read-only run confirmed its capability block. Isolated checks covered secret listing without values, legacy workflow compatibility and both low-reasoning alias paths. The configured low-reasoning smoke with the paused manager is still pending.
 - Calibration so far: 4 runs, 16 scorer comparisons. Pass/fail agreement is 14/16. The two disagreements: the overseer under-called efficiency once, and the judge can't see spec drift (backlog B19).
 - **Public repository hygiene:** the fork holds nothing internal. No provider ids, hosts, paths, usernames, project names, job names or run data. Project-specific notes belong in that project's own repository; machine settings stay in `~/.config/factory-overseer.json`.
+- **Git metadata:** later commits use the fork account’s public GitHub noreply identity. Include earlier local Git identities in the owner’s existing history-cleanup review.
 - **History purge, pending (owner decision, not for the implementer):** commits pushed before 2026-11-25 21:45 UTC on `factory`, `feat/manager-autonomy` and the PR branches still contain internal names in older spec text. Rewrite them once M1's PRs are merged and nothing is open: run `git filter-repo --replace-text` over all fork branches, force-push, then delete the stale branches.
