@@ -20,7 +20,8 @@ The factory is built by the factory. After a one-time bootstrap (M0), which the 
 |---|---|---|
 | M0 | done 2026-11-25 | release `0.21.0+release-735fc84` live; warm-up PR #1 merged and released; judge prototype calibrated on 2 runs; observations M0-1 to M0-10 |
 | M1 | done 2026-11-26 | PR #11 shipped slash-skill reporting in release `f1747bd`. Live New task acceptance passed. With `factory.models.lowReasoning` set on this machine, an `operate` task ran on OpenCode with the self-hosted low-reasoning model, read-only in one turn, and its prompt carried the capability block (checked in the runner's stored session, since the model refuses to quote its own system prompt). |
-| M1.5 | released, live acceptance pending | PR #12 shipped the charter and manager playbooks in release `7dd520c`. Isolated concurrent managers passed. Live project work is paused for second-project onboarding. |
+| M1.5 | released, live acceptance pending | PR #12 shipped the charter and manager playbooks in release `7dd520c`. Isolated concurrent managers passed. One project completed a live rollout. The concurrent live two-project check is pending. |
+| M2 | in progress | Run identity first, then budgets, metrics and delegated model routing. |
 
 ## Goal and definition of done
 
@@ -120,16 +121,17 @@ The weekly report's project section is part of D10 and ships with M5.
 - given a vague outcome ("make deploys more reliable"), the manager sizes it, writes the plan into the backlog, and starts self-contained tasks, without asking the owner anything that isn't theirs to decide;
 - `manage-project` states every D11 rule.
 
-## M2. Bounded and measured (spec D4, D5 metrics)
+## M2. Bounded and measured (spec D2 task routing, D4, D5 metrics)
 
 **Goal:** no task runs away unnoticed, and every run has the numbers scoring needs.
 
 **Deliverables:**
 1. **Run identity:** `startCommit` and `harnessVersion` recorded at every run's start (dispatched children and Continue too). Ships first in M2, because runs recorded before it can't be replayed exactly.
 2. **One run budget:** generalize dispatch's `budgetUsd` into `budget: { usd, tokens, minutes }` with `onBudget: park | notify` (old records keep parsing and parking). Accounting (input tokens; active time excluding queued, parked and gate time); `budgetExceeded`; the manager follow-up with metrics; `task budget`; the 2× and 4× rule; the amber marker.
-2. **`TurnStatsCollector` for task sessions,** per step.
-3. **The metrics summary:** tool durations and output sizes from the event log; `GET /runs/:id/metrics`.
-4. **Cockpit:** metrics in the task detail; budget state on the row.
+3. **`TurnStatsCollector` for task sessions,** per step.
+4. **The metrics summary:** tool durations and output sizes from the event log; `GET /runs/:id/metrics`.
+5. **Cockpit:** metrics in the task detail and budget state on the row.
+6. **Task model routing:** implement D2’s delegated-task ladder using existing usage readings. Keep the manager’s chat model user-selected.
 
 **The prompt:**
 
@@ -139,7 +141,8 @@ The weekly report's project section is part of D10 and ships with M5.
 - D4 tests pass;
 - the replayed the deployment project log gives 116 requests, about 93k average context, and the 77k output among the largest;
 - live: a task given `--budget-tokens 50000` wakes the manager exactly once at 1× and again at 2×;
-- queued and parked time don't count.
+- queued and parked time don't count;
+- new delegated tasks use the effective route from D2 at and above the 80% boundary. Routine operations and explicit workflow pins retain their own routes. Manager chat keeps its user-selected model.
 
 **The overseer watches** whether the manager uses `task budget` sensibly when woken.
 

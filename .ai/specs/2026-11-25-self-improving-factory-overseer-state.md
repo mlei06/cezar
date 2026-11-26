@@ -2,7 +2,7 @@
 
 The overseer's resume point for the self-improving factory build. Updated and pushed at every milestone step and every overseer decision, so the work survives a crashed machine or a new session. Read this first, then the roadmap's Progress table and the observation log.
 
-Last updated: 2026-11-26 00:39 UTC.
+Last updated: 2026-11-26 02:59 UTC.
 
 ## Where the build stands
 
@@ -10,8 +10,8 @@ Last updated: 2026-11-26 00:39 UTC.
 - **Live harness:** `0.21.0+release-7dd520c`. PR #12 installed and healthy. The installed charter loader and both manager playbooks were verified. The harness manager remains inactive and idle.
 - **M1 PRs:** #2 (known host test failures), #3 (secret descriptions), #4 (workflow budgets and agent-step secrets), #5 (typecheck repair), #6 (built-in `implement`, `plan`, `operate`), #7 (the capability block), #8 (manager discovery and task flags), #9 (`manage-project` update), #10 (test-resource rules in `factory-work`).
 - **M1 follow-ups** (from reviews, not blocking): generated validation checks get an explicit secrets allowlist; forge-adapter-level draft-PR assertions; check-artifact exclusions survive a cockpit restart (tracked before M1).
-- **In flight:** none. PR #12 merged as `7dd520c`. Typecheck, 714 focused manager tests, 54 unit tests, build and 35 package tests passed. The full suite had 18,556 passes and only the three documented host failures. The concurrent-manager test verified project-specific charters, including isolation from a parent checkout.
-- **Next:** the owner onboards a second project and authorizes manager work. Then verify the two managers on separate projects at the existing workspace capacity of two tasks, finish live M1 and M1.5 acceptance, and move to M2.
+- **In flight:** M2 run identity on `impl/m2-run-identity`. The PR publication handoff patch is local on `impl/m1-pr-publishing` and has passed typecheck and focused tests.
+- **Next:** record the run starting commit and running harness release for M2. Then wire budgets, metrics, and the v5.16 delegated-task model ladder. Finish the concurrent two-project live acceptance separately. One manager completed a live rollout and created a workflow PR.
 
 ## Standing instructions given to the harness manager
 
@@ -38,12 +38,11 @@ Since 2026-11-25 17:25 the manager runs the harness project on its own (owner de
 ## Open overseer items
 
 - **Paused (2026-11-25 23:37 UTC, owner):** the `cezar` project's manager is deactivated, and a separate implementer agent builds from the handoff prompt. Its M1 acceptance check was interrupted: only the `operate` smoke ran (task e5c86fd3, passed, but on the project's default runner, because `factory.models.lowReasoning` is not set on this machine yet). Nothing else was checked. Reactivate the manager with `PATCH /api/v1/workspace/managers/<id> {"active": true}` only if the owner asks.
-- **Machine setting still to do:** set `factory.models.lowReasoning` (runner `opencode` plus the self-hosted model named in `~/.config/factory-overseer.json`) in the workspace config. The workspace config API doesn't take `factory` yet, so either add that or write it through the config merge-writer, never by hand while the cockpit runs.
 
 - **Handoff (roadmap v3.1):** the manager finishes M1 and stops. M1.5 (spec D11, D12) and M2–M6 go to an implementer agent started from `2026-11-25-self-improving-factory-handoff.md`.
 
 
-- **M1 acceptance:** the released New task form submitted a description, workflow, model and slash skill. The read-only run confirmed its capability block. Isolated checks covered secret listing without values, legacy workflow compatibility and both low-reasoning alias paths. The configured low-reasoning smoke with the paused manager is still pending.
+- **M1 acceptance:** completed. New task and the configured low-reasoning alias were verified on the live cockpit.
 - Calibration so far: 4 runs, 16 scorer comparisons. Pass/fail agreement is 14/16. The two disagreements: the overseer under-called efficiency once, and the judge can't see spec drift (backlog B19).
 - **Public repository hygiene:** the fork holds nothing internal. No provider ids, hosts, paths, usernames, project names, job names or run data. Project-specific notes belong in that project's own repository; machine settings stay in `~/.config/factory-overseer.json`.
 - **Git metadata:** later local commits use the fork account’s public GitHub noreply identity. Include earlier local Git identities in the owner’s existing history-cleanup review.

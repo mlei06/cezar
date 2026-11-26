@@ -1,6 +1,6 @@
 # The self-improving factory
 
-Status: draft v5.15, 2026-11-25. Fork: `mlei06/cezar`, trunk `factory`. Spec owner: the overseer (see the roadmap). Implementation plan: `2026-11-25-self-improving-factory-roadmap.md`. Findings during the build: `2026-11-25-self-improving-factory-observations.md`.
+Status: draft v5.16, 2026-11-25. Fork: `mlei06/cezar`, trunk `factory`. Spec owner: the overseer (see the roadmap). Implementation plan: `2026-11-25-self-improving-factory-roadmap.md`. Findings during the build: `2026-11-25-self-improving-factory-observations.md`.
 
 ## TLDR
 
@@ -153,15 +153,27 @@ steps:
 
 | Workflow | Runner and model | Budget | Use |
 |---|---|---|---|
-| `implement` | codex, gpt-6.2-sol | 3M, 30 min | coding and fixes; ends at a PR |
-| `plan` | codex, gpt-6.2-sol, read-only | 1.5M, 20 min | specs, investigation, design |
-| `review-pr` (exists) | codex, gpt-6.2-sol, read-only | 1.5M, 20 min | PR review |
+| `implement` | ordinary task route | 3M, 30 min | coding and fixes; ends at a PR |
+| `plan` | ordinary task route, read-only | 1.5M, 20 min | specs, investigation, design |
+| `review-pr` (exists) | ordinary task route, read-only | 1.5M, 20 min | PR review |
 | `operate` | the machine's low-reasoning model (`factory.models.lowReasoning`) | 800k, 20 min | running known workflows or scripts, status, summaries, moving docs |
 | `improve-factory` | codex, gpt-6.2-sol | 4M, 45 min | improvement runs (D6); owner-protected |
 
 **`implement` validates with check steps, not with the model.** Its graph is an agent step, then one check step per validation command, with a failing check looping back to the agent (at most twice). Waiting for the tests is then the engine's job. The commands come from the project's existing `.ai/agentic.config.json` (`validation.commands`, which the om-* skills already read). When the file is missing, or has no `validation.commands`, they come from the project's `test` script. With neither, `implement` runs no checks and opens the PR with a note that no validation is configured (v5.9). Guidance in a skill wasn't enough: the M0 warm-up task polled its test run across eight model turns although `factory-work` told it not to (observation M0-6).
 
 The model `low-reasoning` is an alias that resolves, per machine, to the `factory.models.lowReasoning` setting (a runner and a model). The harness names no provider: a machine points it at whatever cheap or self-hosted model it has. Unset, it resolves to the project's default runner at low effort, with a note on the task. A project overrides a built-in by committing a workflow with the same name.
+
+**Delegated task routing (M2).** The manager chooses a workflow and decides whether the work needs high reasoning. Cezar resolves the task's route at admission using the workspace's configured accounts and models:
+
+| Work | Owner's preferred route |
+|---|---|
+| Following a known playbook, routine checks and summaries | Mistral through OpenCode via `low-reasoning`. Keep side effects in deterministic check steps when the workflow supports it. The OpenAI cutoff does not apply to this route. |
+| Ordinary implementation, investigation and review | GPT‑6.2 Sol through Codex. For new work, switch to Opus 5.5 through Claude Code when a current applicable OpenAI usage window for the selected account is above 80%. Use Sol again when the window resets or the current reading is at or below 80%. |
+| Work explicitly requiring high reasoning | Opus 5.5 through Claude Code from the start. |
+
+Use the existing account usage readings and limit holds. Treat stale or unavailable percentages as unknown and keep the normal account-capacity checks. If the selected account is unavailable, use the existing eligible-account and queue rules without silently switching a low- or high-reasoning task to a different tier. Do not move a running task just because a reading changed. Record the effective runner, model and reason on the run. Preserve explicit step settings in project workflows, and preserve the current defaults where no new routing profile is configured. Machine-specific model identifiers and credentials stay in workspace settings.
+
+The manager's **own chat model stays user-selected**. The owner's preferred selection is GPT‑6.2 Sol. The 80% policy only routes delegated tasks and never changes the manager's chat model.
 
 A project adds its own task workflows. A deployment project's `deploy`, for example:
 
@@ -806,6 +818,8 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
 4. **Scoring the managers:** apply the same metrics, scorers and improvement to manager turns, after D6.
 
 ## Changelog
+
+- **v5.16:** D2 adds a three-tier delegated task ladder and an 80% OpenAI usage threshold for admitting new ordinary tasks. Manager chat stays user-selected. M2 owns adoption and acceptance.
 
 - **v5.15:** D12.7, one message carried to production: reproduce, fix with a regression test, review, merge, deploy, verify the reported behaviour where it was reported, roll back on breakage; done means verified. Rules renumbered so the role stays last.
 - **v5.14:** D12: every project keeps `.ai/project.md` (existing roadmaps are linked, not adopted); charter updates ride in the outcome's own PR, since the manager never commits.
