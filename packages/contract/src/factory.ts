@@ -222,12 +222,13 @@ export type ImprovementRecord = z.infer<typeof improvementRecordSchema>;
 export const improvementRecordsSchema = z.array(improvementRecordSchema);
 
 export const benchmarkNameSchema = z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/);
-const benchmarkConfigSchema = z.object({
+export const benchmarkConfigSchema = z.object({
   name: benchmarkNameSchema,
   runner: runnerSchema.optional(),
   model: z.string().trim().min(1).max(190).optional(),
   effort: reasoningEffortSchema.optional(),
 }).strict();
+export type BenchmarkConfiguration = z.infer<typeof benchmarkConfigSchema>;
 export const benchmarkSuiteSchema = z.object({
   description: z.string().trim().max(2000).default(''),
   configurations: z.array(benchmarkConfigSchema).min(1).max(8),
@@ -259,3 +260,31 @@ export const benchmarkSuitesResponseSchema = z.object({
   suites: z.array(benchmarkSuiteSchema.safeExtend({ name: benchmarkNameSchema })),
   issues: z.array(z.object({ path: z.string(), message: z.string() })),
 });
+
+export const benchmarkSuiteParamsSchema = z.object({ suite: benchmarkNameSchema });
+export const benchmarkRunInputSchema = z.object({ config: benchmarkNameSchema.optional() }).strict();
+const benchmarkCellIdentitySchema = z.object({ task: benchmarkNameSchema, config: benchmarkNameSchema });
+export const benchmarkCellRunSchema = z.discriminatedUnion('state', [
+  benchmarkCellIdentitySchema.extend({ state: z.literal('started'), runId: z.uuid() }),
+  benchmarkCellIdentitySchema.extend({ state: z.literal('unavailable'), reason: z.string() }),
+]);
+export const benchmarkMatrixRunSchema = z.object({
+  id: z.uuid(),
+  suite: benchmarkNameSchema,
+  createdAt: z.iso.datetime(),
+  scorers: z.array(scorerNameSchema),
+  runs: z.array(benchmarkCellRunSchema),
+});
+export type BenchmarkMatrixRun = z.infer<typeof benchmarkMatrixRunSchema>;
+export const benchmarkMatrixParamsSchema = benchmarkSuiteParamsSchema.extend({ id: z.uuid() });
+export const benchmarkMatrixRowSchema = z.object({
+  name: benchmarkNameSchema, started: z.number(), unsettled: z.number(), unavailable: z.number(),
+  passed: z.number(), failed: z.number(), pending: z.number(), missing: z.number(),
+  meanCostUsd: z.number().optional(), meanWallMs: z.number().optional(),
+});
+export const benchmarkResultsResponseSchema = z.object({
+  batch: benchmarkMatrixRunSchema,
+  rows: z.array(benchmarkMatrixRowSchema),
+  artifact: z.object({ runId: z.uuid(), name: z.string() }).optional(),
+});
+export const benchmarkHistoryResponseSchema = z.object({ batches: z.array(benchmarkMatrixRunSchema) });
