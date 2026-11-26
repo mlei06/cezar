@@ -67,7 +67,7 @@ export function FactoryRoute() {
       <Card className={section}>
         <h2 className="font-semibold">Scorer pass rates</h2>
         {pending + errors > 0 && <p role="status" aria-label="Scoring progress" className="text-sm text-muted-foreground">
-          {pending} pending · {errors} errors
+          Pending scores {pending} · Scoring errors {errors}
         </p>}
         {scorers.length ? <table className="w-full text-sm">
           <thead><tr><th scope="col" className={header}>Scorer</th><th scope="col" className={header}>Prior 7 days</th><th scope="col" className={header}>Last 7 days</th></tr></thead>

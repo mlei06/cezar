@@ -23,5 +23,5 @@ it('shows pending and failed score counts for the current window', async () => {
   render(<QueryClientProvider client={client}><FactoryRoute /></QueryClientProvider>)
 
   const progress = await screen.findByRole('status', { name: 'Scoring progress' })
-  expect(progress.textContent).toBe('4 pending · 2 errors')
+  expect(progress.textContent).toBe('Pending scores 4 · Scoring errors 2')
 })
