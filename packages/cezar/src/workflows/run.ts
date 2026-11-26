@@ -6,7 +6,7 @@ import { prepareReplayCheck, runReplayShell } from './replay-check.ts';
 import { checkImprovementBenchmarks, improvementBenchmarkSummary } from '../improvement/benchmarks.ts';
 import { checkpointImprovementDecisions } from '../improvement/bookkeeping.ts';
 import { checkImprovementStep, improvementPrSummary, runImprovementDecisions } from '../improvement/lifecycle.ts';
-import { hasImprovementSkill, IMPROVE_FACTORY, IMPROVEMENT_CHECK } from '../improvement/workflow.ts';
+import { hasImprovementSkill, IMPROVE_FACTORY, IMPROVEMENT_CHECK, publicImprovementHistoryIssue } from '../improvement/workflow.ts';
 import { resolveReplayHarness, saveStagedReplayDiff, stagedReplay } from './staged-replay.ts';
 import { WorktreeLifecycleCoordinator } from '../worktree-lifecycle/coordinator.ts';
 import type { RunParked, RunSubject, WebhookAttentionRequest, TrackerAssociation, UsageWindowsObservation } from '@open-mercato/cezar-contract';
@@ -8813,6 +8813,13 @@ export class RunManager {
           if (typeof checkedHead !== 'string') {
             note('No validated improvement commit is available.', 'danger');
             return 'failed';
+          }
+          if (improvement.harness) {
+            const issue = await publicImprovementHistoryIssue(run, checkedHead, improvement.paths.queue);
+            if (issue) {
+              note(issue, 'danger');
+              return 'failed';
+            }
           }
           checkpointImprovementDecisions(improvement.paths, improvement.id, improvement.decisions.clusters);
         }
