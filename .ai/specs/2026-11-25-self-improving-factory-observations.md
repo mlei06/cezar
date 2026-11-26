@@ -84,6 +84,7 @@ Release `7dd520c` passed health and contained both playbooks and the charter loa
 
 | M2-7 | The Codex and OpenCode runner paths received per-request usage but had not passed it into the task collector. | PR #16's runner regressions exercise Codex request context and the OpenCode completion readings, including a repeated event. A live task on `f053f7e` returned request, context, and tool metrics. | harness | Emit readings through the existing usage-status event. Keep the raw request measurements optional for older logs and unsupported runners. |
 | M2-8 | Budget alerts need to survive ordinary task updates and arrive on distinct turns when thresholds are crossed separately. | Release `03e0bc9` delivered one alert at 1× and another at 2× on an isolated task. Separate live checks excluded queue and parked time and observed a saved metrics snapshot. | harness | Keep durable per-threshold identities and reuse the manager follow-up channel. |
+| M2-9 | A graph and its agent can both try to publish the same change. | #18 passed the GitHub and Azure publication tests, the Azure source-branch guard, and the custom graph cases. Release `ab14791` returned the graph-specific admission response while a scratch task was still checking. | harness | The graph publishes when it has a PR node. Existing manual publication remains available for other workflows. |
 
 ## Judge calibration
 

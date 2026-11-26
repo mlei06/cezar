@@ -21,7 +21,7 @@ The factory is built by the factory. After a one-time bootstrap (M0), which the 
 | M0 | done 2026-11-25 | release `0.21.0+release-735fc84` live; warm-up PR #1 merged and released; judge prototype calibrated on 2 runs; observations M0-1 to M0-10 |
 | M1 | done 2026-11-26 | PR #11 shipped slash-skill reporting in release `f1747bd`. Live New task acceptance passed. With `factory.models.lowReasoning` set on this machine, an `operate` task ran on OpenCode with the self-hosted low-reasoning model, read-only in one turn, and its prompt carried the capability block (checked in the runner's stored session, since the model refuses to quote its own system prompt). |
 | M1.5 | released, live acceptance pending | PR #12 shipped the charter and manager playbooks in release `7dd520c`. Isolated concurrent managers passed. One project completed a live rollout. The concurrent live two-project check is pending. |
-| M2 | in progress | Run identity (#13), delegated routing (#14), shared USD storage (#15), task metrics (#16), and budget enforcement (#17) are released and verified live. Historical metrics replay passed locally. The PR workflow correction and Azure ownership guard (B16, #18) merged and are releasing. Task CPU priority (B22) is in validation. |
+| M2 | in progress | Run identity (#13), delegated routing (#14), shared USD storage (#15), task metrics (#16), and budget enforcement (#17) are released and verified live. Historical metrics replay passed locally. The PR workflow correction and Azure ownership guard (B16, #18) released in `ab14791`; the custom publication gate passed live. Task CPU priority (B22) is in validation. |
 | M3 | implementation staged, live judge pending | Catalog, isolated judge, scoring queue, cause routing and cockpit/API changes have focused checks. The owner-controlled judge route is unset on this machine. Live scoring and calibration are pending. |
 
 ## Goal and definition of done
@@ -334,14 +334,14 @@ New features and improvements found so far, not yet scheduled into a milestone. 
 | B13 | **Global skills read by every task** (graphify and others) add noise to first reads; consider a per-project skill allowlist, or keeping tool-specific skills out of the global folders | M0-8 | after M3, using efficiency scores |
 | B14 | **Tasks linger after their PR merges** (about 6 minutes `running`), delaying releases | M0-10 | M4 (`harness-release` wait-for-idle) |
 | B15 | **Secret-narrowing edge cases left after PR #4:** Claude error or signal exits can record an unstarted session; OpenCode 2.x can silently start fresh with the resumed session's grants; no coverage for completion without startup events | PR #4 final review | after M2 |
-| B16 | **Azure ready transition** can mark an unrelated PR ready: it uses a stored PR URL without checking the PR's source branch belongs to the task (pre-existing) | PR #4 final review | M2 (merged in #18, live verification pending) |
+| B16 | **Azure ready transition** can mark an unrelated PR ready: it uses a stored PR URL without checking the PR's source branch belongs to the task (pre-existing) | PR #4 final review | M2 (#18 released; workflow gate verified live and Azure ownership checked by the forge fixture) |
 | B17 | **Merged PRs broke `factory`'s typecheck together** (#3 + #4); the manager must check a PR is rebased on current `factory` before merging, and the release's typecheck caught it | release of 7de5499 failed safely | M1 (manager rule), M4 (CI-like check before merge) |
 | B18 | **Cap each tool call's output and compact context between turns**, so early large reads don't inflate every later request (e04a507e: 128k average context over 121 requests) | judge on e04a507e | M2 or after M3 |
 | B19 | **The `scope` scorer sees the spec sections a task names,** not only its brief, so drift the brief allowed is still caught | M1-7 | M3 |
-| B20 | **`review-pr` on Claude: two of three reviewers can't run Bash** (read-only allowlist), so they never see the change and give no verdict, which silently weakens reviews | review 0ee2df32 | M2 |
+| B20 | **`review-pr` on Claude: two of three reviewers can't run Bash** (read-only allowlist), so they never see the change and give no verdict, which silently weakens reviews | review 0ee2df32 | M2 (review template and read-only allowlist verified in code) |
 | B21 | **A runner failing right after a machine restart** (Codex read-only startup) made the manager switch runners; Cezar could retry the original runner once after a short delay before falling back | M1, after the crash | M4 |
 | B22 | **Test runs overload the host:** tasks override the repository's 2-worker Vitest cap (`--maxWorkers=5`) and start a second full suite in the same worktree while one runs; with several tasks in parallel the laptop crashed. Cezar could give each task a CPU share (for example `nice` and a cgroup CPU limit per run) and the `implement` check steps should run the suite once, with the default | M1, after the crashes | M2 (with budgets) |
-| B23 | **Read-only review tasks have no `gh`,** so they can't confirm a PR's live head or target and compare against their local `origin/factory` instead | review 30fe42f2 | M2 |
+| B23 | **Read-only review tasks have no `gh`,** so they can't confirm a PR's live head or target and compare against their local `origin/factory` instead | review 30fe42f2 | M2 (read-only forge commands verified in code) |
 
 ## Risks
 
@@ -363,7 +363,7 @@ New features and improvements found so far, not yet scheduled into a milestone. 
 |---|---|---|
 | M0 | 1 session | overseer-built |
 | M1 | 1–2 sessions | six small PRs |
-| M2 | in progress | Run identity (#13), delegated routing (#14), shared USD storage (#15), task metrics (#16), and budget enforcement (#17) are released and verified live. Historical metrics replay passed locally. The PR workflow correction and Azure ownership guard (B16, #18) merged and are releasing. Task CPU priority (B22) is in validation. |
+| M2 | in progress | Run identity (#13), delegated routing (#14), shared USD storage (#15), task metrics (#16), and budget enforcement (#17) are released and verified live. Historical metrics replay passed locally. The PR workflow correction and Azure ownership guard (B16, #18) released in `ab14791`; the custom publication gate passed live. Task CPU priority (B22) is in validation. |
 | M3 | 2 sessions | plus calibration over about 20 runs |
 | M4 | 1–2 sessions | |
 | M5 | 2–3 sessions | plus two weeks for its acceptance |
