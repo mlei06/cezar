@@ -54,6 +54,7 @@ import { RunHeader } from './run-header'
 import { RunUsage } from './run-usage'
 import { AskCard } from './ask-card'
 import { FooterLabel, OutcomeCard } from './outcome-card'
+import { RunScoresPanel } from './run-scores-panel'
 import { useRunRecordReconcile } from './run-reconcile'
 import { ThreadLoading } from './thread-loading'
 import { threadRenderMode } from './thread-scroll'
@@ -485,6 +486,8 @@ export function ThreadView({
             />
           )
         ) : null}
+
+        {run.finishedAt ? <RunScoresPanel runId={run.id} /> : null}
 
         {/* The review gate (spec 009): a finished run with changes parks here — nothing
             auto-merges. The panel exists exactly while the run rests at `review`. */}

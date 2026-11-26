@@ -406,6 +406,7 @@ export const runRecordSchema = z.object({
   onBudget: runRecordContract.shape.onBudget.catch(undefined),
   budgetExceeded: runRecordContract.shape.budgetExceeded.catch(undefined),
   activeMs: runRecordContract.shape.activeMs.catch(undefined),
+  scoreSummary: runRecordContract.shape.scoreSummary.catch(undefined),
   untrustedHead: z.boolean().optional().catch(undefined),
   /**
    * Exact deadline at which a run stopped by a provider USAGE LIMIT resumes itself

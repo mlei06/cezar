@@ -20,6 +20,9 @@ describe('TASK_COLUMNS', () => {
       'reference',
       'tokens',
       'cost',
+      'outcomeScore',
+      'efficiencyScore',
+      'mainCause',
       'planLimit',
       'cpu',
       'memory',
@@ -28,7 +31,7 @@ describe('TASK_COLUMNS', () => {
     expect(TASK_COLUMNS.slice(0, 2).map((column) => column.canFold)).toEqual([false, false])
   })
 
-  it('folds only Branch and the optional Plan limit by default — Mem stays open, as existing users have it', () => {
+  it('folds optional columns by default and keeps Memory open', () => {
     const normalized = normalizeExpandedColumns(undefined)
     expect(
       Object.fromEntries(TASK_COLUMNS.map((column) => [column.id, isColumnExpanded(column.id, normalized)])),
@@ -41,6 +44,9 @@ describe('TASK_COLUMNS', () => {
       reference: true,
       tokens: true,
       cost: true,
+      outcomeScore: false,
+      efficiencyScore: false,
+      mainCause: false,
       planLimit: false,
       cpu: true,
       memory: true,
@@ -85,6 +91,9 @@ describe('TASK_COLUMNS', () => {
       'diff',
       'reference',
       'cost',
+      'outcomeScore',
+      'efficiencyScore',
+      'mainCause',
       'planLimit',
       'cpu',
       'memory',
@@ -101,6 +110,10 @@ describe('tableMinWidth', () => {
   it('keeps the Task column its 220px floor beside every fixed column (iPad portrait gave it 0px)', () => {
     expect(tableMinWidth(TASK_COLUMNS, {}, false)).toBe(fixed + 220)
     expect(tableMinWidth(TASK_COLUMNS, {}, true)).toBe(fixed + 220 + 36)
+  })
+
+  it('adds score column width only when enabled', () => {
+    expect(tableMinWidth(TASK_COLUMNS, { outcomeScore: true }, false)).toBe(fixed + 220 + 110)
   })
 
   it('shrinks with folded columns and the capability-hidden ones, so folding still narrows the table', () => {

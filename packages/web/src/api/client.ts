@@ -5,7 +5,7 @@ import type {
   lifecyclePreviewInputSchema, lifecycleListQuerySchema, LifecycleOutputResponse,
   LifecyclePreviewResponse, LifecycleActionInput, StartLifecycleRemovalInput,
 } from '@open-mercato/cezar-api-client'
-import { deferredAlreadyStartedSchema, trackerReadScope, resolveApiUrl, runMetricsSchema, workspaceBrandingLogoResponseSchema } from '@open-mercato/cezar-api-client'
+import { deferredAlreadyStartedSchema, trackerReadScope, resolveApiUrl, runMetricsSchema, runScoresResponseSchema, workspaceBrandingLogoResponseSchema } from '@open-mercato/cezar-api-client'
 import type {
   DetectedUrlsResponse,
   DiscoveredCommandsResponse,
@@ -64,6 +64,7 @@ import type {
   ChangesPayload,
   RunArtifactsResponse,
   RunMetrics,
+  RunScoresResponse,
   ArtifactsBySubjectResponse,
   ProjectAssetsResponse,
   ImpactSubjectInput,
@@ -1432,6 +1433,16 @@ export async function getRunArtifacts(id: string, opts?: ReadOptions): Promise<R
     ),
     runPath(id, '/artifacts'),
   )
+}
+
+export async function getRunScores(id: string, opts?: ReadOptions): Promise<RunScoresResponse> {
+  return runScoresResponseSchema.parse(await unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].scores.$get(
+      { param: { projectId: queryScope(), id: encodeURIComponent(id) } },
+      init(opts),
+    ),
+    runPath(id, '/scores'),
+  ))
 }
 
 export async function getRunMetrics(id: string, opts?: ReadOptions): Promise<RunMetrics> {

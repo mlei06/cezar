@@ -8,6 +8,9 @@ export const TASK_COLUMN_IDS = [
   'reference',
   'tokens',
   'cost',
+  'outcomeScore',
+  'efficiencyScore',
+  'mainCause',
   'planLimit',
   'cpu',
   'memory',
@@ -36,6 +39,7 @@ export interface TaskColumnDefinition {
   /** Preferred expanded width. Task deliberately has none and receives the flexible remainder. */
   width?: string
   icon?: TaskColumnIcon
+  hideWhileFolded?: boolean
   capability?: 'tokens' | 'cost'
   /** One-line explanation behind an ⓘ beside the expanded header. */
   hint?: string
@@ -98,6 +102,9 @@ export const TASK_COLUMNS = [
     icon: 'cost',
     capability: 'cost',
   },
+  { id: 'outcomeScore', label: 'Outcome', canFold: true, defaultExpanded: false, hideWhileFolded: true, align: 'left', width: '110px' },
+  { id: 'efficiencyScore', label: 'Efficiency', canFold: true, defaultExpanded: false, hideWhileFolded: true, align: 'left', width: '110px' },
+  { id: 'mainCause', label: 'Main cause', canFold: true, defaultExpanded: false, hideWhileFolded: true, align: 'left', width: '124px' },
   // Optional (plan-usage design, screen 4): folded until chosen, and only then is the ledger asked.
   {
     id: 'planLimit',
@@ -196,8 +203,9 @@ export function tableMinWidth(
 ): number {
   let total = (controls ? CONTROLS_COLUMN_WIDTH_PX : 0) + TASK_COLUMN_MIN_PX
   for (const column of columns) {
-    if (column.width === undefined) continue
-    total += isColumnExpanded(column.id, normalized) ? Number.parseFloat(column.width) : FOLDED_COLUMN_WIDTH_PX
+    const expanded = isColumnExpanded(column.id, normalized)
+    if (column.width === undefined || (!expanded && column.hideWhileFolded)) continue
+    total += expanded ? Number.parseFloat(column.width) : FOLDED_COLUMN_WIDTH_PX
   }
   return total
 }

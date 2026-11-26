@@ -42,6 +42,7 @@ The cez-manager commands:
       both take --attach-last-user-message | --from-message <id>   copy a user's message in, verbatim, with its files
       and --file <path> | --stdin                                  read the text from a file or stdin
   cez-manager task cancel --project <id> <run> [--reason "…"]   stop a task you started and everything it dispatched
+  cez-manager scores --project <id> [--since <date>] [--group-by scorer|category|target]  inspect recorded scoring outcomes
   cez-manager task budget --project <id> <run> [--tokens N] [--minutes N] [--usd N]   raise the ceiling of a task you started
   cez-manager task retry --project <id> <run> [--runner r] [--account id] [--model m] [--effort low|medium|high|max]
   cez-manager workflows --project <id>                the project's workflows and what each can do: push, open-pr, posts-to-github, or read-only

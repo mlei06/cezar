@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { RecordedScore, ScoreRecordedEvent, TaskScoreEntry } from '@open-mercato/cezar-contract';
+import type { RecordedScore, RunScoreSummary, ScoreRecordedEvent, TaskScoreEntry } from '@open-mercato/cezar-contract';
 import { loadConfig } from '../config.ts';
 import { ScorerCatalog } from '../factory/scorers.ts';
 import type { RunRecord, RunStore } from '../runs/store.ts';
@@ -37,6 +37,23 @@ function settledAt(run: RunRecord): string | undefined {
 function sampled(runId: string, scorer: string, percent: number): boolean {
   const hash = createHash('sha256').update(runId).update('\0').update(scorer).digest().readUInt32BE(0);
   return hash / 2 ** 32 * 100 < percent;
+}
+
+function summarizeScores(scores: Record<string, TaskScoreEntry>, finishedAt: string): RunScoreSummary {
+  const ordered = [...new Set(['outcome', 'efficiency', 'procedure', 'scope', ...Object.keys(scores)])];
+  const scored = (name: string) => {
+    const entry = scores[name];
+    return entry?.status === 'scored' && entry.finishedAt === finishedAt ? entry.score : undefined;
+  };
+  const outcome = scored('outcome');
+  const efficiency = scored('efficiency');
+  const mainCause = ordered.map((name) => scored(name)?.causes[0]?.target).find((cause) => cause !== undefined);
+  return {
+    finishedAt,
+    ...(outcome ? { outcome: { label: outcome.label, pass: outcome.pass } } : {}),
+    ...(efficiency ? { efficiency: { label: efficiency.label, pass: efficiency.pass } } : {}),
+    ...(mainCause ? { mainCause } : {}),
+  };
 }
 
 export class ScoringService {
@@ -194,6 +211,7 @@ export class ScoringService {
                 at: new Date().toISOString(),
               };
               save({ status: 'scored', finishedAt, score });
+              project.store.updateRun(run.id, { scoreSummary: summarizeScores(readRunScores(project.dataDir, run.id), finishedAt) });
               this.onScore({ projectId: project.id, runId: run.id, score }, project, run);
               break;
           }

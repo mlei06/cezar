@@ -63,6 +63,7 @@ import {
   getRunDrafts,
   getRunArtifacts,
   getRunMetrics,
+  getRunScores,
   getImpactForSubject,
   getProjectAssets,
   impactSubjectKey,
@@ -225,6 +226,7 @@ export const queryKeys = {
     list: () => [queryScope(), 'runs', 'list'] as const,
     detail: (id: string) => [queryScope(), 'runs', 'detail', id] as const,
     metrics: (id: string) => [queryScope(), 'runs', 'metrics', id] as const,
+    scores: (id: string) => [queryScope(), 'runs', 'scores', id] as const,
     diff: (id: string) => [queryScope(), 'runs', 'diff', id] as const,
     changes: (id: string) => [queryScope(), 'runs', 'changes', id] as const,
     gitStatus: (id: string) => [queryScope(), 'runs', 'git-status', id] as const,
@@ -1530,6 +1532,14 @@ export function useRunArtifacts(id: string | undefined) {
     queryKey: queryKeys.runs.artifacts(id ?? ''),
     queryFn: ({ signal }) => getRunArtifacts(id as string, { signal }),
     enabled: Boolean(id),
+    retry: false,
+  })
+}
+
+export function useRunScores(id: string) {
+  return useQuery({
+    queryKey: queryKeys.runs.scores(id),
+    queryFn: ({ signal }) => getRunScores(id, { signal }),
     retry: false,
   })
 }

@@ -90,3 +90,30 @@ export const queuedCauseSchema = z.object({
 });
 export type QueuedCause = z.infer<typeof queuedCauseSchema>;
 export const causeQueueSchema = z.array(queuedCauseSchema);
+
+export const scoresQuerySchema = z.object({
+  since: z.string().datetime().or(z.string().date()).optional(),
+  groupBy: z.enum(['scorer', 'category', 'target']).default('scorer'),
+});
+export type ScoresQuery = z.infer<typeof scoresQuerySchema>;
+
+const scoreGroupSchema = z.object({
+  key: z.string(),
+  passed: z.number().int().nonnegative(),
+  failed: z.number().int().nonnegative(),
+  pending: z.number().int().nonnegative(),
+  errors: z.number().int().nonnegative(),
+});
+export type ScoreGroup = z.infer<typeof scoreGroupSchema>;
+export const scoresResponseSchema = z.object({ groups: z.array(scoreGroupSchema) });
+export type ScoresResponse = z.infer<typeof scoresResponseSchema>;
+export const workspaceScoresResponseSchema = z.object({
+  projects: z.array(scoresResponseSchema.extend({ projectId: z.string() })),
+});
+export type WorkspaceScoresResponse = z.infer<typeof workspaceScoresResponseSchema>;
+export const managerScoresQuerySchema = scoresQuerySchema.extend({ projectId: z.string().min(1).max(200) });
+export type ManagerScoresQuery = z.infer<typeof managerScoresQuerySchema>;
+export const factoryCheckResponseSchema = z.object({
+  issues: z.array(z.object({ path: z.string(), message: z.string() })),
+});
+export type FactoryCheckResponse = z.infer<typeof factoryCheckResponseSchema>;
