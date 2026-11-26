@@ -47,7 +47,7 @@ Each fix must answer: would it have prevented the quoted evidence in the runs yo
 
 ## 5. Record
 
-Write the decisions file at the path the brief names, as JSON, one entry per cluster:
+Write the decisions file at `$CEZ_ARTIFACTS_DIR/improvement-decisions.json` (the workflow names the path), as JSON, one entry per cluster:
 
 ```json
 { "clusters": [
@@ -58,10 +58,10 @@ Write the decisions file at the path the brief names, as JSON, one entry per clu
 
 Every cause in the batch belongs to exactly one cluster. Don't commit the decisions file.
 
-Then write the PR description:
+Your final message is the PR description; Cezar opens the PR with it. Write it as:
 - **Changes:** each fix, its cluster, the files, and the regressions it addresses (runs, scorers, evidence).
 - **Expected effect:** which scorer and failure rate should improve, by roughly how much.
 - **Not fixed:** dismissed, escalated and deferred clusters, each with its reason.
 - **Previous improvements:** any you kept, fixed or reverted after their before/after numbers.
 
-Your final message is the PR description's summary: what changed, what you verified, what's left. Keep it short; the decisions file and the PR hold the detail.
+Keep it short; the decisions file holds the per-cause detail.

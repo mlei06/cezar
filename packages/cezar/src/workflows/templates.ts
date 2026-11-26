@@ -333,6 +333,45 @@ const OPERATE: WorkflowDef = {
   budget: { tokens: 800_000, minutes: 20 },
 };
 
+/**
+ * The improvement run (factory D6): kept out of the picker's built-ins, since only the
+ * self-improvement service starts it. A project's own `improve-factory` workflow replaces it.
+ */
+export const IMPROVE_FACTORY_DECISIONS_FILE = 'improvement-decisions.json';
+export const IMPROVE_FACTORY: WorkflowDef = {
+  ...builtIn('improve-factory', 'Turn a batch of scored failure causes into one PR of redrafts (improvement runs only).', {
+    nodes: [
+      { id: 'start', type: 'start' },
+      {
+        id: 'work', type: 'agent', skill: 'improve-factory',
+        prompt: `{{task}}\n\nFollow the improve-factory skill. Write the decisions file to $CEZ_ARTIFACTS_DIR/${IMPROVE_FACTORY_DECISIONS_FILE}, never into the repository. ` +
+          'Leave your changes in the task worktree: Cezar runs `cez factory check` and opens the PR. Your final message becomes the PR description.',
+      },
+      { id: 'check-1', type: 'check', literalCommand: true, name: 'cez factory check', command: 'node "$CEZ_BIN" factory check' },
+      { id: 'retry', type: 'loop', max: 2 },
+      { id: 'stopped', type: 'end', status: 'failed' },
+      {
+        id: 'fix', type: 'agent', session: { continue: 'work' },
+        prompt: 'Repair what `cez factory check` reported, leave the changes in the task worktree, and keep the decisions file current.\n\ncheck-1: exit {{nodes.check-1.exitCode}}\n{{nodes.check-1.output}}',
+      },
+      { id: 'pr', type: 'github.draft-pr' },
+      { id: 'done', type: 'end', status: 'success' },
+    ],
+    edges: [
+      { from: 'start', to: 'work' },
+      { from: 'work.done', to: 'check-1' },
+      { from: 'check-1.pass', to: 'pr' },
+      { from: 'check-1.fail', to: 'retry' },
+      { from: 'retry.repeat', to: 'fix' },
+      { from: 'retry.exhausted', to: 'stopped' },
+      { from: 'fix.done', to: 'check-1' },
+      { from: 'pr.created', to: 'done' },
+      { from: 'pr.nothing', to: 'done' },
+    ],
+  }),
+  budget: { tokens: 3_000_000, minutes: 30 },
+};
+
 export const BUILT_IN_GRAPH_WORKFLOWS: readonly WorkflowDef[] = [IMPLEMENT_AND_VERIFY, IMPLEMENT_REVIEW_PR, REVIEW_COUNCIL, REVIEW_PR, FIX_CI, IMPLEMENT, PLAN, OPERATE];
 
 /**

@@ -854,6 +854,15 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
 
 ## Changelog
 
+- **v5.32:** D6 improvement run as built:
+  - the built-in `improve-factory` workflow (the skill, `cez factory check` with two repairs, the draft PR) stays out of the workflow picker, and a project's own `improve-factory` workflow replaces it;
+  - the decisions file is `$CEZ_ARTIFACTS_DIR/improvement-decisions.json`, outside the diff;
+  - the run's final message is the PR description;
+  - a run that finishes without a valid decisions file counts as failed and returns its batch;
+  - `POST /factory/improve` is the owner's "Improve now";
+  - nothing starts until the owner has installed the `improve-factory` skill;
+  - a merge is recorded by time, and the cooldown counts the project's scored runs since it;
+  - the automation trigger, `cez-manager improve` and the harness digest follow.
 - **v5.31:** D6 protection: owner-protected paths hold an autonomous manager's merge for the owner, with renames counted and a fallback for forges without a file list. The 400-line limit waits for improvement PR records.
 - **v5.30:** D6 bookkeeping edge cases: batches of at most 50 open causes, a closed unmerged PR reopens its causes, harness escalations return to the harness queue, a three-failure pause on automatic starts, and the cooldown ends at its first limit.
 - **v5.29:** D5 defines each cause target, after calibration showed blind labels putting Cezar's own sandbox, grants and built-in workflows under `infra` or `workflow` instead of `harness`.
