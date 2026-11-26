@@ -17,7 +17,14 @@ vi.mock('node:child_process', async (importOriginal) => {
   // poll budget. The openFileInDefaultApp arg-surface tests (#365) still override this per-test
   // with mockReturnValue in their own beforeEach.
   spawnMock.mockImplementation(() => ({ once: vi.fn(), unref: vi.fn() }));
-  return { ...actual, spawn: (...args: unknown[]) => spawnMock(...args) };
+  return {
+    ...actual,
+    spawn: (...args: unknown[]) => spawnMock(...args),
+    execFileSync: (...args: unknown[]) => {
+      if (args[0] === 'wslpath') throw new Error('wslpath is unavailable in this fixture');
+      return Reflect.apply(actual.execFileSync, undefined, args);
+    },
+  };
 });
 
 import { RUNNER_IDS } from '../core/agent-runner.ts';
@@ -28,12 +35,16 @@ import { RUNNER_IDS } from '../core/agent-runner.ts';
 // `spawn`, so it trips on the mock exactly as it would on the real thing. Scoped to the file and
 // restored afterwards, so no other suite inherits the exemption.
 const savedAllowSpawn = process.env.CEZ_ALLOW_TEST_SPAWN;
+const savedDistro = process.env.WSL_DISTRO_NAME;
 beforeAll(() => {
   process.env.CEZ_ALLOW_TEST_SPAWN = '1';
+  process.env.WSL_DISTRO_NAME = 'Ubuntu';
 });
 afterAll(() => {
   if (savedAllowSpawn === undefined) delete process.env.CEZ_ALLOW_TEST_SPAWN;
   else process.env.CEZ_ALLOW_TEST_SPAWN = savedAllowSpawn;
+  if (savedDistro === undefined) delete process.env.WSL_DISTRO_NAME;
+  else process.env.WSL_DISTRO_NAME = savedDistro;
 });
 
 import {
@@ -281,8 +292,7 @@ describe('fileManagerLaunch (#361 WSL support)', () => {
   it('goes through interop to explorer.exe under WSL, translating the POSIX path', () => {
     const result = fileManagerLaunch('/home/pat/project', 'linux', true);
     expect(result.bin).toBe('explorer.exe');
-    // No real `wslpath` on the machine running this suite, so translateToWindowsPath falls back
-    // to the pure conversion — still deterministic and worth pinning here.
+    // The fixture makes wslpath unavailable so this exercises the portable fallback.
     expect(result.args).toEqual(['\\\\wsl$\\Ubuntu\\home\\pat\\project']);
   });
 
