@@ -4529,6 +4529,29 @@ describe('ManagerEngine', () => {
       expect(backend.specs).toEqual([]);
     });
 
+    it('posts the saved harness release once without starting a manager turn', async () => {
+      const engine = followedEngine();
+      const id = await started(engine);
+      await engine.update(id, { projects: ['alpha'] });
+      const report = {
+        id: '41a8ac9a-32a5-4318-9a7f-000000000001',
+        commit: 'a'.repeat(40),
+        result: 'rolled-back' as const,
+        version: '0.1.0+fixture',
+        previous: '0.1.0+previous',
+        benchmark: { passRate: 80, baseline: 90, tolerance: 10 },
+        changes: ['fix(fixture): preserve the previous release (#1)'],
+      };
+      expect(engine.reportHarnessRelease('unrelated', report)).toBe(false);
+      expect(engine.reportHarnessRelease('alpha', report)).toBe(true);
+      expect(engine.reportHarnessRelease('alpha', report)).toBe(true);
+      expect(assistants(id)).toEqual([expect.objectContaining({
+        turn: 'watch', headline: 'Harness release rolled back',
+        text: expect.stringContaining('Benchmark 80%, baseline 90%, tolerance 10 points.'),
+      })]);
+      expect(backend.specs).toEqual([]);
+    });
+
     it('only forwards a budget raise for a task started by this manager', async () => {
       const engine = followedEngine();
       const id = await started(engine);

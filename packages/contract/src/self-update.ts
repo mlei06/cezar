@@ -200,3 +200,21 @@ export const releaseHoldStatusSchema = releaseHoldLeaseSchema.extend({
   activeManagers: z.number().int().nonnegative(),
 });
 export type ReleaseHoldStatus = z.infer<typeof releaseHoldStatusSchema>;
+
+export const harnessReleaseReportSchema = z.object({
+  id: z.string().uuid(),
+  commit: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/),
+  version: z.string().max(100).optional(),
+  previous: z.string().max(100).optional(),
+  result: z.enum(['switched', 'already-active', 'rolled-back', 'blocked', 'failed']),
+  benchmark: z.object({
+    passRate: z.number().min(0).max(100),
+    baseline: z.number().min(0).max(100),
+    tolerance: z.number().min(0).max(100),
+  }).optional(),
+  changes: z.array(z.string().max(260)).max(20),
+});
+export type HarnessReleaseReport = z.infer<typeof harnessReleaseReportSchema>;
+
+export const harnessReleaseReportDeliverySchema = z.object({ delivered: z.boolean() });
+export type HarnessReleaseReportDelivery = z.infer<typeof harnessReleaseReportDeliverySchema>;

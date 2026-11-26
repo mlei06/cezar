@@ -158,6 +158,11 @@ it.skipIf(process.platform === 'win32').each(['restart', 'health', 'manual', 'be
         expect(log).toEqual([expect.objectContaining({ action: 'switch', result: 'failed', reason: 'The candidate is not merged into origin/factory.' })]);
         return;
       }
+      if (failure === 'benchmark' || failure === 'post-switch' || failure === 'validation') {
+        const report = JSON.parse(await readFile(join(workspace, 'factory', 'last-release-report.json'), 'utf8'));
+        expect(report).toMatchObject({ commit: sha, result: failure === 'post-switch' ? 'rolled-back' : 'blocked' });
+        if (failure === 'benchmark') expect(report.benchmark).toEqual({ passRate: 60, baseline: 100, tolerance: 10 });
+      }
       if (failure === 'validation') {
         expect((await readFile(checksLog, 'utf8')).trim().split('\n')).toEqual(['run typecheck', 'test', 'run test:unit']);
         expect(log).toEqual([

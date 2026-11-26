@@ -15,7 +15,8 @@
 //          --stage-only (build and check an isolated cockpit; leave the live version active)
 //          --simulate-unhealthy (test the automatic rollback: the new version's health check fails)
 import { execFileSync, spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -246,6 +247,44 @@ async function candidateSmoke(packageRoot, entry) {
   await smokeStagedHarness(entry);
 }
 
+let reportCandidate;
+const reportStarted = Date.now();
+
+/** Only the protected benchmarked path posts to the manager. The cockpit reads
+ * the local report file; it never accepts caller-supplied manager text. */
+async function reportRelease() {
+  if (!reportCandidate || !flag('benchmark') || flag('stage-only')) return;
+  const { sha, previous } = reportCandidate;
+  const entries = releaseEntries().filter(entry => Date.parse(entry.at) >= reportStarted);
+  const switched = entries.find(entry => entry.action === 'switch' && entry.sha === sha);
+  const benchmark = entries.find(entry => entry.action === 'benchmark' && entry.sha === sha && typeof entry.passRate === 'number');
+  const rolledBack = switched && entries.some(entry => entry.action === 'rollback' && entry.automatic &&
+    entry.from === switched.id && entry.result === 'ok');
+  const result = switched?.result === 'ok' ? 'switched' : rolledBack ? 'rolled-back' :
+    switched?.result === 'failed' ? 'failed' : process.exitCode === 0 ? 'already-active' : 'blocked';
+  const base = previous && lastSwitch(previous)?.sha;
+  let changes = [];
+  if (base && /^[a-f0-9]{40,64}$/.test(base)) {
+    changes = run('git', ['log', '--first-parent', '--max-count=20', '--format=%s', base + '..' + sha])
+      .split('\n').filter(subject => /\(#\d+\)$/.test(subject)).map(subject => subject.slice(0, 260));
+  }
+  const report = {
+    id: randomUUID(), commit: sha, result, changes,
+    ...(switched?.id || benchmark?.id ? { version: switched?.id ?? benchmark?.id } : {}),
+    ...(previous ? { previous } : {}),
+    ...(benchmark ? { benchmark: { passRate: benchmark.passRate, baseline: benchmark.baseline, tolerance: benchmark.tolerance } } : {}),
+  };
+  const path = join(FACTORY, 'last-release-report.json');
+  const temp = path + '.' + report.id;
+  writeFileSync(temp, JSON.stringify(report) + '\n', { mode: 0o600, flag: 'wx' });
+  renameSync(temp, path);
+  const response = await fetch(API + '/workspace/factory/release-report', {
+    method: 'POST', redirect: 'error', signal: AbortSignal.timeout(5_000),
+  });
+  const delivery = response.ok && await response.json();
+  say(delivery?.delivered ? 'release report delivered to the harness manager' : 'release report saved locally');
+}
+
 async function release() {
   const stageOnly = flag('stage-only');
   const spec = positional[0] ?? FACTORY_REF;
@@ -261,6 +300,7 @@ async function release() {
     if (ancestor.status === 1) throw new Error('The candidate is not merged into origin/factory.');
     if (ancestor.status !== 0) throw new Error('Could not verify the candidate against origin/factory.');
   }
+  reportCandidate = { sha };
   const sha7 = sha.slice(0, 7);
   const dir = join(BUILDS, sha7);
   const branch = `release/${sha7}`;
@@ -306,6 +346,7 @@ async function release() {
 
   const su = await selfUpdate(packageRoot);
   const previous = su.activeId();
+  reportCandidate.previous = previous;
   if (flag('benchmark')) {
     const version = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')).version;
     if (!await benchmark(packageRoot, su, sha, su.linkId(version, branch), previous)) return 1;
@@ -390,3 +431,5 @@ try {
   log({ action: flag('rollback') ? 'rollback' : flag('stage-only') ? 'stage' : 'switch', result: error.code === 'busy' ? 'busy' : 'failed', reason: error.message });
   process.exitCode = error.code === 'busy' ? 3 : 1;
 }
+
+await reportRelease().catch(() => say('could not deliver the harness release report'));

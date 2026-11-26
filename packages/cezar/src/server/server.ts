@@ -260,6 +260,7 @@ import { planChain, slugify } from '../planner.ts';
 import { discoverSkills } from '../skills.ts';
 import { SkillsUpdateConflictError, SkillsUpdateCoordinator, SkillsUpdateService, type SkillsUpdateState } from '../skills-update.ts';
 import {
+  harnessReleaseReportSchema, type HarnessReleaseReportDelivery,
   releaseHoldInputSchema, releaseHoldParamSchema, type ReleaseHoldStatus,
   selfUpdateApplyRequestSchema, selfUpdateChannelRequestSchema, selfUpdateDevelopmentQuerySchema,
 } from '@open-mercato/cezar-contract';
@@ -1011,6 +1012,7 @@ interface CauseQueueBody extends CauseQueueResponse {}
 interface RunScoresBody extends RunScoresResponse {}
 interface ScoreRunBody extends ScoreRunResponse {}
 interface ReleaseHoldBody extends ReleaseHoldStatus {}
+interface HarnessReleaseReportBody extends HarnessReleaseReportDelivery {}
 interface RunWithUsageBody extends RunRecord {
   usage?: ReturnType<typeof currentUsage>;
 }
@@ -4052,6 +4054,23 @@ export function createApp(deps: ServerDeps) {
         return c.json({ ok: true as const });
       } catch {
         return c.json({ error: 'Could not end the release hold.' }, 409);
+      }
+    })
+    .post('/workspace/factory/release-report', async (c): Promise<Response & (
+      TypedResponse<HarnessReleaseReportBody, 200, 'json'> | TypedResponse<{ error: string }, 409, 'json'>
+    )> => {
+      if (!capabilities().localHandoff || inRelayScope()) return c.json({ error: 'Release reporting requires a local cockpit.' }, 409);
+      try {
+        const config = await loadWorkspaceConfig();
+        const project = detectHarnessProject(config.projects, config.factory?.harnessProject);
+        if (!project || (capabilities().singleProject && project !== await resolveBootProject())) {
+          return c.json({ delivered: false }, 200);
+        }
+        const path = join(cezarHomeDir(), 'factory', 'last-release-report.json');
+        const report = harnessReleaseReportSchema.parse(JSON.parse(await readFile(path, 'utf8')));
+        return c.json({ delivered: managerEngine.reportHarnessRelease(project, report) }, 200);
+      } catch {
+        return c.json({ error: 'The saved harness release report could not be read.' }, 409);
       }
     });
 
