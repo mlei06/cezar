@@ -189,3 +189,7 @@ The Factory view received pending and error counts but only rendered pass rates.
 ### M6 release review
 
 The live cockpit released `f1c8724` through the protected workflow. #38 passed 18,684 full-suite tests plus unit, build and package checks. Installed fixture automation recorded an access failure before dependent work and kept one CI task across restart and repeated polls. The installed Factory view exposed the real-route benchmark matrix and its artifact. The stateless provider omitted cost, so the matrix preserved measured time and displayed cost as unavailable.
+
+### First genuine improvement admission
+
+The live hourly harness check admitted a single run at 23:22 UTC and durably claimed 17 causes from the existing queue. The batch entered the improvement workflow without a run-now request.
