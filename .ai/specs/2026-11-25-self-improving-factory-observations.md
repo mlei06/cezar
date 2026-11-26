@@ -114,6 +114,8 @@ Release `7dd520c` passed health and contained both playbooks and the charter loa
 
 | M4-11 | An alternate-version agent replay needs the original account without inheriting the workstation config. | A distinct installed-format build replayed an authenticated Codex Plan with the original project commit and model. The scratch workspace recorded the expected read and left the active version unchanged. | harness | Pass the selected runner profile into staging and preserve the score inputs when importing the result. |
 
+| M4-12 | An external-operation regression fixture must go through replay admission to cover the recorded-worktree boundary. | The full #27 run exposed the fixture mutating a started task. The corrected graph and route checks passed together with the terminal handoff guard. Browser e2e read three variants and repeat averages from the staged cockpit. | harness | Use the real admission path in replay fixtures and verify Compare from the installed entry. |
+
 ## Judge calibration
 
 A new blind sample contains 20 archived runs. The installed scoring queue admitted all 20, for 78 scorer calls. Blind labels were recorded before admission. After 45 minutes, 16 usable verdicts were recorded, 11 errored, and 51 remained queued. Of the usable subset, 14 agreed on pass/fail and there were no joint failures with a blind target. Four errors came from a transcript that exceeded the preserved-input budget. Three lacked an exact quoted cause, two had invalid reply shapes, and two timed out. The sample has yet to establish either acceptance threshold. Local evidence and run identities stay out of the fork.
