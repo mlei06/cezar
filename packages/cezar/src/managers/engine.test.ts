@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
@@ -2224,6 +2225,82 @@ describe('ManagerEngine', () => {
       expect(cold.userPrompt).toContain('You: On it.');
       expect(cold.userPrompt).toContain('cez-manager history');
       expect(store.state(id).sessions.chat).toMatchObject({ turns: 1 });
+    });
+
+    it('keeps concurrent managers scoped to their own charters and the harness skill scoped to the harness', async () => {
+      const harness = join(home, 'harness-project');
+      const ordinary = join(home, 'ordinary-project');
+      const nested = join(harness, 'nested-folder');
+      const git = (root: string, ...args: string[]) =>
+        execFileSync('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', ...args], { cwd: root });
+      for (const root of [harness, ordinary]) {
+        mkdirSync(join(root, '.ai/cezar'), { recursive: true });
+        git(root, 'init', '-q', '-b', 'main');
+        writeFileSync(join(root, '.ai/project.md'), [
+          '# Project charter', '## Vision', 'Read this in the repo.',
+          '## Backlog', `- P0 ${root === harness ? 'harness backlog' : 'ordinary backlog'}`,
+          `- P2 ${'x'.repeat(2_100)} end of backlog.`,
+          '## Progress', '- Work in progress.', '## Open questions', 'Read these in the repo.',
+        ].join('\n'));
+        if (root === harness) writeFileSync(join(root, '.ai/cezar/HARNESS'), '');
+        git(root, 'add', '.ai');
+        git(root, 'commit', '-qm', 'Charter');
+      }
+      const local = git(harness, 'rev-parse', 'HEAD').toString().trim();
+      const charter = join(harness, '.ai/project.md');
+      writeFileSync(charter, readFileSync(charter, 'utf8').replace('Work in progress.', 'Progress from a merged PR.'));
+      git(harness, 'commit', '-qam', 'Update progress');
+      git(harness, 'remote', 'add', 'fixture', ordinary);
+      git(harness, 'update-ref', 'refs/remotes/fixture/main', 'HEAD');
+      git(harness, 'branch', '--set-upstream-to=fixture/main');
+      git(harness, 'update-ref', 'refs/heads/main', local);
+      writeFileSync(join(harness, '.ai/project.md'), '## Backlog\nUncommitted draft.');
+      mkdirSync(nested);
+      const engine = makeEngine({ now: () => clock, projects: async () => [
+        { ...connected, id: 'harness', root: harness },
+        { ...connected, id: 'ordinary', root: ordinary },
+        { ...connected, id: 'nested', root: nested },
+      ] });
+      const createProjectManager = async (project: string) => {
+        const created = await engine.create({ instructions: 'Work on the project', projects: [project], cronMinutes: 0 });
+        if ('error' in created) throw new Error(created.error);
+        return created.id;
+      };
+      const harnessId = await createProjectManager('harness');
+      const ordinaryId = await createProjectManager('ordinary');
+      backend.scripts.push({ ...reply('Ready.'), hold: true }, { ...reply('Ready.'), hold: true });
+      engine.send(harnessId, 'status?');
+      engine.send(ordinaryId, 'status?');
+      await vi.waitFor(() => expect(backend.specs).toHaveLength(2));
+      expect(engine.inFlight()).toBe(2);
+      const first = backend.specs.find((spec) => spec.cwd === store.workdir(harnessId))!;
+      expect(first.userPrompt).toMatch(/^At the start of this session, first read \.ai\/project\.md/);
+      expect(first.userPrompt).toContain('harness backlog');
+      expect(first.userPrompt).toContain('Progress from a merged PR.');
+      expect(first.userPrompt).not.toMatch(/ordinary backlog|Uncommitted draft|Work in progress|Read this in the repo|Read these in the repo|end of backlog/);
+      expect(first.systemPrompt).toContain('Use the manage-harness skill alongside manage-project for these projects: harness.');
+      expect(existsSync(join(store.workdir(harnessId), '.agents/skills/manage-harness/SKILL.md'))).toBe(true);
+
+      const other = backend.specs.find((spec) => spec.cwd === store.workdir(ordinaryId))!;
+      expect(other.userPrompt).toContain('ordinary backlog');
+      expect(other.userPrompt).not.toContain('harness backlog');
+      expect(other.systemPrompt).not.toContain('manage-harness');
+      expect(existsSync(join(store.workdir(ordinaryId), '.agents/skills/manage-harness/SKILL.md'))).toBe(false);
+      for (const session of backend.open) session.finish();
+      await settled(engine);
+
+      const warm = await turn(engine, harnessId, 'still ready?', reply('Yes.'));
+      expect(warm.resume).toBe(true);
+      expect(warm.userPrompt).not.toContain('harness backlog');
+      clock += 56 * 60_000;
+      const cold = await turn(engine, harnessId, 'where were we?', reply('At the next item.'));
+      expect(cold.resume).toBeUndefined();
+      expect(cold.userPrompt).toContain('harness backlog');
+
+      const nestedId = await createProjectManager('nested');
+      const nestedTurn = await turn(engine, nestedId, 'status?', reply('Ready.'));
+      expect(nestedTurn.userPrompt).not.toContain('harness backlog');
+      expect(nestedTurn.systemPrompt).not.toContain('manage-harness');
     });
 
     it('tells a resumed session its unchanged open cards by id only, and the full list when they change', async () => {

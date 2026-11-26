@@ -18,7 +18,7 @@ export function managerSystemPrompt(
   manager: Manager,
   projects: Array<{ id: string; name: string; access: ManagerAccess }>,
   connectors = '',
-  options: { textInFiles?: boolean; memory?: string; full?: boolean } = {},
+  options: { textInFiles?: boolean; memory?: string; full?: boolean; harnessProjects?: readonly string[] } = {},
 ): string {
   const full = options.full === true;
   const connected = projects.map((project) => `- ${project.id} (${project.name}${project.access === 'read' ? ', READ-ONLY' : ''})`).join('\n') || '- none yet';
@@ -27,6 +27,7 @@ export function managerSystemPrompt(
 
 Connected projects:
 ${connected}
+${options.harnessProjects?.length ? `\nUse the manage-harness skill alongside manage-project for these projects: ${options.harnessProjects.join(', ')}.\n` : ''}
 
 ${full ? AUTONOMOUS_TOOLS : `Your tools are the \`cez-manager\` command and read-only \`gh\`, both through Bash, and Read/Grep/Glob over the connected projects.
 ${managerBashPromptSection(manager.bashAllow, options)}`}
