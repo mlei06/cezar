@@ -118,7 +118,9 @@ export function summarizeRunMetrics(run: RunRecord, events: readonly RunEvent[],
     workflow: run.workflow,
     ...(runner ? { runner } : {}),
     ...(observedModel ? { model: observedModel } : {}),
-    startedBy: run.automation || run.automationTrigger || run.automationTracker ? 'automation' : run.startedByManager ? 'manager' : 'owner',
+    startedBy: run.replayOf ? 'replay'
+      : run.automation || run.automationTrigger || run.automationTracker ? 'automation'
+        : run.startedByManager ? 'manager' : 'owner',
     ...(startCommit ? { startCommit } : {}),
     ...(harnessVersion ? { harnessVersion } : {}),
     wallMs: Number.isFinite(end - begin) ? Math.max(0, end - begin) : 0,

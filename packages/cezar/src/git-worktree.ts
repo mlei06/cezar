@@ -311,14 +311,45 @@ function refuseBelowDiskFloor(worktreePath: string): void {
  * (`uniqueBranchName`), because an existing branch of that name is treated as this run's own
  * surviving branch and reattached — that is what rematerializing a reclaimed worktree needs.
  */
+interface CreateWorktreeOptions {
+  branch?: string;
+  onCreated?: (startCommit: string) => void;
+  isolatedReplay?: boolean;
+}
+
 export async function createWorktree(
   repoRoot: string,
   runId: string,
   baseBranch: string,
-  opts: { branch?: string; onCreated?: (startCommit: string) => void } = {},
+  opts: CreateWorktreeOptions = {},
 ): Promise<WorktreeInfo> {
   const {materialized: _materialized, ...info} = await createWorktreeWithOutcome(repoRoot, runId, baseBranch, opts);
   return info;
+}
+
+/** Replay may inspect the worktree after a check changed its attributes. Keep the Git
+ * commands off network and prevent attributes from invoking configured external filters. */
+export async function replayGit(dir: string): Promise<(args: string[], env?: NodeJS.ProcessEnv) => Promise<GitResult>> {
+  const config = await git(dir, ['config', '--null', '--list', '--name-only']);
+  if (!config.ok) return async () => ({ ok: false, stdout: '', stderr: 'Replay could not read the repository Git configuration.' });
+  const options = ['--no-pager', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false',
+    '-c', 'diff.external=', '-c', 'protocol.allow=never', '-c', 'submodule.recurse=false'];
+  for (const key of new Set(config.stdout.split('\0'))) {
+    if (/^filter\..+\.(clean|process|smudge)$/.test(key)) options.push('-c', `${key}=`);
+  }
+  // A required driver still fails rather than silently substituting its pointer file.
+  return (args, env) => git(dir, [
+    ...options,
+    ...(args[0] === 'diff' || args[0] === 'show'
+      ? [args[0], '--no-ext-diff', '--no-textconv', '--ignore-submodules=all', ...args.slice(1)]
+      : args),
+  ], { env: { ...process.env, ...env, GIT_NO_LAZY_FETCH: '1', GIT_NO_REPLACE_OBJECTS: '1' } });
+}
+
+export async function hasReplayCommit(repoRoot: string, commit: string): Promise<boolean> {
+  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(commit)) return false;
+  const result = await git(repoRoot, ['rev-parse', '--verify', '--quiet', `${commit}^{commit}`]);
+  return result.ok && result.stdout.trim() === commit.toLowerCase();
 }
 
 /** Internal generation boundary; the public helper retains its original response shape. */
@@ -326,7 +357,7 @@ export async function createWorktreeWithOutcome(
   repoRoot: string,
   runId: string,
   baseBranch: string,
-  opts: { branch?: string; onCreated?: (startCommit: string) => void } = {},
+  opts: CreateWorktreeOptions = {},
 ): Promise<WorktreeInfo & { materialized: boolean }> {
   let base = baseBranch;
   if (!base || base === 'HEAD') {
@@ -343,6 +374,7 @@ export async function createWorktreeWithOutcome(
   if (!isSafeGitRef(branch)) throw new Error(`refusing option-like branch name: ${branch}`);
   const absolutePath = join(canonicalPath(repoRoot), WORKTREES_DIR, runId);
   const branchRef = `refs/heads/${branch}`;
+  const checkout = opts.isolatedReplay ? await replayGit(repoRoot) : (args: string[]) => git(repoRoot, args);
 
   // A missing directory can leave stale administrative metadata behind.
   // Prune first so the checks below describe the filesystem as it exists now.
@@ -393,7 +425,7 @@ export async function createWorktreeWithOutcome(
       return {...worktreeInfo(byBranch.path, branch, base), materialized: false};
     }
     refuseBelowDiskFloor(absolutePath);
-    const attach = await git(repoRoot, ['worktree', 'add', absolutePath, branch]);
+    const attach = await checkout(['worktree', 'add', absolutePath, branch]);
     if (!attach.ok) {
       throw new Error(`git worktree reattach failed: ${attach.stderr.trim() || attach.stdout.trim()}`);
     }
@@ -408,7 +440,7 @@ export async function createWorktreeWithOutcome(
   const revision = await git(repoRoot, ['rev-parse', '--verify', `${base}^{commit}`]);
   if (!revision.ok) throw new Error(`git worktree add failed: ${revision.stderr.trim()}`);
   const startCommit = revision.stdout.trim();
-  const create = await git(repoRoot, ['worktree', 'add', '--no-track', '-b', branch, absolutePath, startCommit]);
+  const create = await checkout(['worktree', 'add', '--no-track', '-b', branch, absolutePath, startCommit]);
   if (!create.ok) {
     throw new Error(`git worktree add failed: ${create.stderr.trim() || create.stdout.trim()}`);
   }
@@ -753,12 +785,14 @@ export async function worktreeDiff(
   worktreePath: string,
   baseBranch: string,
   cap = DIFF_CAP,
+  replay = false,
 ): Promise<string> {
   if (!isSafeGitRef(baseBranch)) return '(diff failed: refusing option-like base ref)';
-  await git(worktreePath, ['add', '-N', '.']); // intent-to-add: untracked files show up
-  const mergeBase = await git(worktreePath, ['merge-base', baseBranch, 'HEAD']);
+  const invoke = replay ? await replayGit(worktreePath) : (args: string[]) => git(worktreePath, args);
+  await invoke(['add', '-N', '.']); // intent-to-add: untracked files show up
+  const mergeBase = await invoke(['merge-base', baseBranch, 'HEAD']);
   const base = mergeBase.ok && mergeBase.stdout.trim() ? mergeBase.stdout.trim() : baseBranch;
-  const res = await git(worktreePath, ['diff', base]);
+  const res = await invoke(['diff', base]);
   if (!res.ok) return `(diff failed: ${res.stderr.trim() || 'unknown git error'})`;
   if (res.stdout.length > cap) return `${res.stdout.slice(0, cap)}\n… (diff truncated)`;
   return res.stdout;
@@ -790,12 +824,14 @@ export async function branchDiff(repoRoot: string, baseBranch: string, branch: s
 export async function worktreeDiffStat(
   worktreePath: string,
   baseBranch: string,
+  replay = false,
 ): Promise<string> {
   if (!isSafeGitRef(baseBranch)) return '';
-  await git(worktreePath, ['add', '-N', '.']); // intent-to-add: untracked files show up
-  const mergeBase = await git(worktreePath, ['merge-base', baseBranch, 'HEAD']);
+  const invoke = replay ? await replayGit(worktreePath) : (args: string[]) => git(worktreePath, args);
+  await invoke(['add', '-N', '.']); // intent-to-add: untracked files show up
+  const mergeBase = await invoke(['merge-base', baseBranch, 'HEAD']);
   const base = mergeBase.ok && mergeBase.stdout.trim() ? mergeBase.stdout.trim() : baseBranch;
-  const res = await git(worktreePath, ['diff', '--stat', base]);
+  const res = await invoke(['diff', '--stat', base]);
   return res.ok ? res.stdout.trim() : '';
 }
 

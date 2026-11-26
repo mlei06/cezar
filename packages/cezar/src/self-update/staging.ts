@@ -42,23 +42,26 @@ export async function stagingJson(url: string, body?: unknown): Promise<unknown>
 
 /** Boot the candidate without the live project registry, managers or scheduler. */
 export async function withStagingCockpit<T>(
-  entry: string,
-  use: (api: string) => Promise<T>,
-  prepare?: (project: string) => Promise<void>,
+  entry: string, use: (api: string, project: string) => Promise<T>, opts: {
+    signal?: AbortSignal;
+    prepare?: (project: string, workspace: string) => Promise<string | void>;
+  } = {},
 ): Promise<T> {
   const scratch = await mkdtemp(join(tmpdir(), 'cez-staging-'));
   try {
     const project = join(scratch, 'project');
+    const workspace = join(scratch, 'workspace');
     await mkdir(project);
-    await prepare?.(project);
+    const stagedEntry = await opts.prepare?.(project, workspace) ?? entry;
+    opts.signal?.throwIfAborted();
     const port = await loopbackPort();
     const instanceId = 'staging-' + randomUUID();
     const api = 'http://127.0.0.1:' + port + '/api/v1';
-    const child = spawn(process.execPath, [entry, 'serve', '--repo', project, '--port', String(port), '--bind-host', '127.0.0.1', '--no-open'], {
+    const child = spawn(process.execPath, [stagedEntry, 'serve', '--repo', project, '--port', String(port), '--bind-host', '127.0.0.1', '--no-open'], {
       cwd: project,
       env: {
         ...stagingEnvironment(),
-        CEZ_HOME: join(scratch, 'workspace'),
+        CEZ_HOME: workspace,
         CEZ_INSTANCE_ID: instanceId,
         CEZ_REMOTE: '0',
         CEZ_DRY_RUN: '1',
@@ -80,17 +83,21 @@ export async function withStagingCockpit<T>(
       child.once('exit', exit);
       child.once('error', exit);
     });
+    const stop = () => { if (!stopped) child.kill('SIGTERM'); };
+    opts.signal?.addEventListener('abort', stop, { once: true });
     try {
       const end = Date.now() + 30_000;
       while (!stopped && Date.now() < end) {
+        opts.signal?.throwIfAborted();
         const health = await stagingJson(api + '/health').catch(() => undefined);
         if (health && typeof health === 'object' && 'instanceId' in health && health.instanceId === instanceId) {
-          return await use(api);
+          return await use(api, project);
         }
         await wait(250);
       }
       throw new Error(stopped ? 'The staging cockpit exited during startup.' : 'The staging cockpit did not become ready.');
     } finally {
+      opts.signal?.removeEventListener('abort', stop);
       if (!stopped) {
         child.kill('SIGTERM');
         await Promise.race([exited, wait(2_000, undefined, { ref: false })]);

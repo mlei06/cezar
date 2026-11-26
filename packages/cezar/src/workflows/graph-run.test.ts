@@ -1,10 +1,11 @@
 import { execFile } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CodexAppServerRunner } from '../core/codex-app-server-runner.ts';
+import { mockCodexPath } from '../core/codex-app-server-transport.ts';
 import { mergeWriteWorkspaceConfig } from '../workspace/config.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { OpencodeServerRunner } from '../core/opencode-server-runner.ts';
@@ -14,6 +15,7 @@ import { apiRequest } from '../server/loopback-request.testkit.ts';
 import { createApp } from '../server/server.ts';
 import * as templates from './templates.ts';
 import { RunStore } from '../runs/store.ts';
+import { runHarnessVersion } from '../self-update/run-version.ts';
 import { graphToSteps, type WorkflowGraph } from './graph.ts';
 import { loadWorkflows, resolveWorkflowModelAlias } from './load.ts';
 import { MISSING_SESSION_NOTE } from './resume-fallback.ts';
@@ -50,6 +52,7 @@ describe('graph workflows run through RunManager', () => {
 
   afterEach(() => {
     manager.dispose();
+    vi.unstubAllEnvs();
     if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
     else process.env.CEZ_DRY_RUN = savedDryRun;
     store.flush();
@@ -83,6 +86,165 @@ describe('graph workflows run through RunManager', () => {
     return workflow!;
   }
 
+  function stubReplaySandbox(): void {
+    const sandbox = join(repoRoot, '.ai', 'cezar', 'fixture-sandbox');
+    writeFileSync(sandbox, [
+      '#!/bin/sh',
+      `[ "$1" = sandbox ] || exec "${mockCodexPath()}" "$@"`,
+      '[ "$2" = --permission-profile ] && [ "$3" = replay ] || exit 2',
+      'grep -q "^enabled = false$" "$CODEX_HOME/config.toml" || exit 5',
+      '[ -z "$FIXTURE_PASSWORD" ] || exit 3',
+      'while [ "$#" -gt 0 ] && [ "$1" != -- ]; do shift; done',
+      '[ "$#" -gt 0 ] || exit 4',
+      'shift',
+      'export FIXTURE_SANDBOX_USED=1',
+      'exec "$@"',
+    ].join('\n'), { mode: 0o700 });
+    vi.stubEnv('CEZ_CODEX_BIN', sandbox);
+    vi.stubEnv('FIXTURE_PASSWORD', 'fixture-secret');
+  }
+
+  it.skipIf(process.platform !== 'linux')('replays a saved check workflow in a group from its original commit', async () => {
+    stubReplaySandbox();
+    const cwd = { cwd: repoRoot };
+    writeFileSync(join(repoRoot, '.gitattributes'), 'a.txt filter=replay-fixture\n');
+    await run('git', ['add', '.gitattributes'], cwd);
+    await run('git', [...GIT_ID, 'commit', '-qm', 'fixture attributes'], cwd);
+    const oldCommit = (await run('git', ['rev-parse', 'HEAD'], cwd)).stdout.trim();
+    const workflow: WorkflowDef = {
+      name: 'repeat', source: 'file', steps: [{ id: 'check', command: 'cat a.txt && printf "changed\\n" >>a.txt' }],
+    };
+    const original = store.createRun({ title: 'Baseline', task: 'Check the file.', workflow: workflow.name, steps: [] });
+    store.updateRun(original.id, {
+      status: 'done', startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(),
+      startCommit: oldCommit, harnessVersion: await runHarnessVersion(), workflowDef: workflow,
+    });
+    store.appendEvent(original.id, { type: 'user-message', text: 'Keep the original content.' });
+    writeFileSync(join(repoRoot, 'a.txt'), 'new\n');
+    await run('git', ['add', 'a.txt'], cwd);
+    await run('git', [...GIT_ID, 'commit', '-qm', 'new checkout'], cwd);
+    const filterMarker = join(repoRoot, '.git', 'filter-ran');
+    const filter = `printf invoked > ${JSON.stringify(filterMarker)}; cat`;
+    await run('git', ['config', 'filter.replay-fixture.smudge', filter], cwd);
+    await run('git', ['config', 'filter.replay-fixture.clean', filter], cwd);
+    const app = createApp({ repoRoot, store, manager, version: 'test' });
+    const replayRequest = (input: object) => apiRequest(app, `/api/v1/runs/${original.id}/replay`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input),
+    });
+    expect((await replayRequest({ times: 3, brief: 'Different brief', workflow: 'different' })).status).toBe(400);
+    expect((await replayRequest({ model: 'fixture-model' })).status).toBe(409);
+    const response = await replayRequest({ times: 3 });
+    expect(response.status, await response.clone().text()).toBe(202);
+    const result = await response.json() as { groupId: string; runs: string[] };
+    expect(result.runs).toHaveLength(3);
+    expect(original.groupId).toBe(result.groupId);
+    for (const id of result.runs) {
+      const completed = await settle(id);
+      expect(completed).toMatchObject({
+        replayOf: original.id, groupId: result.groupId, startCommit: oldCommit, worktreePath: expect.any(String),
+      });
+      expect(completed.status).toMatch(/review|done/);
+      expect(completed.task).toContain('Keep the original content.');
+      expect(manager.continueRun(id)).toMatchObject({ ok: false, error: expect.stringContaining('Replay') });
+      expect(manager.switchAgent(id, { runner: 'codex', agentProfile: 'default', changedBy: 'user' }))
+        .toHaveProperty('error', expect.stringContaining('Replay'));
+      const terminal = await apiRequest(app, `/api/v1/runs/${id}/terminal`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+      });
+      expect(terminal.status).toBe(409);
+      expect(await terminal.json()).toEqual({ error: 'Replay variants cannot open an ordinary terminal.' });
+      expect(store.readEvents(id)).toContainEqual(expect.objectContaining({ type: 'check-output', text: 'one' }));
+      expect(await (await apiRequest(app, `/api/v1/runs/${id}/diff`)).text()).toContain('+changed');
+      const changes = await apiRequest(app, `/api/v1/runs/${id}/changes`);
+      expect(changes.status).toBe(200);
+      expect((await changes.json() as { files: { path: string }[] }).files).toContainEqual(expect.objectContaining({ path: 'a.txt' }));
+    }
+    const compare = await apiRequest(app, `/api/v1/groups/${result.groupId}`);
+    expect(compare.status).toBe(200);
+    expect((await compare.json() as { runs: unknown[] }).runs).toHaveLength(4);
+    expect(readFileSync(join(repoRoot, 'a.txt'), 'utf8')).toBe('new\n');
+    expect(existsSync(filterMarker)).toBe(false);
+  });
+
+  it.skipIf(process.platform !== 'linux')('changes only the model when replaying a Codex Plan', async () => {
+    const runner = vi.spyOn(CodexAppServerRunner.prototype, 'startSession');
+    const original = manager.startRun(await builtin('plan'), { task: 'Inspect the fixture.', model: 'model-a', runner: 'codex' });
+    await vi.waitFor(() => expect(store.getRun(original.id)?.status).toBe('waiting'), { timeout: 15_000 });
+    expect(manager.finish(original.id)).toBe(true);
+    await settle(original.id);
+    await vi.waitFor(() => expect(manager.isActive(original.id)).toBe(false));
+    runner.mockClear();
+    const result = await manager.startReplay(original.id, { model: 'model-b', times: 3 });
+    if ('error' in result) throw new Error(result.error);
+    expect(result.runs).toHaveLength(3);
+    for (const replay of result.runs) {
+      expect(await settle(replay.id)).toMatchObject({
+        replayOf: original.id, groupId: result.groupId, replayChange: 'model model-b',
+        status: 'done', startCommit: original.startCommit, worktreePath: expect.any(String),
+      });
+    }
+    expect(runner).toHaveBeenCalledTimes(3);
+    for (const [spec] of runner.mock.calls) {
+      expect(spec).toMatchObject({ model: 'model-b', enforceReadOnly: true, allowedTools: ['Read', 'Grep', 'Glob'], mcpServers: [] });
+      expect(spec.additionalDirectories ?? []).not.toContain(join(repoRoot, '.ai', 'cezar', 'runs'));
+    }
+    runner.mockRestore();
+  }, 30_000);
+
+  it.skipIf(process.platform !== 'linux')('loads the requested replay skill from the pinned checkout', async () => {
+    const skillRoot = join(repoRoot, '.ai', 'skills', 'fixture-review');
+    mkdirSync(skillRoot, { recursive: true });
+    writeFileSync(join(skillRoot, 'SKILL.md'), '---\nname: fixture-review\ndescription: Inspect a fixture.\n---\nUse the pinned fixture guidance.\n');
+    await run('git', ['add', '.ai/skills'], { cwd: repoRoot });
+    await run('git', [...GIT_ID, 'commit', '-qm', 'fixture skill'], { cwd: repoRoot });
+    const original = manager.startRun(await builtin('plan'), { task: 'Inspect the fixture.', runner: 'codex' });
+    await vi.waitFor(() => expect(store.getRun(original.id)?.status).toBe('waiting'), { timeout: 15_000 });
+    expect(manager.finish(original.id)).toBe(true);
+    await settle(original.id);
+    await vi.waitFor(() => expect(manager.isActive(original.id)).toBe(false));
+    writeFileSync(join(skillRoot, 'SKILL.md'), 'Different uncommitted guidance.\n');
+    const runner = vi.spyOn(CodexAppServerRunner.prototype, 'startSession');
+    try {
+      const result = await manager.startReplay(original.id, { skill: 'fixture-review', times: 1 });
+      if ('error' in result) throw new Error(result.error);
+      expect(await settle(result.runs[0]!.id)).toMatchObject({ status: 'done', replayChange: 'skill fixture-review' });
+      expect(runner.mock.calls[0]?.[0].systemPrompt).toContain('Use the pinned fixture guidance.');
+      expect(runner.mock.calls[0]?.[0].systemPrompt).not.toContain('Different uncommitted guidance.');
+    } finally {
+      runner.mockRestore();
+    }
+  }, 30_000);
+
+  it.skipIf(process.platform !== 'linux')('routes Codex replay edits to the isolated shell and leaves the baseline untouched', async () => {
+    stubReplaySandbox();
+    const workflow: WorkflowDef = { name: 'edit-fixture', source: 'file', steps: [{ id: 'work', prompt: '{{task}}' }] };
+    const commit = (await run('git', ['rev-parse', 'HEAD'], { cwd: repoRoot })).stdout.trim();
+    const original = store.createRun({ title: 'Baseline', task: 'Update the fixture.', workflow: workflow.name, steps: [], runner: 'codex' });
+    store.updateRun(original.id, {
+      status: 'done', finishedAt: new Date().toISOString(), startCommit: commit, workflowDef: workflow,
+      harnessVersion: await runHarnessVersion(),
+    });
+    const launch = CodexAppServerRunner.prototype.startSession;
+    const writes: Promise<{ ok: boolean; text: string }>[] = [];
+    const runner = vi.spyOn(CodexAppServerRunner.prototype, 'startSession').mockImplementation(function (this: CodexAppServerRunner, spec, onEvent) {
+      expect(spec).toMatchObject({ enforceReadOnly: true, allowedTools: ['Read', 'Grep', 'Glob', 'Bash'], mcpServers: [] });
+      writes.push(spec.replayShell!('test "$FIXTURE_SANDBOX_USED" = 1 && printf revised >a.txt', new AbortController().signal));
+      return launch.call(this, spec, onEvent);
+    });
+    try {
+      const result = await manager.startReplay(original.id, { times: 1 });
+      if ('error' in result) throw new Error(result.error);
+      const completed = await settle(result.runs[0]!.id);
+      expect(completed.status).toBe('done');
+      expect(writes).toHaveLength(1);
+      expect(await writes[0]).toMatchObject({ ok: true });
+      expect(readFileSync(join(completed.worktreePath!, 'a.txt'), 'utf8')).toBe('revised');
+      expect(readFileSync(join(repoRoot, 'a.txt'), 'utf8')).toBe('one\n');
+    } finally {
+      runner.mockRestore();
+    }
+  }, 20_000);
+
   it.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('lowers the CPU priority of workflow checks', async () => {
     const command = `'${process.execPath}' -p 'require("node:os").getPriority()'`;
     const workflow: WorkflowDef = { name: 'priority', source: 'file', steps: [{ id: 'check', command }] };
@@ -90,6 +252,33 @@ describe('graph workflows run through RunManager', () => {
     expect((await settle(run.id)).status).toMatch(/review|done/);
     const output = store.readEvents(run.id).find((event) => event.type === 'check-output');
     expect(Number(output?.text)).toBeGreaterThanOrEqual(5);
+  });
+
+  it.skipIf(process.platform !== 'linux').each([false, true])('isolates local checks and skips side-effect checks during replay (graph: %s)', async (graph) => {
+    stubReplaySandbox();
+    const riskyCheck = { id: 'external', command: 'exit 7', sideEffects: true };
+    const localCheck = { id: 'local', command: 'test "$FIXTURE_SANDBOX_USED" = 1 && printf verified' };
+    const workflow: WorkflowDef = graph ? def({
+      nodes: [{ id: 'start', type: 'start' }, { ...riskyCheck, type: 'check' }, { ...localCheck, type: 'check' }],
+      edges: [{ from: 'start.next', to: 'external' }, { from: 'external.pass', to: 'local' }],
+    }) : { name: 'chain', source: 'file', steps: [riskyCheck, localCheck] };
+    const original = store.createRun({ title: 'Baseline', task: 'Repeat the local check.', workflow: workflow.name, steps: [] });
+    store.updateRun(original.id, {
+      status: 'done', finishedAt: new Date().toISOString(), workflowDef: workflow,
+      startCommit: (await run('git', ['rev-parse', 'HEAD'], { cwd: repoRoot })).stdout.trim(),
+      harnessVersion: await runHarnessVersion(),
+    });
+    const result = await manager.startReplay(original.id, { times: 1 });
+    if ('error' in result) throw new Error(result.error);
+    const replay = result.runs[0]!;
+    expect((await settle(replay.id)).status).toMatch(/done|review/);
+    expect(store.readEvents(replay.id)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'note', stepId: 'external', message: 'Side-effect check skipped during replay.' }),
+      expect.objectContaining({ type: 'check-output', stepId: 'local', text: 'verified' }),
+    ]));
+    expect(store.readEvents(replay.id).some((event) => event.type === 'check-output' && event.stepId === 'external')).toBe(false);
+    const ordinary = manager.startRun(workflow, { task: 'Run the complete workflow.' });
+    expect((await settle(ordinary.id)).status).toBe('failed');
   });
 
   it('provides factory workflow defaults and lets project files override all three', async () => {

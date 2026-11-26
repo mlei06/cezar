@@ -67,6 +67,8 @@ export interface BrokeredShell {
   offlinePrograms?: readonly string[];
 }
 
+export type ReplayShell = (command: string, signal: AbortSignal) => Promise<{ ok: boolean; text: string }>;
+
 export interface AgentRunSpec {
   /** Optional account usage metadata from ordinary activity. Bind to the resolved step account. */
   onUsageWindows?: (observation: UsageWindowsObservation) => void;
@@ -94,6 +96,8 @@ export interface AgentRunSpec {
    *  `cez-manager` and read-only `gh` (the fence Claude enforces through `bashHookCommand`).
    *  `verify` is the whole policy: it returns the argv pipeline to spawn, never a shell string. */
   brokeredShell?: BrokeredShell;
+  /** Codex replay only. The cockpit runs the command in a worktree sandbox without network. */
+  replayShell?: ReplayShell;
   /** Claude only: skip every permission prompt (`--permission-mode bypassPermissions`), the
    *  project's opt-in `bypassPermissions`. `enforceReadOnly` wins. Other backends ignore it. */
   bypassPermissions?: boolean;

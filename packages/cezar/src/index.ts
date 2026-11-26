@@ -83,6 +83,7 @@ import {
 import { handoffMarkerLine, handoffProject } from './runtime/cockpit-handoff.ts';
 import { checkFactory } from './factory/check.ts';
 import { runScoreCommand } from './scoring/cli.ts';
+import { runReplayCommand } from './workflows/replay-cli.ts';
 
 const HELP = `cezar — local cockpit for AI agent tasks in your repo
 
@@ -103,6 +104,7 @@ Usage:
                             (local, no cockpit; paths default to $CEZ_ARTIFACTS_DIR)
   cezar factory check       validate workflows, referenced skills, and scorers
   cezar score <run> [--scorer <name>]  queue scoring for a finished run
+  cezar replay <run> [--times n]      replay a finished task in its comparison group
   cezar init                scaffold .ai/cezar/ (example workflow + skill)
   cezar projects            list the projects this cockpit serves
                             (also: projects add [<dir>] · projects remove <id>)
@@ -156,10 +158,11 @@ Skills live in .ai/skills/, .ai/cezar/skills/ and your team skills repo
 workflows in .ai/cezar/workflows/.`;
 
 async function main(): Promise<void> {
-  if (process.argv[2] === 'score') {
+  if (process.argv[2] === 'score' || process.argv[2] === 'replay') {
     const cwd = process.cwd();
     const repo = await getRepoInfo(cwd);
-    process.exitCode = await runScoreCommand(process.argv.slice(3), repo?.root ?? cwd);
+    const command = process.argv[2] === 'score' ? runScoreCommand : runReplayCommand;
+    process.exitCode = await command(process.argv.slice(3), repo?.root ?? cwd);
     return;
   }
   if (process.argv[2] === 'tracker') {

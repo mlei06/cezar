@@ -1,7 +1,9 @@
-import type { StepToolPolicy, SwitchRunAgentInput } from '@open-mercato/cezar-contract';
+import { replayRunInputSchema, type ReplayRunInput, type HarnessVersion, type StepToolPolicy, type SwitchRunAgentInput } from '@open-mercato/cezar-contract';
 import { readOnlyEnv } from '../core/read-only-env.ts';
 import { AgentUsageHolds } from '../workspace/agent-usage-holds.ts';
 import { completionReason } from './completion-reason.ts';
+import { prepareReplayCheck, runReplayShell } from './replay-check.ts';
+import { resolveReplayHarness, saveStagedReplayDiff, stagedCheckReplay } from './staged-replay.ts';
 import { WorktreeLifecycleCoordinator } from '../worktree-lifecycle/coordinator.ts';
 import type { RunParked, RunSubject, WebhookAttentionRequest, TrackerAssociation, UsageWindowsObservation } from '@open-mercato/cezar-contract';
 import { saveUsageWindows } from '../workspace/usage-windows.ts';
@@ -13,7 +15,7 @@ import { TrackerAgentBindingError } from '../server/tracker/agent-credentials.ts
 import { trackerBindingComplete, trackerContextPath, trackerPrompt, trackerTaskContext } from '../server/tracker/task-access.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { existsSync, renameSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, constants, existsSync, fstatSync, openSync, renameSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { mkdir, realpath, access, writeFile } from 'node:fs/promises';
 import { assertCezarHomeWriteIsSandboxed, cezarHomeDir, cezBinPath } from '../paths.ts';
 import { basename, dirname, isAbsolute, join, resolve as resolvePath } from 'node:path';
@@ -70,11 +72,13 @@ import {
   isImageAttachmentName,
   isImageMediaType,
   PENDING_ASK_MAX_QUESTIONS,
+  MAX_ATTACHMENTS_PER_MESSAGE,
+  MAX_ATTACHMENTS_TOTAL_BASE64,
   sanitizeAttachmentName,
   storedAttachmentExtension,
 } from '@open-mercato/cezar-contract';
 import type { AgentEvent, AgentRunResult, ContentBlock } from '../core/agent-runner.ts';
-import { discoverSkills, parseFrontmatter, type Skill } from '../skills.ts';
+import { discoverLocalSkills, discoverSkills, parseFrontmatter, type Skill } from '../skills.ts';
 import { automationsReachable } from '../automations/builtin-skill.ts';
 import { AUTOMATIONS_PROMPT } from '../automations/prompts.ts';
 import { pausedAutomationHold } from '../automations/paused-work.ts';
@@ -96,6 +100,7 @@ import {
   commitAll,
   pushBranch,
   resolveBaseRef,
+  hasReplayCommit,
   syncWithBase,
   uniqueBranchName,
   worktreeChangedFiles,
@@ -1147,6 +1152,8 @@ function formatWakeInstant(at: Date): string {
 }
 
 export interface StartRunInput {
+  /** The immutable fork and prompt for an admitted replay, persisted before it enters the queue. */
+  replay?: { sourceId: string; startCommit: string; change: string; harness: HarnessVersion; systemPrompt?: string };
   secrets?: RunRecord['secretNames'];
   budget?: RunRecord['budget'];
   onBudget?: RunRecord['onBudget'];
@@ -1268,6 +1275,45 @@ export const PROJECT_INSTRUCTIONS_HEADING =
   '## Project instructions\n\nThese apply to this project unless they conflict with the global instructions above.';
 
 const MANAGER_TASK_SYSTEM_PROMPT = 'A cezar manager started this task. Do not merge pull requests or enable automations: leave that to the user.';
+
+const REPLAY_EXTERNAL_NODE_PORTS: Readonly<Partial<Record<ExecutableNode['type'], string>>> = {
+  'git.commit': 'done',
+  'git.push': 'done',
+  'git.sync-base': 'done',
+  'github.draft-pr': 'nothing',
+  'github.pr-comment': 'done',
+  'github.pr-update': 'done',
+  'github.issue-comment': 'done',
+  'github.wait-ci': 'failed',
+  'notify.webhook': 'done',
+};
+
+const REPLAY_CHECK_NODE_TYPES = new Set(['start', 'end', 'loop', 'check', 'if', ...Object.keys(REPLAY_EXTERNAL_NODE_PORTS)]);
+
+function replayMode(workflow: WorkflowDef): 'checks' | 'agent' | undefined {
+  const graph = workflow.graph ?? compileV1(workflow.steps);
+  if (graph.nodes.every((node) => REPLAY_CHECK_NODE_TYPES.has(node.type))) return 'checks';
+  return graph.nodes.every((node) => {
+    if (node.type !== 'agent') return REPLAY_CHECK_NODE_TYPES.has(node.type);
+    if ((node.runner && node.runner !== 'codex') || node.bashAllowlist || node.session || node.model) return false;
+    const tools = node.allowedTools ?? DEFAULT_ALLOWED_TOOLS;
+    return tools.includes('Bash') || tools.every(tool => READ_ONLY_TOOLS.includes(tool));
+  }) ? 'agent' : undefined;
+}
+
+
+function withReplaySkill(workflow: WorkflowDef, skill: string): WorkflowDef {
+  const first = workflow.graph?.nodes.find((node) => node.type === 'agent')?.id
+    ?? workflow.steps.find((step) => stepKind(step) === 'agent')?.id;
+  return {
+    ...workflow,
+    steps: workflow.steps.map(step => step.id === first ? { ...step, skill } : step),
+    ...(workflow.graph ? {
+      graph: { ...workflow.graph, nodes: workflow.graph.nodes.map(node =>
+        node.type === 'agent' && node.id === first ? { ...node, skill } : node) },
+    } : {}),
+  };
+}
 
 /**
  * Joins the parts of one agent step's system prompt in fixed order — skill
@@ -2313,7 +2359,7 @@ export class RunManager {
     if (workflow.source === 'built-in' && workflow.name === 'implement' && !input.readOnly) {
       input = { ...input, worktree: true };
     }
-    if (input.readOnly && (!group || plan)) {
+    if (input.readOnly && !input.replay && (!group || plan)) {
       input = { ...input, worktree: false, newBranch: undefined, dispatchIntent: undefined, forkRef: undefined };
     }
     // Sanitize at the manager boundary so CLI runs, workflows, variants, and
@@ -2400,6 +2446,13 @@ export class RunManager {
       });
       this.store.recordPrRef(run.id, { number: input.forkRef.pr.number, url: input.forkRef.prUrl, origin: 'marker' });
     }
+    if (input.replay) {
+      this.store.updateRun(run.id, {
+        replayOf: input.replay.sourceId, replayChange: input.replay.change,
+        baseBranch: input.replay.startCommit, startCommit: input.replay.startCommit,
+        systemPrompt: input.replay.systemPrompt, harnessVersion: input.replay.harness,
+      });
+    }
     // The run's place in a dispatch tree (spec 2026-09-10-dispatch), written the way
     // automation provenance is (`automations/task-template.ts`): an update straight after create,
     // rather than a tenth key on `createRun`'s parameter object. Persisting it here — not merely
@@ -2448,7 +2501,7 @@ export class RunManager {
     // (under `branchNaming` its branch keeps the default `cez/<id8>`).
     this.pendingBranchNames.set(
       run.id,
-      input.task.trim() ? this.autoNameRun(run.id, skillHint, input.task) : Promise.resolve(undefined),
+      input.task.trim() && !input.replay ? this.autoNameRun(run.id, skillHint, input.task) : Promise.resolve(undefined),
     );
     // `default` = no explicit pick; the runner/CLI chose. Never the prompt itself.
     track(
@@ -2466,6 +2519,101 @@ export class RunManager {
     this.queue.push(run.id);
     void this.pump();
     return run;
+  }
+
+  async startReplay(sourceId: string, request: ReplayRunInput): Promise<{ groupId: string; runs: RunRecord[] } | { error: string }> {
+    const parsed = replayRunInputSchema.safeParse(request);
+    if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Invalid replay request.' };
+    const input = parsed.data;
+    if (process.platform !== 'linux') return { error: 'Replay requires the Linux check sandbox.' };
+    const source = this.store.getRun(sourceId);
+    if (!source || source.replayOf || !isTerminalStatus(source.status) || this.isActive(sourceId)) {
+      return { error: 'Replay needs a settled original task.' };
+    }
+    const startCommit = source.startCommit;
+    if (!startCommit || !source.harnessVersion?.commit || !source.workflowDef) {
+      return { error: 'The source task lacks an exact starting commit, harness identity or saved workflow.' };
+    }
+    const { harnessVersion, workflowDef, finishedAt } = source;
+    const currentHarness = await runHarnessVersion();
+    const workflow = input.workflow ? await this.findWorkflow(input.workflow) : source.workflowDef;
+    if (!workflow) return { error: 'The requested replay workflow is unavailable.' };
+    const mode = replayMode(workflow);
+    if (!mode) return { error: 'This workflow needs an isolated agent or system node that replay cannot yet use.' };
+    const requested = input.harness ?? harnessVersion.id;
+    let target: HarnessVersion = currentHarness;
+    if (requested !== currentHarness.id) {
+      const installed = await resolveReplayHarness(requested);
+      if ('error' in installed) return installed;
+      if (mode !== 'checks') return { error: 'An alternate harness currently supports isolated check workflows.' };
+      target = { id: installed.id, commit: installed.commit };
+    }
+    if (!target.commit || (!input.harness && harnessVersion.commit !== target.commit)) {
+      return { error: 'The exact original harness commit is unavailable.' };
+    }
+    const changesAgent = input.model || input.runner || input.effort || input.skill;
+    if (mode === 'checks' && changesAgent) return { error: 'The replay workflow has no agent input to change.' };
+    const runner = input.runner ?? source.runner;
+    if (mode === 'agent' && runner !== 'codex') {
+      return { error: 'Agent replay requires Codex sandbox support.' };
+    }
+    const replayWorkflow = input.skill ? withReplaySkill(workflow, input.skill) : workflow;
+    const model = input.model ?? (source.runner === runner ? source.actualModel || source.model : undefined);
+    if (input.model && modelConflictsWithRunner(input.model, 'codex')) return { error: 'The replay model must belong to the Codex runner.' };
+    if ((input.model || input.effort) && agentModelsLocked(this.repoRoot)) return { error: AGENT_MODELS_LOCKED_ERROR };
+    if (!await hasReplayCommit(this.repoRoot, startCommit)) return { error: 'The original project commit is unavailable.' };
+    if (this.store.getRun(sourceId) !== source || source.startCommit !== startCommit ||
+      source.harnessVersion !== harnessVersion || source.workflowDef !== workflowDef || source.finishedAt !== finishedAt ||
+      !isTerminalStatus(source.status) || this.isActive(sourceId)) {
+      return { error: 'The source task changed while preparing its replay.' };
+    }
+    let images: PastedContent[];
+    try { images = this.replayAttachments(sourceId, source.taskImages ?? []); }
+    catch { return { error: 'A source attachment is unavailable or exceeds the replay limits.' }; }
+    const messages = this.store.readEvents(sourceId).flatMap((entry) =>
+      entry.type === 'user-message' && typeof entry.text === 'string' && entry.text ? [entry.text] : []);
+    const task = [input.brief ?? source.task, ...(messages.length ? ['Follow-up messages from the source task:', ...messages] : [])].join('\n\n');
+    const foundGroup = source.groupId;
+    const variants = foundGroup ? this.store.listRuns().filter((run) => run.groupId === foundGroup && run.replayOf === sourceId) : [];
+    if (foundGroup && !variants.length) return { error: 'The source task already belongs to another variant group.' };
+    const used = new Set(variants.map((run) => run.variant));
+    const slots = ['B', 'C', 'D', 'E', 'F'].filter((slot) => !used.has(slot)).slice(0, input.times);
+    if (slots.length !== input.times) return { error: 'A replay group can hold at most five variants.' };
+    const groupId = foundGroup ?? randomUUID();
+    if (!foundGroup) this.store.updateRun(sourceId, { groupId, variant: 'A' });
+    const change = input.brief ? 'brief' : input.workflow ? `workflow ${input.workflow}` : input.harness ? `harness ${input.harness}`
+      : input.skill ? `skill ${input.skill}` : input.model ? `model ${input.model}` : input.runner ? `runner ${input.runner}` : input.effort ? `effort ${input.effort}` : 'repeat';
+    const runs = slots.map((variant) => this.startRun(replayWorkflow, {
+      task, images, worktree: true, generateFollowups: false, modelRoutePinned: true,
+      ...(mode === 'agent' ? {
+        runner: 'codex', model, agentProfile: input.runner && input.runner !== source.runner ? undefined : source.agentProfile,
+        reasoningEffort: input.effort ?? source.reasoningEffort, readOnly: true, enforceReadOnly: true, secrets: [],
+      } : {}),
+      replay: { sourceId, startCommit, change, harness: target, systemPrompt: source.systemPrompt },
+    }, { groupId, variant }));
+    this.store.flush();
+    return { groupId, runs };
+  }
+
+  private replayAttachments(runId: string, urls: string[]): PastedContent[] {
+    if (urls.length > MAX_ATTACHMENTS_PER_MESSAGE) throw new Error('Too many attachments');
+    let remaining = MAX_ATTACHMENTS_TOTAL_BASE64;
+    return urls.map((url) => {
+      const name = url.split('/').pop();
+      if (!name || name.includes('..') || name.includes('\\')) throw new Error('Invalid attachment name');
+      const path = join(this.attachmentsDir(runId), name);
+      const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+      try {
+        const stat = fstatSync(fd);
+        if (!stat.isFile() || Math.ceil(stat.size / 3) * 4 > remaining) throw new Error('Invalid attachment size');
+        const data = readFileSync(fd).toString('base64');
+        remaining -= data.length;
+        if (remaining < 0) throw new Error('Attachment grew while reading');
+        return toPastedContent({ name, mediaType: mediaTypeFor(name), data });
+      } finally {
+        closeSync(fd);
+      }
+    });
   }
 
   /**
@@ -3056,7 +3204,8 @@ export class RunManager {
    */
   private refreshQueuedWorkflow(runId: string, snapshot: WorkflowDef, catalog: readonly WorkflowDef[]): WorkflowDef {
     // Scheduled tasks were confirmed against this exact workflow and account binding.
-    if (this.store.getRun(runId)?.deferredBinding) return snapshot;
+    const run = this.store.getRun(runId);
+    if (run?.deferredBinding || run?.replayOf) return snapshot;
     const current = newerCatalogWorkflow(snapshot, catalog);
     if (!current) return snapshot;
     const steps = current.steps.map((s) => ({ id: s.id, name: s.name ?? s.id, kind: stepKind(s) }));
@@ -3075,7 +3224,7 @@ export class RunManager {
     // and `.catch`es a def that no longer fits to `undefined`, so anything present here already
     // has the `steps` array the old inline `Array.isArray` check was asking for.
     const def = run.workflowDef;
-    if (def) return def;
+    if (def || run.replayOf) return def ?? null;
     const { workflows } = await loadWorkflows(this.repoRoot);
     return workflows.find((w) => w.name === run.workflow) ?? null;
   }
@@ -3775,6 +3924,7 @@ export class RunManager {
     if (!this.dispatchEnabled()) return { refused: 'dispatch is disabled on this cockpit (CEZ_DISPATCH=0) — the operator turned it off. Do not substitute sub-agents or do the delegated work yourself: stop and report that dispatch is disabled.' };
     const parent = this.store.getRun(parentId);
     if (!parent) return { refused: `no such run: ${parentId}` };
+    if (parent.replayOf) return { refused: 'Replay variants cannot spawn ordinary tasks.' };
     if (isTerminalStatus(parent.status)) return { refused: `run ${parentId} has already settled (${parent.status})` };
     const note = (message: string, tone?: 'danger') =>
       this.store.appendEvent(parentId, { type: 'note', stepId: this.active.get(parentId)?.currentStepId, message, ...(tone ? { tone } : {}) });
@@ -4621,7 +4771,7 @@ export class RunManager {
       // (#489, spec 2026-09-10-dispatch A11, #1597), as well as the task's account.
       autonomous: run.autonomous,
       dispatch: run.dispatch,
-      worktree: run.worktree,
+      worktree: run.replayOf ? true : run.worktree,
       ...(run.readOnly ? { readOnly: true } : {}),
       ...(run.readOnly && run.enforceReadOnly ? { enforceReadOnly: true } : {}),
     });
@@ -5561,7 +5711,7 @@ export class RunManager {
   enqueueMessage(runId: string, content: PastedContent[]): QueuedMessage | null {
     if (!this.isQueued(runId)) return null;
     const run = this.store.getRun(runId);
-    if (!run) return null;
+    if (!run || run.replayOf) return null;
     const message = this.toQueuedMessage(runId, content);
     this.store.updateRun(runId, { queuedMessages: [...(run.queuedMessages ?? []), message] });
     return message;
@@ -5992,6 +6142,7 @@ export class RunManager {
   switchAgent(runId: string, input: SwitchRunAgentInput & { agentProfile: string }, defaultRunner?: RunnerId): { summary: string } | { error: string } {
     const run = this.store.getRun(runId);
     if (!run) return { error: 'task not found' };
+    if (run.replayOf) return { error: 'Replay variants cannot switch agents.' };
     const state = this.active.get(runId);
     const preparingContinue = state && this.openingContinuations.has(runId)
       && run.worktreeLifecycle?.phase === 'setup' && !run.worktreeLifecycle.needsAttention;
@@ -6159,6 +6310,7 @@ export class RunManager {
       return { ok: false, error: AGENT_MODELS_LOCKED_ERROR };
     }
     const run = this.store.getRun(runId);
+    if (run?.replayOf) return { ok: false, error: 'Replay variants cannot open an ordinary continuation.' };
     const agentSwitch = internal.agentSwitch;
     if (!agentSwitch && (this.active.has(runId) || this.starting.has(runId))) {
       // The record already reads settled, but the turn-end autosave is still unwinding: take the
@@ -7241,6 +7393,26 @@ export class RunManager {
       this.store.appendEvent(runId, event);
     };
 
+    if (original?.replayOf) {
+      const current = await runHarnessVersion();
+      if (state.cancelled) return;
+      const mode = replayMode(workflow);
+      const sameHarness = current.id === original.harnessVersion?.id && current.commit === original.harnessVersion.commit;
+      if (!original.startCommit || !original.workflowDef || input.worktree !== true ||
+        !original.harnessVersion?.commit || !mode || (!sameHarness && mode !== 'checks') ||
+        (mode === 'agent' && (input.runner !== 'codex' || !input.enforceReadOnly))) {
+        const error = 'The replay needs its saved workflow, exact worktree and pinned harness.';
+        this.publishRunFailure(runId, { status: 'failed', error, finishedAt: new Date().toISOString(), currentStepId: undefined });
+        emit({ type: 'lifecycle', message: error });
+        this.dropActive(runId, state);
+        return;
+      }
+      if (!sameHarness) {
+        await this.executeStagedReplay(original, state, emit);
+        return;
+      }
+    }
+
     // Resolve the agent backend for this run: the task choice (GUI) wins over
     // the config default. Per-step `runner` can still override it below.
     const config = await loadConfig(this.repoRoot);
@@ -7306,7 +7478,7 @@ export class RunManager {
       input = { ...input, worktree: false };
       this.store.updateRun(runId, { worktree: false });
     }
-    state.readOnly = input.readOnly === true && input.worktree === false;
+    state.readOnly = input.readOnly === true && (input.worktree === false || original?.replayOf !== undefined);
     state.enforceReadOnly = (state.readOnly && input.enforceReadOnly === true) ||
       isBuiltInPlan(workflow);
     state.autoLand = await this.landingPolicy(this.store.getRun(runId), config, (message) =>
@@ -7321,8 +7493,8 @@ export class RunManager {
     // A usage-limit resume reuses the recorded prompt verbatim, as Continue does: the record holds
     // only the composed form, and re-composing it would repeat its landing/read-only parts.
     const resumedWorkflow = switchedWorkflow && original?.graphState?.cursor !== undefined;
-    const extraSystemPrompt = (resumeStep || resumedWorkflow) && original?.systemPrompt !== undefined
-      ? original.systemPrompt
+    const extraSystemPrompt = original?.replayOf || ((resumeStep || resumedWorkflow) && original?.systemPrompt !== undefined)
+      ? original?.systemPrompt
       : composeSystemPrompt(
         resolveExtraSystemPrompt(input.systemPrompt, config.systemPrompt, (await loadWorkspaceConfig().catch(() => null))?.systemPrompt),
         this.store.getRun(runId)?.startedByManager ? MANAGER_TASK_SYSTEM_PROMPT : undefined,
@@ -7461,6 +7633,9 @@ export class RunManager {
         });
         if (state.cancelled) { this.dropActive(runId, state); return; }
         if (!wt.ready) { this.parkLifecycle(runId, state, wt.operationId); return; }
+        if (original?.replayOf && await getHeadCommit(wt.path) !== original.startCommit) {
+          throw new Error('The replay worktree no longer points at its recorded commit.');
+        }
         state.cwd = wt.path;
         state.releaseWorktree = await this.lifecycle.acquireAgentLease(runId);
         this.store.updateRun(runId, {
@@ -7554,16 +7729,18 @@ export class RunManager {
     const seeded = this.store.getRun(runId);
     if (seeded) seedHandoffFile(this.dataDir, seeded);
 
-    const skills = await discoverSkills(this.repoRoot);
+    const skills = original?.replayOf ? await discoverLocalSkills(state.cwd) : await discoverSkills(this.repoRoot);
     // Every ActiveRun construction site must carry the registry — `runContinuation` builds
     // its own, and the one that skipped this leaked raw `/skill` text to the backend (#811).
     state.skills = skills;
     // Same rule, same reason, for the dispatch session snapshot (the dispatch prompt; the child
     // role's prompt a spawn will need). This is the FIRST of the two construction sites; the
     // twin is in `runContinuation`.
-    this.prepareDispatchSession(runId, state);
-    this.prepareAutomationsSession(state);
-    this.prepareArtifactsSession(runId, state);
+    if (!original?.replayOf) {
+      this.prepareDispatchSession(runId, state);
+      this.prepareAutomationsSession(state);
+      this.prepareArtifactsSession(runId, state);
+    }
     let runError: string | null = null;
     // `startRun` already persisted the task's attachments so a queued bubble can render them
     // (#612). Reuse those files for the agent-facing path note instead of minting
@@ -7638,9 +7815,10 @@ export class RunManager {
     const monitorHandoff = state.monitorHandoff === true;
     state.askPark = undefined;
 
-    // Final autosave: the branch always ends holding the finished state.
+    // Replay residue stays in the worktree. Git hooks and filters may run during an autosave.
     this.clearAutosaveTimer(state);
     if (
+      !original?.replayOf &&
       !state.cancelled &&
       !state.autosaveCheckpointBlocked &&
       this.active.get(runId) === state &&
@@ -7695,6 +7873,42 @@ export class RunManager {
     }
     this.clearIdleTimer(state);
     this.dropActive(runId, state);
+  }
+
+  private async executeStagedReplay(
+    run: RunRecord, state: ActiveRun, emit: (event: { type: string; stepId?: string; [key: string]: unknown }) => void,
+  ): Promise<void> {
+    const controller = new AbortController();
+    state.interrupt = () => controller.abort();
+    this.store.updateRun(run.id, { status: 'running', startedAt: new Date().toISOString() });
+    emit({ type: 'lifecycle', message: 'starting a check replay on an isolated staging cockpit' });
+    try {
+      const result = await stagedCheckReplay(this.repoRoot, run, controller.signal);
+      if (state.cancelled || this.active.get(run.id) !== state) return;
+      for (const step of result.run.steps) {
+        this.store.updateStep(run.id, step.id, { status: step.status, startedAt: step.startedAt, finishedAt: step.finishedAt, error: step.error });
+      }
+      for (const entry of result.events) {
+        if (entry.type === 'check-output') emit({
+          type: entry.type, stepId: entry.stepId, text: entry.text, command: entry.command, exitCode: entry.exitCode,
+        });
+      }
+      if (result.diff) saveStagedReplayDiff(this.dataDir, run.id, result.diff);
+      if (state.cancelled || this.active.get(run.id) !== state) return;
+      this.store.updateRun(run.id, { activeMs: result.run.activeMs, diffStat: result.diff?.changes.stat });
+      if (result.run.status === 'done' || result.run.status === 'review') {
+        await this.settleSuccess(run.id, state);
+      } else {
+        throw new Error(result.run.error ?? 'The staged check workflow did not complete successfully.');
+      }
+    } catch (error) {
+      if (state.cancelled || this.active.get(run.id) !== state) return;
+      const message = error instanceof Error ? error.message : 'The staged replay could not run.';
+      this.publishRunFailure(run.id, { status: 'failed', error: message, finishedAt: new Date().toISOString() });
+      emit({ type: 'lifecycle', message: 'run failed — ' + message });
+    } finally {
+      this.dropActive(run.id, state);
+    }
   }
 
   /**
@@ -8120,6 +8334,12 @@ export class RunManager {
           port = verdict ?? 'done';
           if (verdict) emit({ type: 'note', stepId: node.id, message: `verdict: ${verdict}` });
         }
+      } else if (node.sideEffects && this.store.getRun(runId)?.replayOf) {
+        const message = 'Side-effect check skipped during replay.';
+        emit({ type: 'note', stepId: node.id, message });
+        outputs.set(node.id, { output: message });
+        this.finishStep(runId, node.id, 'done', undefined, emit);
+        port = 'pass';
       } else {
         const rendered = nodeToStep(node);
         if (!node.literalCommand && rendered.command) rendered.command = renderNodeRefs(rendered.command, outputs);
@@ -8127,8 +8347,9 @@ export class RunManager {
         // is verification residue rather than agent work. Save the agent's state
         // before the command, then keep the command's changed paths excluded from
         // later autosaves while leaving those files dirty for inspection.
+        const replay = !!this.store.getRun(runId)?.replayOf;
         const checkpoint =
-          state.cwd === this.repoRoot
+          replay || state.cwd === this.repoRoot
             ? 'nothing-to-do'
             : await autosaveCommit(
                 state.cwd,
@@ -8149,7 +8370,7 @@ export class RunManager {
         try {
           checkResult = await this.runCheckStep(runId, state, rendered, emit);
         } finally {
-          if (checkpointSafe && state.cwd !== this.repoRoot) {
+          if (!replay && checkpointSafe && state.cwd !== this.repoRoot) {
             await captureCheckArtifacts(state.cwd, state.autosaveExcludedPaths);
           }
           // Keep the periodic timer fenced until the ownership snapshot is complete;
@@ -8389,6 +8610,11 @@ export class RunManager {
     const note = (message: string, tone?: 'danger') =>
       emit({ type: 'note', stepId: node.id, message, ...(tone ? { tone } : {}) });
     const record = () => this.store.getRun(runId);
+    const replayPort = REPLAY_EXTERNAL_NODE_PORTS[node.type];
+    if (replayPort && record()?.replayOf) {
+      note('External operation skipped during replay.');
+      return replayPort;
+    }
     const prNumber = (): number | undefined => {
       const run = record();
       const ref = run?.prRefs?.find((r) => r.origin === 'created') ?? run?.prRefs?.[0];
@@ -9240,6 +9466,8 @@ export class RunManager {
       savedTools?: StepToolPolicy;
     },
   ): Promise<string | null> {
+    const launchRecord = this.store.getRun(runId);
+    const replay = !!launchRecord?.replayOf;
     const resumeStep = graphHooks?.usageLimitResume;
     let systemPrompt: string | undefined;
     let attachedSkill: string | undefined;
@@ -9249,7 +9477,7 @@ export class RunManager {
     const rawPrompt = applyTemplate(step.prompt ?? '{{task}}', taskText);
     const slash = leadingSlashSkillName(rawPrompt);
     // Install the selected skill and its companions where the agent's own skill lookup looks.
-    const provision = await this.provisionTaskSkills(state, {
+    const provision = replay ? NO_TASK_SKILLS : await this.provisionTaskSkills(state, {
       stepSkill: step.skill,
       slash,
       text: rawPrompt,
@@ -9262,6 +9490,9 @@ export class RunManager {
     if (missingShared.length) emit(missingSharedSkillsEvent(step.id, missingShared));
     if (step.skill) {
       const skill = (state.skills ?? skills).find((s) => s.name === step.skill);
+      if (replay && (!skill || skill.kind === 'command' || skill.missingShared)) {
+        return 'The replay skill is unavailable in the pinned checkout or local skill library.';
+      }
       if (skill) {
         // The body alone often does not identify the selected skill. Keep its
         // name and catalog description in the normalized runner payload so a
@@ -9330,12 +9561,11 @@ export class RunManager {
 
     const sessionId = graphHooks?.resumeSessionId ?? randomUUID();
     const backend = step.runner ?? taskBackend;
-    const launchRecord = this.store.getRun(runId);
     const resumedOwnerId = resumeStep?.id ?? graphHooks?.resumeStepId;
     const resumedOwner = graphHooks?.resumeSessionId === undefined ? undefined : launchRecord?.steps.find(
       (candidate) => candidate.id === (resumedOwnerId ?? step.id) && candidate.sessionId === graphHooks.resumeSessionId,
     );
-    const secretNames = graphHooks?.resumeSessionId || graphHooks?.continuing || resumeStep || checkFailure !== null
+    const secretNames = replay ? [] : graphHooks?.resumeSessionId || graphHooks?.continuing || resumeStep || checkFailure !== null
       ? continuationSecretNames(launchRecord, resumedOwner)
       : launchRecord?.secretNames ?? step.secrets?.filter((name) => typeof name === 'string');
     const modelsLocked = agentModelsLocked(this.repoRoot);
@@ -9418,6 +9648,11 @@ export class RunManager {
         // boundary flushes again (idempotent) as a backstop.
         sink.flushAll();
         turnText = this.store.redactRunText(runId, turnText);
+        if (replay) {
+          if (graphHooks?.lastTurn) graphHooks.lastTurn.text = turnText;
+          state.session?.end();
+          return;
+        }
         void this.recordTurnEnd(runId, turnText, state); // titleSummary + diffStat (#389)
         void this.rescanArtifacts(runId, { render: true }); // the guarantee behind the watcher (spec 2026-10-22-html-artifacts Q2), plus the impact backstop
         const sessionOpen = !state.cancelled && state.session?.open;
@@ -9638,6 +9873,7 @@ export class RunManager {
     };
 
     const stepBackend = step.runner ?? taskBackend;
+    if (replay && (stepBackend !== 'codex' || !state.enforceReadOnly)) return 'The replay agent requires enforced Codex read-only tools.';
     // Normalise the selected model to canonical `provider/model` and back to the
     // backend's own wire form via the ONE shared mapper (#405). Fail-loud: an
     // unresolvable model (e.g. a bare id on opencode) returns the step error
@@ -9693,6 +9929,11 @@ export class RunManager {
       if (refusal) return refusal;
     }
     const stepTools = resolveAgentStepTools(state, step, graphHooks?.savedTools);
+    const originalTools = step.allowedTools ?? DEFAULT_ALLOWED_TOOLS;
+    const replayBash = replay && originalTools.includes('Bash') && !step.bashAllowlist;
+    if (replay) {
+      stepTools.allowedTools = [...READ_ONLY_TOOLS.filter(tool => originalTools.includes(tool)), ...(replayBash ? ['Bash'] : [])];
+    }
     this.store.updateStep(runId, step.id, { toolPolicy: stepTools });
     const envOverrides = stepTools.enforceReadOnly ? readOnlyEnv() : undefined;
     const capabilities = await this.taskCapabilityPrompt(
@@ -9700,7 +9941,7 @@ export class RunManager {
     );
     const stepPrivateMcp = !stepDef || !isReadOnlyWorkflow(stepDef);
     const runner = createRunner(stepBackend);
-    const stepMcp = stepPrivateMcp ? await this.privateMcpForLaunch(stepBackend, onEvent) : [];
+    const stepMcp = stepPrivateMcp && !replay ? await this.privateMcpForLaunch(stepBackend, onEvent) : [];
     let session: AgentSession;
     state.currentStepId = step.id;
     this.beginUsageInvocation(runId, state, step.id);
@@ -9737,9 +9978,10 @@ export class RunManager {
           images,
           cwd: state.cwd,
           ...stepTools,
+          ...(replayBash ? { replayShell: (command, signal) => runReplayShell(command, state.cwd, signal) } : {}),
           ...(state.bypassPermissions && !stepTools.enforceReadOnly ? { bypassPermissions: true } : {}),
           // The handoff file lives outside the worktree — grant access.
-          additionalDirectories: agentDirectories(
+          additionalDirectories: replay ? [this.attachmentsDir(runId)] : agentDirectories(
             join(this.dataDir, 'runs'),
             state.grantedAttachmentLibrary,
             profile.env,
@@ -10092,7 +10334,7 @@ export class RunManager {
     turnText = this.store.redactRunText(runId, turnText);
     try {
       const run = this.store.getRun(runId);
-      if (!run) return;
+      if (!run || run.replayOf) return;
       if (owner && this.active.get(runId) !== owner) return;
       this.applyTurnMarkers(runId, run, turnText);
       // Titles are the namer's job (task auto-naming spec) — turn text is
@@ -10286,7 +10528,7 @@ export class RunManager {
       this.active.get(runId) === owner && !owner?.cancelled &&
       (status === 'running' || status === 'waiting');
     if (!canSettle()) return false;
-    const landingError = await this.landBeforeSettle(runId);
+    const landingError = run?.replayOf ? undefined : await this.landBeforeSettle(runId);
     if (!canSettle()) return false;
     if (landingError === 'review') {
       this.store.updateRun(runId, {
@@ -10312,9 +10554,9 @@ export class RunManager {
       this.store.appendEvent(runId, { type: 'lifecycle', message: `run failed — ${landingError}` });
       return true;
     }
-    const review = await this.reviewGateApplies(runId);
+    const review = !run?.replayOf && await this.reviewGateApplies(runId);
     if (!canSettle()) return false;
-    const resolution = !review && this.store.hasLifecycleObserver ? await completionReason(run) : 'completed';
+    const resolution = !run?.replayOf && !review && this.store.hasLifecycleObserver ? await completionReason(run) : 'completed';
     if (!canSettle()) return false;
     this.store.updateRun(runId, {
       status: review ? 'review' : 'done',
@@ -11366,7 +11608,7 @@ export class RunManager {
   /** Autosave-commit the worktree every 90 s while the run lives (spec 006).
    *  Opt-in via CEZ_AUTOSAVE=1 (#471) — see periodicAutosaveEnabled. */
   private armAutosave(runId: string, state: ActiveRun): void {
-    if (!periodicAutosaveEnabled()) return;
+    if (!periodicAutosaveEnabled() || this.store.getRun(runId)?.replayOf) return;
     if (state.cwd === this.repoRoot || state.autosaveTimer) return;
     state.autosaveTimer = setInterval(() => {
       if (this.active.get(runId) !== state || state.cancelled || state.checkInProgress || state.autosaveCheckpointBlocked) return;
@@ -11504,14 +11746,33 @@ export class RunManager {
   ): Promise<{ ok: boolean; output: string; exitCode: number }> {
     const command = step.command as string;
     emit({ type: 'note', stepId: step.id, message: `$ ${command}` });
-    const env = await this.checkStepEnv(runId, state, step, emit);
+    let sandbox: Awaited<ReturnType<typeof prepareReplayCheck>> | undefined;
+    if (this.store.getRun(runId)?.replayOf) {
+      try {
+        if (state.cwd === this.repoRoot) throw new Error('A replay check requires a separate worktree.');
+        sandbox = await prepareReplayCheck(command, state.cwd);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'The replay check sandbox is unavailable.';
+        emit({ type: 'check-output', stepId: step.id, command, text: message, exitCode: -1 });
+        return { ok: false, output: message, exitCode: -1 };
+      }
+    }
+    const env = sandbox?.env ?? await this.checkStepEnv(runId, state, step, emit);
     // A cancel that landed during the read had no child to interrupt; do not spawn one now.
-    if (state.cancelled) return { ok: false, output: 'cancelled', exitCode: -1 };
-    return new Promise((resolve) => {
+    if (state.cancelled) {
+      await sandbox?.close();
+      return { ok: false, output: 'cancelled', exitCode: -1 };
+    }
+    return new Promise<{ ok: boolean; output: string; exitCode: number }>((resolve) => {
       // Check steps run in the same cwd as the agent steps — the worktree.
-      const child = spawn('bash', ['-lc', command], { cwd: state.cwd, env });
+      const child = spawn(sandbox?.file ?? 'bash', sandbox?.args ?? ['-lc', command], {
+        cwd: state.cwd, env, ...(sandbox ? { detached: true } : {}),
+      });
       lowerTaskProcessPriority(child.pid);
-      state.interrupt = () => child.kill('SIGTERM');
+      state.interrupt = () => {
+        if (!sandbox || !child.pid) { child.kill('SIGTERM'); return; }
+        try { process.kill(-child.pid, 'SIGTERM'); } catch { /* The group has already exited. */ }
+      };
 
       let output = '';
       const collect = (chunk: Buffer) => {
@@ -11538,7 +11799,7 @@ export class RunManager {
         emit({ type: 'check-output', stepId: step.id, command, text: trimmed, exitCode });
         resolve({ ok: code === 0, output: trimmed, exitCode });
       });
-    });
+    }).finally(() => sandbox?.close());
   }
 
   private finishStep(

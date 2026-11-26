@@ -73,7 +73,7 @@ export async function runHarnessSmokeSuite(entry: string) {
       samples.push({ name: item.name, passed, milliseconds: Date.now() - start });
     }
     return { passRate: samples.filter((item) => item.passed).length / samples.length * 100, samples };
-  }, async (project) => {
+  }, { prepare: async (project) => {
     await exec('git', ['init', '-q'], { cwd: project });
     await exec('git', [
       '-c', 'core.hooksPath=.no-hooks', '-c', 'commit.gpgSign=false',
@@ -81,5 +81,5 @@ export async function runHarnessSmokeSuite(entry: string) {
       'commit', '-qm', 'Cezar staging fixture', '--allow-empty',
     ], { cwd: project });
     projectCommit = (await exec('git', ['rev-parse', 'HEAD'], { cwd: project })).stdout.trim();
-  });
+  } });
 }

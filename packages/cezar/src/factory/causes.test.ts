@@ -20,6 +20,7 @@ it('routes each cause independently and isolates benchmark and infrastructure fi
     project: [{ cause: { target: 'workflow' } }], harness: [{ cause: { target: 'harness' } }], infra: [{ cause: { target: 'infra' } }],
   });
   expect(routeCauses(batch, { ...origin, benchmark: true })).toEqual({ project: [], harness: [], infra: [] });
+  expect(routeCauses(batch, { ...origin, replay: true })).toEqual({ project: [], harness: [], infra: [] });
   expect(routeCauses(batch, { ...origin, harness: true }).harness).toHaveLength(2);
   expect(routeCauses({ ...score, causes: [cause('brief')] }, { ...origin, workflowSource: 'built-in' }).harness).toHaveLength(1);
 });

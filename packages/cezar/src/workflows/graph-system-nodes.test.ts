@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { childSettleReport } from '../dispatch/engine.ts';
 import { taskAttention } from '../managers/snapshot.ts';
 import { RunStore, type RunRecord } from '../runs/store.ts';
+import { runHarnessVersion } from '../self-update/run-version.ts';
 import { graphIssues, graphRailSteps, graphToSteps, type WorkflowGraph } from './graph.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { RunManager } from './run.ts';
@@ -81,6 +82,38 @@ describe('graph system nodes', () => {
   const terminal = (r: RunRecord) => ['done', 'review', 'failed', 'cancelled'].includes(r.status);
   const parkedAt = (node: string) => (r: RunRecord) =>
     r.status === 'waiting' && r.steps.find((s) => s.id === node)?.status === 'waiting';
+
+  it.skipIf(process.platform !== 'linux')('keeps external graph operations out of a replay', async () => {
+    const workflow = def({
+      nodes: [
+        { id: 'start', type: 'start' },
+        { id: 'push', type: 'git.push' },
+        { id: 'pr', type: 'github.draft-pr' },
+        { id: 'comment', type: 'github.issue-comment', issue: 1, body: 'fixture' },
+        { id: 'notice', type: 'notify.webhook', url: 'https://example.invalid/hook' },
+      ],
+      edges: [
+        { from: 'start.next', to: 'push' },
+        { from: 'push.done', to: 'pr' },
+        { from: 'pr.nothing', to: 'comment' },
+        { from: 'comment.done', to: 'notice' },
+      ],
+    });
+    const baseline = store.createRun({ title: 'Baseline', task: 'Repeat the workflow.', workflow: workflow.name, steps: [] });
+    store.updateRun(baseline.id, {
+      status: 'done', finishedAt: new Date().toISOString(), workflowDef: workflow,
+      startCommit: (await run('git', ['rev-parse', 'HEAD'], { cwd: repoRoot })).stdout.trim(),
+      harnessVersion: await runHarnessVersion(),
+    });
+    const result = await manager.startReplay(baseline.id, { times: 1 });
+    if ('error' in result) throw new Error(result.error);
+    const replay = result.runs[0]!;
+    const settled = await until(replay.id, terminal);
+    expect(settled.status).toMatch(/review|done/);
+    expect(settled.pullRequestUrl).toBeUndefined();
+    expect(store.readEvents(replay.id).filter((event) => event.message === 'External operation skipped during replay.')
+      .map((event) => event.stepId)).toEqual(['push', 'pr', 'comment', 'notice']);
+  });
 
   const GATE: WorkflowGraph = {
     nodes: [

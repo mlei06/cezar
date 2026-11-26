@@ -1,6 +1,28 @@
 import { z } from 'zod';
+import { reasoningEffortSchema } from './agent.ts';
 import { runnerSchema } from './runners.ts';
 import { harnessVersionSchema } from './runs.ts';
+
+export const replayRunInputSchema = z.object({
+  harness: z.string().trim().min(1).max(190).optional(),
+  workflow: z.string().trim().min(1).max(190).optional(),
+  model: z.string().trim().min(1).max(190).optional(),
+  runner: runnerSchema.optional(),
+  effort: reasoningEffortSchema.optional(),
+  skill: z.string().trim().min(1).max(190).optional(),
+  brief: z.string().trim().min(1).max(100_000).optional(),
+  times: z.number().int().min(1).max(5).default(1),
+}).strict().refine(({ times: _times, ...changes }) =>
+  Object.values(changes).filter((value) => value !== undefined).length <= 1, {
+  message: 'Change at most one input per replay.',
+});
+export type ReplayRunInput = z.infer<typeof replayRunInputSchema>;
+
+export const replayRunResponseSchema = z.object({
+  groupId: z.string().uuid(),
+  runs: z.array(z.string()).min(1).max(5),
+});
+export type ReplayRunResponse = z.infer<typeof replayRunResponseSchema>;
 
 export const scorerNameSchema = z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/);
 export const factoryScoringSettingsSchema = z.object({

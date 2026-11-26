@@ -118,6 +118,47 @@ async function waitForColumns(count: number) {
 // ---- the columns ------------------------------------------------------------------------------
 
 describe('the compare columns', () => {
+  it('shows the changed input and omits picking for a replay comparison', async () => {
+    stubFetch({
+      ...group(variant('A', 'done'), variant('B', 'done', { replayChange: 'model fixture' })),
+      replay: true,
+    })
+    renderCompare()
+    await waitForColumns(2)
+    expect(screen.getByText('model fixture')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Pick this one' })).toBeNull()
+  })
+
+  it('averages repeated inputs using the runs with a recorded verdict', async () => {
+    const variantScored = (letter: string, activeMs: number, pass: boolean) => variant(letter, 'done', {
+      replayChange: 'model fixture', activeMs, scores: [{ scorer: 'outcome', label: pass ? 'ok' : 'missed', pass }],
+    })
+    stubFetch({ ...group(variant('A', 'done'), variantScored('B', 10_000, true), variantScored('C', 20_000, false)), replay: true })
+    renderCompare()
+    await waitForColumns(3)
+    const summary = screen.getByRole('region', { name: 'Replay averages' })
+    expect(summary.textContent).toContain('Average active time15s')
+    expect(summary.textContent).toContain('outcome50% pass (1/2)')
+  })
+
+  it('shows score verdicts and active time beside the other variant metrics', async () => {
+    stubFetch(group(variant('A', 'done', {
+      activeMs: 12_000,
+      scores: [{ scorer: 'outcome', label: 'delivered', pass: true }],
+    }), variant('B', 'done', {
+      activeMs: 25_000,
+      scores: [{ scorer: 'outcome', label: 'partial', pass: false }],
+    })))
+    renderCompare()
+    await waitForColumns(2)
+
+    const [a, b] = columns()
+    expect(a?.textContent).toContain('Active time12s')
+    expect(a?.textContent).toContain('outcomePass')
+    expect(b?.textContent).toContain('Active time25s')
+    expect(b?.textContent).toContain('outcomeFail')
+  })
+
   it('renders a column per variant: letter, status pill, spend, --stat text, Progress excerpt', async () => {
     stubFetch(group(variant('A', 'review'), variant('B', 'done')))
     renderCompare()

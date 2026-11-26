@@ -134,6 +134,7 @@ import {
   setWorkspaceUiStateInputSchema,
   setWorkspaceConfigInputSchema,
   type GroupResponse,
+  type CreateRunResponse,
   type GroupVariant,
   type PickVariantResponse,
   type RunIndexEntry,
@@ -158,6 +159,8 @@ import {
   switchRunAgentInputSchema,
   runBudgetSchema,
   scoreRunInputSchema,
+  replayRunInputSchema,
+  type ReplayRunResponse,
   scoresQuerySchema,
   managerScoresQuerySchema,
   type FactoryCheckResponse,
@@ -272,6 +275,7 @@ import { getTeamSkillsCached, isSafeRef, refreshTeamSkills, safeRemoteFor, waitF
 import { appendHandoffHeartbeat, handoffProgressExcerpt, readHandoff } from '../handoff.ts';
 import { markStarted, onTodosChanged, readTodos, removeTodo, todoTaskText, type TodoItem } from '../todos.ts';
 import type { RunEvent, RunRecord, RunStatus, RunStore } from '../runs/store.ts';
+import { readStagedReplayDiff } from '../workflows/staged-replay.ts';
 import { artifactsDir, authParkForAccount, isIdleParked } from '../runs/store.ts';
 import { artifactsCdnEnabled, existingVersionDir, findArtifact, scanArtifacts } from '../runs/artifacts.ts';
 import {
@@ -301,7 +305,7 @@ import { readRunUserMessages } from '../runs/user-messages.ts';
 import { summarizeRunMetrics } from '../runs/task-metrics.ts';
 import { ScoringService, type ScoringProject, type SettledScore } from '../scoring/service.ts';
 import { readRunScores } from '../scoring/store.ts';
-import { aggregateScores } from '../scoring/summary.ts';
+import { aggregateScores, groupScoreColumns } from '../scoring/summary.ts';
 import { checkFactory } from '../factory/check.ts';
 import { detectHarnessProject, harnessCauseQueuePath, projectCauseQueuePath, readCauseQueue, recordCauses, routeCauses } from '../factory/causes.ts';
 import { byLastActivityDesc, compareIsoDesc, lastActivityAt, readRunIndexDiagnostic, readRunIndexFromDisk } from '../runs/run-index.ts';
@@ -1008,11 +1012,15 @@ interface WorkflowCatalogBody extends Awaited<ReturnType<typeof workflowCatalog>
 interface FactoryCheckBody extends FactoryCheckResponse {}
 interface ScoresBody extends ScoresResponse {}
 interface WorkspaceScoresBody extends WorkspaceScoresResponse {}
+interface GroupCompareBody extends GroupResponse {}
+interface CreatedRunBody extends RunRecord {}
+interface CreatedVariantsBody extends Extract<CreateRunResponse, { runs: unknown }> {}
 interface CauseQueueBody extends CauseQueueResponse {}
 interface RunScoresBody extends RunScoresResponse {}
 interface ScoreRunBody extends ScoreRunResponse {}
 interface ReleaseHoldBody extends ReleaseHoldStatus {}
 interface HarnessReleaseReportBody extends HarnessReleaseReportDelivery {}
+interface ReplayRunBody extends ReplayRunResponse {}
 interface RunWithUsageBody extends RunRecord {
   usage?: ReturnType<typeof currentUsage>;
 }
@@ -1862,6 +1870,7 @@ export function createApp(deps: ServerDeps) {
           projectId: project.id, runId: run.id, workflowSource: run.workflowDef?.source,
           harness: harnessId === project.id,
           improvement: run.workflow === 'improve-factory',
+          replay: run.replayOf !== undefined,
         };
         const queues = routeCauses(score, origin);
         recordCauses(projectCauseQueuePath(project.dataDir), origin, score.scorer, queues.project);
@@ -5623,7 +5632,9 @@ export function createApp(deps: ServerDeps) {
       return run ? c.json(run) : c.json({ error: 'not found' }, 404);
     })
 
-    .post('/runs', jsonZodValidator(createRunInputSchema), async (c) => {
+    .post('/runs', jsonZodValidator(createRunInputSchema), async (c): Promise<Response & (
+      TypedResponse<CreatedRunBody | CreatedVariantsBody, 201, 'json'> | TypedResponse<{ error: string }, 400 | 403 | 404 | 409, 'json'>
+    )> => {
       const { root: repoRoot, dataDir, manager, store, id: projectId } = c.get('project');
       const parsed = { data: c.req.valid('json') };
       // A manager fallback policy bypasses the project's Automatic fallback setting: only the
@@ -5738,10 +5749,12 @@ export function createApp(deps: ServerDeps) {
       return c.json(store.getRun(run.id) ?? run, 201);
     })
 
-    .get('/runs/:id', (c) => {
+    .get('/runs/:id', (c): Response & (
+      TypedResponse<RunWithUsageBody, 200, 'json'> | TypedResponse<{ error: string }, 404, 'json'>
+    ) => {
       const { store } = c.get('project');
       const run = store.getRun(c.req.param('id'));
-      return run ? c.json(withUsage(run)) : c.json({ error: 'not found' }, 404);
+      return run ? c.json(withUsage(run), 200) : c.json({ error: 'not found' }, 404);
     })
 
     .get('/runs/:id/metrics', paramZodValidator(runIdParamSchema), (c) => {
@@ -5790,6 +5803,17 @@ export function createApp(deps: ServerDeps) {
       } catch {
         return c.json({ error: 'The score file could not be updated.' }, 409);
       }
+    })
+
+    .post('/runs/:id/replay', paramZodValidator(runIdParamSchema), jsonZodValidator(replayRunInputSchema, { absent: ({ times: 1 }) }), async (c): Promise<Response & (
+      TypedResponse<ReplayRunBody, 202, 'json'> | TypedResponse<{ error: string }, 404 | 409, 'json'>
+    )> => {
+      const { id } = c.req.valid('param');
+      const { manager, store } = c.get('project');
+      if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
+      const result = await manager.startReplay(id, c.req.valid('json'));
+      if ('error' in result) return c.json(result, 409);
+      return c.json({ groupId: result.groupId, runs: result.runs.map((run) => run.id) }, 202);
     })
 
     .patch('/runs/:id/budget', paramZodValidator(runIdParamSchema), jsonZodValidator(runBudgetSchema), (c) => {
@@ -6101,7 +6125,9 @@ export function createApp(deps: ServerDeps) {
     .post('/runs/:id/land', async (c) => {
       const { store, manager } = c.get('project');
       const id = c.req.param('id');
-      if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
+      const run = store.getRun(id);
+      if (!run) return c.json({ error: 'not found' }, 404);
+      if (run.replayOf) return c.json({ error: 'Replay variants cannot land changes.' }, 409);
       const answer = await manager.land(id);
       if (answer.outcome === 'landed') track('review_decided', { label: 'landed' }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
       return c.json({
@@ -6173,6 +6199,7 @@ export function createApp(deps: ServerDeps) {
       const id = c.req.param('id');
       const run = store.getRun(id);
       if (!run) return c.json({ error: 'not found' }, 404);
+      if (run.replayOf) return c.json({ error: 'Replay variants cannot open an ordinary agent.' }, 409);
       if (c.get('project').manager.lifecycle?.isBlocked(id)) return c.json({ error: 'Resolve the pending worktree lifecycle operation before opening its environment' }, 409);
       // Hosted mode: there is no "my machine" to open a terminal on. The UI
       // hides the button when localHandoff is false — this is defense in depth.
@@ -6300,6 +6327,7 @@ export function createApp(deps: ServerDeps) {
       // and what the client's cliTargetResumes now labels. Resume-after-finish is untouched.
       const cliRunner = agentCliRunner(target);
       if (cliRunner) {
+        if (run.replayOf) return c.json({ error: 'Replay variants cannot open an ordinary agent.' }, 409);
         const engineOwnsSession = (run.status === 'running' || run.status === 'queued' || run.status === 'waiting') && !isIdleParked(run);
         const sessionStep = engineOwnsSession ? undefined : [...run.steps].reverse().find((s) => s.sessionId);
         const sessionId = sessionStep?.sessionId;
@@ -6365,21 +6393,29 @@ export function createApp(deps: ServerDeps) {
 
     // Task diff (spec 006): what this run changed — its worktree vs its base.
     .get('/runs/:id/diff', async (c) => {
-      const { root: repoRoot, store } = c.get('project');
+      const { root: repoRoot, store, dataDir } = c.get('project');
       const run = store.getRun(c.req.param('id'));
       if (!run) return c.json({ error: 'not found' }, 404);
+      if (run.replayOf && !run.worktreePath) {
+        const snapshot = await readStagedReplayDiff(dataDir, run.id);
+        if (snapshot) return c.text(snapshot.patch);
+      }
       const kept = await reclaimedBranchOf(run, repoRoot);
       if (kept) return c.text(await branchDiff(repoRoot, run.baseBranch ?? 'HEAD', kept));
       if (!run.worktreePath || !existsSync(run.worktreePath)) {
         return c.text(run.worktreeReclaimedAt ? `(${RECLAIMED_WORKTREE})` : '(no worktree — this task ran directly in the repo working tree)');
       }
-      return c.text(await worktreeDiff(run.worktreePath, run.baseBranch ?? 'HEAD'));
+      return c.text(await worktreeDiff(run.worktreePath, run.baseBranch ?? 'HEAD', undefined, !!run.replayOf));
     })
 
     .get('/runs/:id/changes', async (c) => {
-      const { root: repoRoot, store } = c.get('project');
+      const { root: repoRoot, store, dataDir } = c.get('project');
       const run = store.getRun(c.req.param('id'));
       if (!run) return c.json({ error: 'not found' }, 404);
+      if (run.replayOf && !run.worktreePath) {
+        const snapshot = await readStagedReplayDiff(dataDir, run.id);
+        if (snapshot) return c.json(snapshot.changes);
+      }
       const workingDirectory = workingDirectoryOf(run, repoRoot);
       if (!workingDirectory) return c.json({ error: run.worktreeReclaimedAt ? RECLAIMED_WORKTREE : NO_WORKTREE }, 409);
       const result = await collectChanges(workingDirectory, run.baseBranch ?? 'HEAD', {
@@ -6387,7 +6423,8 @@ export function createApp(deps: ServerDeps) {
         // Anchors a repointed worktree at the branch as this run found it (#751).
         runStartedAt: run.startedAt,
         // A read-only GET against the user's real checkout must never modify its index.
-        intentToAdd: run.worktreePath ? undefined : false,
+        intentToAdd: run.worktreePath && !run.replayOf ? undefined : false,
+        replay: !!run.replayOf,
         excludeCezarData: !run.worktreePath,
       });
       if (!result.ok) return c.json({ error: result.error }, 409);
@@ -6641,6 +6678,7 @@ export function createApp(deps: ServerDeps) {
       const { store } = c.get('project');
       const run = store.getRun(c.req.param('id'));
       if (!run) return c.json({ error: 'not found' }, 404);
+      if (run.replayOf) return c.json({ error: 'Replay variants cannot commit changes.' }, 409);
       const worktree = worktreeOf(run);
       if (!worktree) return c.json({ error: NO_WORKTREE }, 409);
       const parsed = { data: c.req.valid('json') };
@@ -6655,6 +6693,7 @@ export function createApp(deps: ServerDeps) {
       const { root: repoRoot, store } = c.get('project');
       const run = store.getRun(c.req.param('id'));
       if (!run) return c.json({ error: 'not found' }, 404);
+      if (run.replayOf) return c.json({ error: 'Replay variants cannot push changes.' }, 409);
       const worktree = worktreeOf(run);
       if (!worktree) return c.json({ error: NO_WORKTREE }, 409);
       let result;
@@ -6681,6 +6720,7 @@ export function createApp(deps: ServerDeps) {
       const { store } = c.get('project');
       const run = store.getRun(c.req.param('id'));
       if (!run) return c.json({ error: 'not found' }, 404);
+      if (run.replayOf) return c.json({ error: 'Replay variants use the read-only Changes view.' }, 409);
       const worktree = worktreeOf(run);
       // An in-place write task answers for the checkout itself, against its upstream (spec
       // 2026-10-20-trunk-based-projects) — its git step is Commit to the base branch.
@@ -6711,6 +6751,7 @@ export function createApp(deps: ServerDeps) {
       const id = c.req.param('id');
       const activeRun = store.getRun(id);
       if (!activeRun) return c.json({ error: 'not found' }, 404);
+      if (activeRun.replayOf) return c.json({ error: 'Replay variants cannot publish pull requests.' }, 409);
       if (manager.isActive(id)) {
         return c.json({
           error: hasPrPublishStep(activeRun.workflowDef)
@@ -6792,6 +6833,7 @@ export function createApp(deps: ServerDeps) {
       const id = c.req.param('id');
       const run = store.getRun(id);
       if (!run) return c.json({ error: 'not found' }, 404);
+      if (run.replayOf) return c.json({ error: 'Replay variants cannot adopt pull requests.' }, 409);
       if (run.pullRequestUrl) return c.json({ found: true as const, url: run.pullRequestUrl });
       // A reclaimed task's branch is still in the repo: its remotes and `gh` answer from the root.
       const worktree = worktreeOf(run) ?? (await reclaimedBranchOf(run, repoRoot) ? repoRoot : null);
@@ -7012,32 +7054,44 @@ export function createApp(deps: ServerDeps) {
 
   // ---- chained family: variant groups (project-scoped) ----
   const groupsRoutes = new Hono<ProjectApiEnv>()
-    .get('/groups/:groupId', async (c) => {
+    .get('/groups/:groupId', async (c): Promise<Response & (
+      TypedResponse<GroupCompareBody, 200, 'json'> | TypedResponse<{ error: string }, 404, 'json'>
+    )> => {
       const { dataDir, store } = c.get('project');
       const runs = groupRuns(store, c.req.param('groupId'));
       if (runs.length === 0) return c.json({ error: 'not found' }, 404);
+      const replay = runs.some((run) => run.replayOf !== undefined);
       const detailed = await Promise.all(
-        runs.map(async (r): Promise<GroupVariant> => ({
-          id: r.id,
-          variant: r.variant ?? '?',
-          title: r.title,
-          status: r.status,
-          archived: r.archived,
-          tokensUsed: r.tokensUsed,
-          ...(r.inputTokens !== undefined ? { inputTokens: r.inputTokens } : {}),
-          ...(r.outputTokens !== undefined ? { outputTokens: r.outputTokens } : {}),
-          ...(r.costUsd !== undefined ? { costUsd: r.costUsd } : {}),
-          diffStat:
-            r.worktreePath && existsSync(r.worktreePath)
-              ? await worktreeDiffStat(r.worktreePath, r.baseBranch ?? 'HEAD')
-              : '',
-          handoffExcerpt: handoffProgressExcerpt(readHandoff(dataDir, r.id)),
-        })),
+        runs.map(async (r): Promise<GroupVariant> => {
+          const scores = groupScoreColumns(dataDir, r);
+          return {
+            id: r.id,
+            variant: r.variant ?? '?',
+            title: r.title,
+            status: r.status,
+            archived: r.archived,
+            tokensUsed: r.tokensUsed,
+            ...(r.inputTokens !== undefined ? { inputTokens: r.inputTokens } : {}),
+            ...(r.outputTokens !== undefined ? { outputTokens: r.outputTokens } : {}),
+            ...(r.costUsd !== undefined ? { costUsd: r.costUsd } : {}),
+            ...(r.activeMs !== undefined ? { activeMs: r.activeMs } : {}),
+            ...(scores.length ? { scores } : {}),
+            ...(r.replayChange ? { replayChange: r.replayChange } : {}),
+            diffStat:
+              r.worktreePath && existsSync(r.worktreePath)
+                ? await worktreeDiffStat(r.worktreePath, r.baseBranch ?? 'HEAD', !!r.replayOf)
+                : r.replayOf && r.diffStat?.files
+                  ? `${r.diffStat.files} files changed, ${r.diffStat.adds} insertions(+), ${r.diffStat.dels} deletions(-)`
+                  : '',
+            handoffExcerpt: handoffProgressExcerpt(readHandoff(dataDir, r.id)),
+          };
+        }),
       );
       return c.json({
         groupId: c.req.param('groupId'),
         runs: detailed,
-      } satisfies GroupResponse);
+        ...(replay ? { replay: true as const } : {}),
+      } satisfies GroupResponse, 200);
     })
 
     // "Pick this one": the winner rests at `review` (spec 009 takes it from
@@ -7047,6 +7101,9 @@ export function createApp(deps: ServerDeps) {
       const { root: repoRoot, dataDir, store, manager } = c.get('project');
       const runs = groupRuns(store, c.req.param('groupId'));
       if (runs.length === 0) return c.json({ error: 'not found' }, 404);
+      if (runs.some((run) => run.replayOf !== undefined)) {
+        return c.json({ error: 'Replay comparisons do not choose a winner.' }, 409);
+      }
       const parsed = { data: c.req.valid('json') };
       const winner = runs.find((r) => r.id === parsed.data.runId);
       if (!winner) return c.json({ error: 'runId is not part of this group' }, 404);
@@ -8852,6 +8909,7 @@ export function createApp(deps: ServerDeps) {
       const { root: repoRoot, store } = c.get('project');
       const run = store.getRun(c.req.param('id'));
       if (!run) return c.json({ error: 'not found' }, 404);
+      if (run.replayOf) return c.json({ error: 'Replay variants cannot open an ordinary terminal.' }, 409);
       const refusal = terminalPolicyRefusal(capabilities());
       if (refusal) return c.json({ error: refusal }, 409);
       // The task's OWN tree or nothing. Falling back to the repo root the way open-in-cli

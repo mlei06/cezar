@@ -77,6 +77,7 @@ export const graphNodeSchema = z.discriminatedUnion('type', [
     ...nodeBase,
     type: z.literal('check'),
     command: z.string().min(1),
+    sideEffects: z.boolean().optional(),
     literalCommand: z.literal(true).optional(),
     /** v1 compatibility: only these non-zero exits are eligible for an onFail retry. */
     retryOn: z.array(z.number().int().positive()).optional(),
@@ -545,10 +546,15 @@ export function compileV1(steps: readonly WorkflowStepDef[]): WorkflowGraph {
   const nodes: GraphNode[] = [{ id: startId, type: 'start' }];
   const out = (s: WorkflowStepDef) => `${s.id}.${s.command ? 'pass' : 'done'}`;
   steps.forEach((s, i) => {
-    const { onFail, command, secrets, ...rest } = s;
+    const { onFail, command, secrets, sideEffects, ...rest } = s;
     nodes.push(
       command
-        ? { ...rest, type: 'check', command, ...(secrets ? { secrets } : {}), ...(onFail?.retryOn ? { retryOn: onFail.retryOn } : {}) }
+        ? {
+            ...rest, type: 'check', command,
+            ...(sideEffects !== undefined ? { sideEffects } : {}),
+            ...(secrets ? { secrets } : {}),
+            ...(onFail?.retryOn ? { retryOn: onFail.retryOn } : {}),
+          }
         : { ...rest, type: 'agent', ...(secrets ? { secrets: secrets.filter((name) => typeof name === 'string') } : {}) },
     );
     edges.push({ from: i === 0 ? `${startId}.next` : out(steps[i - 1]!), to: s.id });

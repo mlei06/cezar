@@ -30,6 +30,27 @@ describe.skipIf(process.platform === 'win32')('cezar executes restricted reads',
     execFileSync('mkfifo', [join(f.cwd, 'pipe')], { timeout: 5_000 });
     expect((await f.call({ tool: 'Read', path: 'pipe' })).success).toBe(false);
   });
+  it('routes replay Bash through the sandbox callback and denies unsealed or conflicting grants', async () => {
+    const f = setup();
+    const commands: string[] = [];
+    const replayShell = async (command: string, signal: AbortSignal) => {
+      expect(signal.aborted).toBe(false);
+      commands.push(command);
+      return { ok: true, text: 'sandbox result' };
+    };
+    const tools = { allowedTools: ['Read', 'Bash'], replayShell };
+    expect(() => compileCodexRestrictedPolicy(tools)).toThrow();
+    expect(() => compileCodexRestrictedPolicy({ ...tools, enforceReadOnly: true, bashAllowlist: [] })).toThrow();
+    const policy = compileCodexRestrictedPolicy({ ...tools, enforceReadOnly: true })!;
+    const broker = new CodexReadBroker(policy, { cwd: f.cwd }, f.home.toolEnv);
+    brokers.push(broker);
+    const command = 'printf fixture > a.txt';
+    const result = await broker.call({ tool: 'cezar_read', arguments: { tool: 'Bash', command } });
+    expect(result).toMatchObject({ success: true, contentItems: [{ text: 'sandbox result' }] });
+    expect(commands).toEqual([command]);
+    expect(readFileSync(join(f.cwd, 'a.txt'), 'utf8')).toBe('one\ntwo\n');
+  });
+
   it('executes approved GitHub reads as argv and never invokes the binary for a mutation', async () => {
     const f = setup();
     const bin = join(f.root, 'bin'); mkdirSync(bin);

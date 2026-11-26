@@ -7,7 +7,7 @@ import { CEZAR_DATA_EXCLUDE } from '../data-gitignore.ts';
 import { resolveTaskDiffBase, type RepointedHead } from '../git-diff-base.ts';
 import { isSafeGitRef } from '../git-refs.ts';
 import { resolveTaskRemotes, splitRemoteRef } from '../git-remotes.ts';
-import { branchesCheckedOutElsewhere, gitHasIdentity, unresolvedConflicts } from '../git-worktree.ts';
+import { branchesCheckedOutElsewhere, gitHasIdentity, replayGit, unresolvedConflicts } from '../git-worktree.ts';
 import { FILESYSTEM_LISTING_CONCURRENCY, mapWithConcurrency } from './concurrency.ts';
 
 /**
@@ -278,6 +278,7 @@ export async function collectChanges(
   baseBranch: string,
   opts: {
     patchCap?: number;
+    replay?: boolean;
     intentToAdd?: boolean;
     taskBranch?: string;
     runStartedAt?: string;
@@ -287,6 +288,7 @@ export async function collectChanges(
 ): Promise<ChangesResult> {
   if (!isSafeGitRef(baseBranch)) return { ok: false, error: 'refusing option-like base ref' };
   const patchCap = opts.patchCap ?? PATCH_CAP;
+  const invoke = opts.replay ? await replayGit(dir) : (args: string[], env?: Record<string, string>) => git(dir, args, env);
   // `git add -N .` (intent-to-add) makes untracked files appear in the diff, but it MUTATES the
   // index — fine in a task worktree cezar owns, but forbidden on the user's real main tree (a
   // read-only GET must never stage files, #major-index-mutation). When `intentToAdd` is false we
@@ -298,10 +300,10 @@ export async function collectChanges(
     if (opts.intentToAdd === false) {
       scratchIndex = join(tmpdir(), `cez-scratch-index-${process.pid}-${scratchSeq++}`);
       env = { GIT_INDEX_FILE: scratchIndex };
-      await git(dir, ['read-tree', 'HEAD'], env); // seed with tracked files; harmless if no HEAD
-      await git(dir, ['add', '-N', '.'], env);
+      await invoke(['read-tree', 'HEAD'], env); // seed with tracked files; harmless if no HEAD
+      await invoke(['add', '-N', '.'], env);
     } else {
-      await git(dir, ['add', '-N', '.']);
+      await invoke(['add', '-N', '.']);
     }
     // Which ref anchors this task's diff — merge-base normally, the checked-out branch's
     // pre-run state when the agent repointed the worktree onto it (#591, #751). The rule is
@@ -311,7 +313,7 @@ export async function collectChanges(
     // read-only GET writing their index, and it would measure against a different index than
     // the listing below. The ref lookups themselves ignore `GIT_INDEX_FILE`.
     const { base, repointedHead } = await resolveTaskDiffBase(
-      (args) => git(dir, args, env),
+      (args) => invoke(args, env),
       baseBranch,
       {
         taskBranch: opts.taskBranch,
@@ -322,14 +324,14 @@ export async function collectChanges(
     // Three independent read-only listings, run concurrently. `GIT_OPTIONAL_LOCKS=0` keeps them
     // from racing each other for `index.lock` over the opportunistic stat refresh `git diff` writes,
     // so that refresh is written once here instead — else every poll re-reads each stat-dirty file.
-    await git(dir, ['update-index', '-q', '--refresh'], env);
+    await invoke(['update-index', '-q', '--refresh'], env);
     const readEnv = { ...env, GIT_OPTIONAL_LOCKS: '0' };
     const scope = opts.excludeCezarData ? ['--', '.', CEZAR_DATA_EXCLUDE] : [];
     const [nameStatus, numstat, patchOut, baseRev] = await Promise.all([
-      git(dir, ['diff', '--name-status', '-z', '-M', base, ...scope], readEnv),
-      git(dir, ['diff', '--numstat', '-z', '-M', base, ...scope], readEnv),
-      git(dir, ['diff', '--patch', '-M', '--no-color', base, ...scope], readEnv),
-      git(dir, ['rev-parse', '--verify', '--quiet', `${base}^{commit}`], readEnv),
+      invoke(['diff', '--name-status', '-z', '-M', base, ...scope], readEnv),
+      invoke(['diff', '--numstat', '-z', '-M', base, ...scope], readEnv),
+      invoke(['diff', '--patch', '-M', '--no-color', base, ...scope], readEnv),
+      invoke(['rev-parse', '--verify', '--quiet', `${base}^{commit}`], readEnv),
     ]);
     for (const listing of [nameStatus, numstat, patchOut]) {
       if (!listing.ok) return { ok: false, error: gitReason(listing, 'git diff failed') };

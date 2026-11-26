@@ -538,6 +538,8 @@ export const runRecordSchema = z.object({
    *  dir gone, recoverable via `git worktree add`"; it excludes the run from the
    *  retention budget until the dir is re-materialized (resume clears it). */
   worktreeReclaimedAt: z.string().optional(),
+  replayOf: runRecordContract.shape.replayOf.catch(undefined),
+  replayChange: runRecordContract.shape.replayChange.catch(undefined),
   /** Parallel variants (spec 010): tasks sharing a groupId are one group. */
   groupId: z.string().optional(),
   /** Variant letter within the group — 'A' | 'B' | 'C' (kept as a string). */
