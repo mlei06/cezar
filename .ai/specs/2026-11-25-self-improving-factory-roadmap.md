@@ -22,7 +22,7 @@ The factory is built by the factory. After a one-time bootstrap (M0), which the 
 | M1 | done 2026-11-26 | PR #11 shipped slash-skill reporting in release `f1747bd`. Live New task acceptance passed. With `factory.models.lowReasoning` set on this machine, an `operate` task ran on OpenCode with the self-hosted low-reasoning model, read-only in one turn, and its prompt carried the capability block (checked in the runner's stored session, since the model refuses to quote its own system prompt). |
 | M1.5 | released, live acceptance pending | PR #12 shipped the charter and manager playbooks in release `7dd520c`. Isolated concurrent managers passed. One project completed a live rollout. The concurrent live two-project check is pending. |
 | M2 | done 2026-11-26 | Run identity (#13), delegated routing (#14), shared USD storage (#15), task metrics (#16), budget enforcement (#17), the workflow PR gate (#18) and lower task CPU priority (#19) are released and checked live. Historical metrics replay passed locally. The live scratch check observed niceness 5 with the workspace cap still at 2. |
-| M3 | in progress | Catalog, judge, scores, routing and score UI are on implementation branches. An isolated run scored all four rubrics against the configured judge in 67 seconds. Full validation, release, one-minute acceptance and blind calibration are still open. |
+| M3 | in progress | The scorer catalog merged as #20 and is releasing; the judge is in full validation. Scores, routing and score views are on stacked implementation branches. An isolated run scored all four rubrics against the configured judge in 67 seconds. Full validation, release, one-minute acceptance and blind calibration are still open. |
 
 ## Goal and definition of done
 
