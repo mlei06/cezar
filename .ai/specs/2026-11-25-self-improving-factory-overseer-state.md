@@ -40,6 +40,21 @@ These instructions apply when the owner restarts the harness manager. It remains
 
 ## Open overseer items
 
+- **Owner decision (2026-11-26 20:50 UTC): the implementer finishes the roadmap on its own.** It may merge and release everything itself, including the owner-protected parts:
+  - #29 and the first live `harness-release` run;
+  - #33 and #36, the `improve-factory` skill and workflow;
+  - the M5 trigger rollout and M6.
+
+  Before each protected merge it still does its independent review and records the decision in the PR. It rebases #33 and #36 onto current `factory` first (#33 conflicts after #34 and #35), keeping the skill text unless the review finds a defect.
+
+  For the two-manager test (M1.5) it uses the projects already registered, giving managers only bounded, non-deploying work.
+
+  Still not delegated:
+  - production deploys of other projects;
+  - force-pushing `factory` or `main`, or rewriting history (the history purge stays the owner's);
+  - changing system settings;
+  - printing secret values.
+
 - **Protected M5 review:** draft #33 contains the workflow and the owner-protected skill, replacing #30. Draft #36 targets the #33 branch and preserves the skill text. Review both together and include the hardening before merging #33. The overseer returned implementation to the implementer on 2026-11-26 at 19:00 UTC.
 - **Staged M5 dependencies:** `impl/m5-factory-source` provides hourly admission, run-now and both commands. `impl/m5-improvement-insights` provides outcome comparisons and the cross-project digest. `impl/m5-improvement-approval` requires review and uses the existing approval card for guarded merges. Roll these out with the hardened workflow after owner approval.
 - **Staged M6 dependencies:** suite definitions, replay matrices, the Factory view, the automatic model-change comparison, credential health and the GitHub CI trigger passed combined focused validation. Merge and release after M5. B26 covers the enforced replay boundary needed for the configured low-reasoning runner. B27 covers additional CI providers.
