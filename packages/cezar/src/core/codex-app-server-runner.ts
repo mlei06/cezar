@@ -174,6 +174,7 @@ class CodexSession implements AgentSession {
     this.emit({ type: 'text', text });
   });
   private tokensUsed = 0;
+  private usageSampleTotal = 0;
   /**
    * Did the CURRENT turn's last act turn out to be the app-server compacting its own
    * context window (#955)? Set by a completed `contextCompaction` item on OUR thread and
@@ -777,6 +778,13 @@ class CodexSession implements AgentSession {
           this.tokensUsed = total;
           this.emit({ type: 'token-usage', tokensUsed: this.tokensUsed });
         }
+        if (!this.isForeignThreadTurn(params) && Number.isFinite(total) && total > this.usageSampleTotal) {
+          const sample = codexRequestContext(params);
+          if (sample) {
+            this.usageSampleTotal = total;
+            this.emit({ type: 'usage-status', status: sample });
+          }
+        }
         break;
       }
       case 'turn/completed':
@@ -987,6 +995,14 @@ function tokenTotal(params: Record<string, unknown>): number {
   const usage = params.tokenUsage as { total?: { totalTokens?: unknown } } | undefined;
   const total = usage?.total?.totalTokens;
   return typeof total === 'number' ? total : 0;
+}
+
+function codexRequestContext(params: Record<string, unknown>): { contextTokens: number; contextWindow?: number } | undefined {
+  const usage = params.tokenUsage as { last?: { inputTokens?: unknown }; modelContextWindow?: unknown } | undefined;
+  const contextTokens = usage?.last?.inputTokens;
+  if (typeof contextTokens !== 'number' || !Number.isFinite(contextTokens) || contextTokens <= 0) return undefined;
+  const contextWindow = usage?.modelContextWindow;
+  return { contextTokens, ...(typeof contextWindow === 'number' && Number.isFinite(contextWindow) && contextWindow > 0 ? { contextWindow } : {}) };
 }
 
 function safeStringify(value: unknown): string {

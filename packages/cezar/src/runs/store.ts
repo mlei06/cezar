@@ -112,6 +112,7 @@ const stepStateSchema = z.object({
   usageTurnsStarted: usageCounterSchema.optional(),
   usageTurnsRecorded: usageCounterSchema.optional(),
   usageInvocationEpoch: usageCounterSchema.optional(),
+  taskStats: runRecordContract.shape.steps.element.shape.taskStats.catch(undefined),
   startedAt: z.string().optional(),
   startCommit: runRecordContract.shape.steps.element.shape.startCommit.catch(undefined),
   harnessVersion: runRecordContract.shape.steps.element.shape.harnessVersion.catch(undefined),

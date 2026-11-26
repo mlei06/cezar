@@ -5,7 +5,7 @@ import type {
   lifecyclePreviewInputSchema, lifecycleListQuerySchema, LifecycleOutputResponse,
   LifecyclePreviewResponse, LifecycleActionInput, StartLifecycleRemovalInput,
 } from '@open-mercato/cezar-api-client'
-import { deferredAlreadyStartedSchema, trackerReadScope, resolveApiUrl, workspaceBrandingLogoResponseSchema } from '@open-mercato/cezar-api-client'
+import { deferredAlreadyStartedSchema, trackerReadScope, resolveApiUrl, runMetricsSchema, workspaceBrandingLogoResponseSchema } from '@open-mercato/cezar-api-client'
 import type {
   DetectedUrlsResponse,
   DiscoveredCommandsResponse,
@@ -63,6 +63,7 @@ import type {
   CancelResponse,
   ChangesPayload,
   RunArtifactsResponse,
+  RunMetrics,
   ArtifactsBySubjectResponse,
   ProjectAssetsResponse,
   ImpactSubjectInput,
@@ -1431,6 +1432,16 @@ export async function getRunArtifacts(id: string, opts?: ReadOptions): Promise<R
     ),
     runPath(id, '/artifacts'),
   )
+}
+
+export async function getRunMetrics(id: string, opts?: ReadOptions): Promise<RunMetrics> {
+  return runMetricsSchema.parse(await unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].metrics.$get(
+      { param: { projectId: queryScope(), id: encodeURIComponent(id) } },
+      init(opts),
+    ),
+    runPath(id, '/metrics'),
+  ))
 }
 
 /** A listed name (`file` or `folder/file`) as URL path segments, so a nested page's relative

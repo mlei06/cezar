@@ -88,6 +88,21 @@ const openDetails = async () => {
   fireEvent.click(within(usage()).getByRole('button', { name: /^Agent:/ }))
   return screen.findByRole('dialog')
 }
+
+it('shows the measured context and largest tool results in task details', async () => {
+  const metrics = vi.fn(() => jsonResponse({
+    runId: 'r1', workflow: 'quick-task', startedBy: 'owner', wallMs: 2000, modelMs: 900, toolMs: 1100,
+    tokens: {}, requests: 3, contextAvg: 93_000, contextPeak: 100_000, toolCalls: 1,
+    toolResultChars: 77_000, largestOutputs: [{ call: 1, tool: 'Read', head: 'fixture', chars: 77_000 }],
+    longestCalls: [], outcome: { status: 'done', checks: { passed: 0, failed: 0 } },
+  }))
+  stubFetch({ '/api/v1/runs/r1/metrics': metrics })
+  renderUsage(run('done'))
+  expect(metrics).not.toHaveBeenCalled()
+  const dialog = await openDetails()
+  expect(await within(dialog).findByText('Model requests')).toBeTruthy()
+  expect(within(dialog).getByText('77,000 chars')).toBeTruthy()
+})
 /** The chip's tooltip text — shown on keyboard focus as well as hover. */
 async function tooltipOf(trigger: HTMLElement): Promise<string | null> {
   fireEvent.focus(trigger)

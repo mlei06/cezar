@@ -110,6 +110,7 @@ import { getHeadCommit, getRepoInfo } from '../server/git.ts';
 import { runHarnessVersion } from '../self-update/run-version.ts';
 import { loadWorkflows, modelAlias, newerCatalogWorkflow, resolveWorkflowModelAlias } from './load.ts';
 import { chooseTaskAgent } from '../managers/task-agent-choice.ts';
+import { addTaskTurnStats, TurnStatsCollector } from '../managers/turn-stats.ts';
 import { capabilityPrompt } from './capability-prompt.ts';
 import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/store.ts';
 import { switchedWorkflowAgent, taskAgentSelection, workflowAgentSwitch } from '../runs/agent-selection.ts';
@@ -6362,6 +6363,14 @@ export class RunManager {
   ): AgentSession {
     let confirmed = false;
     let failed = false;
+    let stats = new TurnStatsCollector();
+    const saveStats = () => {
+      const sample = stats.taskStats();
+      stats = new TurnStatsCollector();
+      if (!sample || this.active.get(runId) !== state) return;
+      const step = this.store.getRun(runId)?.steps.find((candidate) => candidate.id === stepId);
+      if (step) this.store.updateStep(runId, stepId, { taskStats: addTaskTurnStats(step.taskStats, sample) });
+    };
     const confirm = (sessionId = binding.sessionId) => {
       if (failed || state.cancelled || this.active.get(runId) !== state) return;
       confirmed = true;
@@ -6369,6 +6378,10 @@ export class RunManager {
     };
     // Some runners return a handle before their asynchronous spawn has succeeded.
     const started = launch((event) => {
+      if (this.active.get(runId) === state) {
+        stats.event(event);
+        if (event.type === 'turn-end') saveStats();
+      }
       if (event.type === 'error') failed = true;
       if (event.type === 'session') confirm(event.sessionId);
       if (!confirmed && (event.type === 'text' || event.type === 'tool-call' ||
@@ -6376,7 +6389,10 @@ export class RunManager {
         event.type === 'turn-end')) confirm();
     });
     // Claude uses the supplied id and some runners finish without emitting one or doing work.
-    void started.result.then(() => { if (!confirmed) confirm(); }, () => { failed = true; });
+    void started.result.then(
+      () => { saveStats(); if (!confirmed) confirm(); },
+      () => { saveStats(); failed = true; },
+    );
     return started;
   }
 

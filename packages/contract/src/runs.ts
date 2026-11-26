@@ -156,6 +156,18 @@ export const harnessVersionSchema = z.object({
 });
 export type HarnessVersion = z.infer<typeof harnessVersionSchema>;
 
+export const taskTurnStatsSchema = z.object({
+  requests: usageCounterSchema,
+  contextFirst: usageCounterSchema,
+  contextTotal: usageCounterSchema,
+  contextPeak: usageCounterSchema,
+  toolCalls: usageCounterSchema,
+  toolResultChars: usageCounterSchema,
+  cacheReadTokens: usageCounterSchema.optional(),
+  cacheWriteTokens: usageCounterSchema.optional(),
+});
+export type TaskTurnStats = z.infer<typeof taskTurnStatsSchema>;
+
 /** One step of a run's chain. */
 export const stepStateSchema = z.object({
   id: z.string(),
@@ -173,6 +185,7 @@ export const stepStateSchema = z.object({
   usageTurnsStarted: usageCounterSchema.optional(),
   usageTurnsRecorded: usageCounterSchema.optional(),
   usageInvocationEpoch: usageCounterSchema.optional(),
+  taskStats: taskTurnStatsSchema.optional(),
   startedAt: z.string().optional(),
   /** Starting revision and harness for a Continue step, independent of the original run. */
   startCommit: z.string().optional(),
@@ -590,6 +603,44 @@ export type RunRecord = z.infer<typeof runRecordSchema>;
 export function runBudgetUsd(run: Pick<RunRecord, 'budget' | 'dispatch'>): number | undefined {
   return run.budget?.usd ?? run.dispatch?.budgetUsd;
 }
+
+const measuredToolSchema = z.object({
+  call: z.number().int().positive(),
+  tool: z.string(),
+  head: z.string(),
+});
+
+export const runMetricsSchema = z.object({
+  runId: z.string(),
+  workflow: z.string(),
+  runner: runnerSchema.optional(),
+  model: z.string().optional(),
+  startedBy: z.enum(['owner', 'manager', 'automation']),
+  startCommit: z.string().optional(),
+  harnessVersion: harnessVersionSchema.optional(),
+  wallMs: usageCounterSchema,
+  modelMs: usageCounterSchema,
+  toolMs: usageCounterSchema,
+  tokens: z.object({
+    input: usageCounterSchema.optional(),
+    output: usageCounterSchema.optional(),
+    cacheRead: usageCounterSchema.optional(),
+  }),
+  requests: usageCounterSchema.optional(),
+  contextAvg: usageCounterSchema.optional(),
+  contextPeak: usageCounterSchema.optional(),
+  toolCalls: usageCounterSchema,
+  toolResultChars: usageCounterSchema,
+  largestOutputs: z.array(measuredToolSchema.extend({ chars: usageCounterSchema })),
+  longestCalls: z.array(measuredToolSchema.extend({ ms: usageCounterSchema })),
+  budget: runBudgetSchema.optional(),
+  outcome: z.object({
+    status: runStatusSchema,
+    pr: z.string().optional(),
+    checks: z.object({ passed: usageCounterSchema, failed: usageCounterSchema }),
+  }),
+});
+export type RunMetrics = z.infer<typeof runMetricsSchema>;
 
 /**
  * What `GET /runs` and `GET /runs/:id` answer: the stored record plus the live `usage` sample the
