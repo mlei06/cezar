@@ -209,6 +209,7 @@ class OpencodeSession implements AgentSession {
   private readonly pendingPermissions: Array<{ id: string; props: Record<string, unknown> }> = [];
   /** The native `question` tool call the session is blocked on; the next user message answers it (#1652). */
   private pendingQuestion: { id: string; questions: AskQuestion[] } | undefined;
+  private readonly usageSamples = new Set<string>();
   private readonly v1UsageByMessage = new Map<string, { tokens: number; cost: number }>();
   private readonly v2UsageByMessage = new Map<string, { tokens: number; cost: number }>();
   /** messageID → role. Parts carry no role; only assistant parts are surfaced
@@ -1013,7 +1014,10 @@ class OpencodeSession implements AgentSession {
     if (messageID && this.msgRole.get(messageID) !== 'assistant') return;
     const kind = stringField(part, 'type');
     const id = stringField(part, 'id') ?? messageID ?? '';
-    if (kind === 'text') {
+    if (kind === 'step-finish') {
+      const session = stringField(part, 'sessionID');
+      if (session === undefined || session === this.sessionId) this.recordRequestContext(part);
+    } else if (kind === 'text') {
       const full = stringField(part, 'text') ?? '';
       const seen = this.textSeen.get(id) ?? 0;
       if (full.length > seen) {
@@ -1054,6 +1058,18 @@ class OpencodeSession implements AgentSession {
         for (const img of images) this.emit({ type: 'image', ...img });
       }
     }
+  }
+
+  /** One completed model request, even when the event bus repeats its part. */
+  private recordRequestContext(part: Record<string, unknown>): void {
+    const id = stringField(part, 'id');
+    const tokens = part.tokens;
+    if (!id || this.usageSamples.has(id) || !isRecord(tokens)) return;
+    const cache = isRecord(tokens.cache) ? tokens.cache : {};
+    const contextTokens = numField(tokens, 'input') + numField(cache, 'read') + numField(cache, 'write');
+    if (!Number.isFinite(contextTokens) || contextTokens <= 0) return;
+    this.usageSamples.add(id);
+    this.emit({ type: 'usage-status', status: { contextTokens } });
   }
 
   /** Pull cumulative tokens/cost out of an assistant message info object. */

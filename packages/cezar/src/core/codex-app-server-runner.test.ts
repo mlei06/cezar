@@ -55,6 +55,19 @@ vi.mock('node:child_process', async (importOriginal) => {
   };
 });
 
+it('emits request context from the app server token stream', async () => {
+  const events: AgentEvent[] = [];
+  const session = new CodexAppServerRunner({ bin: MOCK_BIN, timeoutMs: 0 }).startSession(
+    { userPrompt: 'Measure request context', cwd: process.cwd() },
+    (event) => events.push(event),
+    { autoEndAfterFirstTurn: true },
+  );
+  await session.result;
+  expect(events.filter((event) => event.type === 'usage-status')).toEqual([
+    { type: 'usage-status', status: { contextTokens: 1200 } },
+  ]);
+});
+
 /**
  * #703 backend parity — `claude-cli-runner.test.ts` proves the Claude half;
  * this is the same session-level shape for Codex. The fix only holds if BOTH

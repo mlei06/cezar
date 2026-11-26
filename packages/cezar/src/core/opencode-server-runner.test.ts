@@ -738,6 +738,23 @@ describe('#897 a turn that outlives its prompt POST', () => {
     await session.result;
   }, 30_000);
 
+  it('emits one request context reading per completed step, including cached input', async () => {
+    const runner = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 60_000 });
+    const { events, onEvent } = record();
+    const session = runner.startSession({ userPrompt: 'check the tree', cwd: process.cwd() }, onEvent, { autoEndAfterFirstTurn: true });
+    await session.result;
+    const part = (id: string) => ({ id, type: 'step-finish', tokens: { input: 100, cache: { read: 400, write: 50 } } });
+    const target = session as unknown as { handlePart(p: Record<string, unknown>): void };
+    const before = events.length;
+    target.handlePart(part('first'));
+    target.handlePart(part('first'));
+    target.handlePart(part('second'));
+    expect(events.slice(before)).toEqual([
+      { type: 'usage-status', status: { contextTokens: 550 } },
+      { type: 'usage-status', status: { contextTokens: 550 } },
+    ]);
+  }, 30_000);
+
   it('sums V1 usage across distinct messages and counts a repeated one once (#2101)', async () => {
     const runner = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 60_000 });
     const { events, onEvent } = record();
