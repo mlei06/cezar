@@ -2023,6 +2023,28 @@ describe('RunStore — read receipts (#unread-done-items)', () => {
   });
 });
 
+it('writes one rebuildable metrics snapshot when a run settles and deletes it with the run', async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'cez-metrics-snapshot-'));
+  try {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 'example', workflow: 'fixture', task: 't', steps: [] });
+    const file = join(dataDir, 'runs', `${run.id}.metrics.json`);
+    store.appendEvent(run.id, { type: 'tool-call', stepId: 'work', id: 'tool', tool: 'Read' });
+    store.appendEvent(run.id, { type: 'tool-result', stepId: 'work', toolCallId: 'tool', result: 'example' });
+    store.updateRun(run.id, { status: 'done', finishedAt: new Date().toISOString() });
+    await vi.waitFor(() => expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({
+      runId: run.id,
+      toolResultChars: 7,
+      outcome: { status: 'done' },
+    }));
+    store.deleteRun(run.id);
+    expect(existsSync(file)).toBe(false);
+    store.flush();
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
 describe('RunStore active work', () => {
   it('counts running steps across waits and restarts', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'cez-active-work-'));

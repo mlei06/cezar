@@ -1,6 +1,8 @@
-import { RUN_PR_REF_RANK, runRecordSchema as runRecordContract, sessionSecretPolicySchema, stepToolPolicySchema, deferredBindingSchema, modelUsageSchema, queueWaitReasonSchema, runAgentSwitchSchema, taskAskRecordSchema, trackerAccessSchema, type QuestionClosed, type QuestionStale, type TaskAskRecord } from '@open-mercato/cezar-contract';
+import { RUN_PR_REF_RANK, runRecordSchema as runRecordContract, sessionSecretPolicySchema, stepToolPolicySchema, runIdParamSchema, deferredBindingSchema, modelUsageSchema, queueWaitReasonSchema, runAgentSwitchSchema, taskAskRecordSchema, trackerAccessSchema, type QuestionClosed, type QuestionStale, type TaskAskRecord } from '@open-mercato/cezar-contract';
 import { EventEmitter } from 'node:events';
 import { runLifecycleSnapshot, type RunLifecycleObserver, type RunLifecycleSnapshot } from './lifecycle.ts';
+import { summarizeRunMetrics } from './task-metrics.ts';
+import { atomicWriteJsonSync } from '../workspace/config.ts';
 import { randomUUID } from 'node:crypto';
 import { threadId } from 'node:worker_threads';
 import { hostname, uptime } from 'node:os';
@@ -1357,6 +1359,7 @@ export class RunStore extends EventEmitter {
   private runs = new Map<string, RunRecord>();
   private activeWorkSince = new Map<string, number>();
   private activeWorkSuspended = new Set<string>();
+  private metricsCheckpoint = new Map<string, string>();
   private lifecycleObserver?: RunLifecycleObserver;
   private lifecycleSnapshots = new Map<string, RunLifecycleSnapshot>();
 
@@ -2551,6 +2554,29 @@ export class RunStore extends EventEmitter {
     this.observeLifecycle(run.id, run);
     this.scheduleSave();
     this.emit('run', run);
+    this.checkpointFinalMetrics(run);
+  }
+
+  private metricsPath(id: string): string {
+    return join(this.dataDir, 'runs', `${id}.metrics.json`);
+  }
+
+  /** The event log is the source. A failed or missing checkpoint can be rebuilt on demand. */
+  private checkpointFinalMetrics(run: RunRecord): void {
+    const { finishedAt, status } = run;
+    if (!finishedAt || !['done', 'review', 'failed', 'cancelled'].includes(status)) return;
+    if (!runIdParamSchema.safeParse({ id: run.id }).success) return;
+    const key = `${status}:${finishedAt}`;
+    if (this.metricsCheckpoint.get(run.id) === key) return;
+    this.metricsCheckpoint.set(run.id, key);
+    setImmediate(() => {
+      if (this.runs.get(run.id) !== run || run.finishedAt !== finishedAt || run.status !== status || this.metricsCheckpoint.get(run.id) !== key) return;
+      try {
+        atomicWriteJsonSync(this.metricsPath(run.id), summarizeRunMetrics(run, this.readEvents(run.id)));
+      } catch {
+        this.metricsCheckpoint.delete(run.id);
+      }
+    });
   }
 
   /** Forget a run, and remember that we did. Every removal path funnels through this boundary,
@@ -2566,6 +2592,7 @@ export class RunStore extends EventEmitter {
     this.sessionBackends.delete(id);
     this.activeWorkSince.delete(id);
     this.activeWorkSuspended.delete(id);
+    this.metricsCheckpoint.delete(id);
     this.persisted.delete(id);
     const existed = this.runs.delete(id);
     if (existed) this.emit('deleted', id);
@@ -2624,6 +2651,7 @@ export class RunStore extends EventEmitter {
         rmSync(join(this.dataDir, 'dispatch', tree), { recursive: true, force: true });
       }
       rmSync(this.eventsPath(id), { force: true });
+      if (runIdParamSchema.safeParse({ id }).success) rmSync(this.metricsPath(id), { force: true });
       rmSync(this.handoffPath(id), { force: true }); // spec 007: the journal goes with the task
       rmSync(this.imagesDir(id), { recursive: true, force: true }); // agent screenshots
       rmSync(artifactsDir(this.dataDir, id), { recursive: true, force: true });
