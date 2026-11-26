@@ -154,7 +154,10 @@ import { PlanUsageTracker, recordUsageObservation, type LedgerAccountRef } from 
 import { ledgerAccountRef } from '../usage-ledger/identity.ts';
 import { readLedger } from '../usage-ledger/store.ts';
 import { managerConsumerId } from '../usage-ledger/report.ts';
+import { harnessImprovementRecordsPath, projectImprovementRecordsPath, readImprovementRecords } from '../improvement/bookkeeping.ts';
 import { hasProtectedPaths, protectedChanges } from '../improvement/protection.ts';
+import { resolveImprovementSettings } from '../improvement/settings.ts';
+import { improvementPathScope } from '../improvement/workflow.ts';
 import { automationRunResponseSchema, FACTORY_IMPROVEMENT_AUTOMATION_ID, type AutomationRunResponse } from '@open-mercato/cezar-contract';
 
 /**
@@ -3632,7 +3635,7 @@ ${guidance}` : ''}`,
     this.deps.telemetry?.track('manager_action_proposed', managerActionLabel(action));
     this.emitChange(id);
     // Owner-protected paths (factory D6): the card waits for the owner even for an autonomous manager.
-    const ownerOnly = action.type === 'merge-pr' && scope.manager.autonomous === true ? await this.ownerOnlyMerge(action) : undefined;
+    const ownerOnly = action.type === 'merge-pr' && scope.manager.autonomous === true ? await this.ownerOnlyMerge(action, scope.source) : undefined;
     if (ownerOnly) {
       this.alert(id, message, `Needs your approval: ${describeAction(action)} (${ownerOnly})`, 'approval');
       return { actionId: message.id, status: 'pending', result: `Waiting for the owner: ${ownerOnly}.`, ...(replaced.length ? { replaced } : {}) };
@@ -3883,18 +3886,56 @@ ${guidance}` : ''}`,
     return { ok: false, result: (await ManagerEngine.refusalOf(merged)).error };
   }
 
-  /** Why a merge needs the owner (it touches an owner-protected path), or undefined when it doesn't. */
-  private async ownerOnlyMerge(action: Extract<ManagerActionRequest, { type: 'merge-pr' }>): Promise<string | undefined> {
-    const response = await this.forward(`/p/${encodeURIComponent(action.projectId)}/github/prs/${action.number}/changes?refresh=1`).catch(() => undefined);
-    const body = response?.ok ? (await response.json().catch(() => ({}))) as { available?: boolean; files?: { path: string; previousPath?: string }[] } : {};
-    if (body.available === true && Array.isArray(body.files)) {
-      const hits = protectedChanges(body.files);
-      return hits.length ? `it changes owner-protected ${hits.slice(0, 5).join(', ')}${hits.length > 5 ? ', …' : ''}` : undefined;
+  /** Why a merge needs the owner, if the configured policy or the current diff requires it. */
+  private async ownerOnlyMerge(
+    action: Extract<ManagerActionRequest, { type: 'merge-pr' }>,
+    source?: ManagerProjectSource,
+  ): Promise<string | undefined> {
+    const project = source ?? (await this.deps.projects().catch(() => [])).find(({ id }) => id === action.projectId);
+    const openedByImprovement = project?.runs().some((run) => run.improvementId && prTie(run, action.number) === 0);
+    let recordedImprovement;
+    if (project?.root) {
+      try {
+        const projectPath = projectImprovementRecordsPath(join(project.root, '.ai/cezar'));
+        recordedImprovement = [projectPath, harnessImprovementRecordsPath()].flatMap(readImprovementRecords)
+          .find((record) => record.projectId === action.projectId && record.pr?.number === action.number);
+      } catch {
+        if (openedByImprovement) return 'its improvement policy could not be checked';
+      }
     }
-    const source = (await this.deps.projects().catch(() => [])).find((project) => project.id === action.projectId);
-    return source?.root && hasProtectedPaths(source.root)
-      ? 'its changed files could not be checked against the owner-protected paths'
-      : undefined;
+    const improvement = recordedImprovement || openedByImprovement;
+    if (improvement && project) {
+      const [config, workspace] = await Promise.all([loadConfig(project.root), loadWorkspaceConfig()]);
+      const settings = resolveImprovementSettings({
+        harness: recordedImprovement?.queue === 'harness', workspace: workspace.factory?.improvement,
+        project: config.factory?.improvement,
+      });
+      if (settings.approval === 'owner') return 'the project requires owner approval for improvement PRs';
+    }
+
+    const response = await this.forward(`/p/${encodeURIComponent(action.projectId)}/github/prs/${action.number}/changes?refresh=1`).catch(() => undefined);
+    type ChangedFile = { path: string; previousPath?: string; additions?: number; deletions?: number };
+    const body = response?.ok ? (await response.json().catch(() => ({}))) as {
+      available?: boolean; files?: ChangedFile[]; headSha?: string; truncated?: boolean;
+    } : {};
+    if (body.available === true && Array.isArray(body.files)) {
+      if (body.headSha && body.headSha !== action.headSha) return 'its head changed during the check';
+      const hits = protectedChanges(body.files);
+      if (hits.length) return `it changes owner-protected ${hits.slice(0, 5).join(', ')}${hits.length > 5 ? ', …' : ''}`;
+      if (improvement) {
+        const product = body.files.filter(({ path, previousPath }) => improvementPathScope(path) === 'code' ||
+          (previousPath && improvementPathScope(previousPath) === 'code'));
+        if (!body.headSha || body.truncated || product.some((file) => file.additions === undefined || file.deletions === undefined)) {
+          return 'the product-code line count could not be checked for this improvement PR';
+        }
+        if (product.reduce((total, file) => total + (file.additions ?? 0) + (file.deletions ?? 0), 0) > 400) {
+          return 'it changes more than 400 lines of product code';
+        }
+      }
+      return;
+    }
+    if (improvement) return 'the changed files could not be checked for this improvement PR';
+    if (project?.root && hasProtectedPaths(project.root)) return 'its changed files could not be checked against the owner-protected paths';
   }
 
   /** Reached only from an approved `add-job`; the cockpit edits jobs through `update`. */

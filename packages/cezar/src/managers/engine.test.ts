@@ -6,6 +6,7 @@ import lockfile from 'proper-lockfile';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mergeWriteAgentAccounts } from '../workspace/agent-accounts.ts';
 import { mergeWriteWorkspaceConfig } from '../workspace/config.ts';
+import { projectImprovementRecordsPath } from '../improvement/bookkeeping.ts';
 import { appendLedger } from '../usage-ledger/store.ts';
 import { managerAccessOf, type GithubData, type ManagerAsk, type ManagerMessage } from '@open-mercato/cezar-contract';
 import type { AgentEvent, AgentRunner, AgentRunSpec, AgentSession, RunnerId } from '../core/agent-runner.ts';
@@ -2846,6 +2847,45 @@ describe('ManagerEngine', () => {
         const other = await autonomous(clean);
         expect(await clean.propose(other, { action: merge })).toMatchObject({ status: 'done' });
         expect(merged()).toBe(true);
+      });
+
+      it('enforces owner policy and verifies the exact product line count for improvement PRs', async () => {
+        const root = mkdtempSync(join(tmpdir(), 'cez-improvement-approval-'));
+        try {
+          const path = projectImprovementRecordsPath(join(root, '.ai/cezar'));
+          mkdirSync(join(root, '.ai/cezar/factory'), { recursive: true });
+          writeFileSync(path, JSON.stringify([{
+            id: 'batch', queue: 'project', projectId: 'alpha', runId: 'run',
+            startedBy: 'automation', startedAt: '2026-11-10T00:00:00.000Z',
+            causeIds: ['cause'], state: 'pr-open', pr: { number: 7 },
+          }]));
+          const changes = (additions: number, headSha = 'sha-1') => ({
+            available: true, headSha, files: [
+              { path: 'src/app.ts', additions, deletions: 1 },
+              { path: 'docs/user-guide.md', additions: 1000, deletions: 1000 },
+            ],
+          });
+          const small = protectedEngine(changes(399), root);
+          expect(await small.propose(await autonomous(small), { action: merge })).toMatchObject({ status: 'done' });
+          const large = protectedEngine(changes(400), root);
+          expect(await large.propose(await autonomous(large), { action: merge }))
+            .toMatchObject({ status: 'pending', result: expect.stringContaining('more than 400') });
+          const moved = protectedEngine(changes(1, 'different-head'), root);
+          expect(await moved.propose(await autonomous(moved), { action: merge }))
+            .toMatchObject({ status: 'pending', result: expect.stringContaining('head changed') });
+          const unavailable = protectedEngine({ available: false }, root);
+          expect(await unavailable.propose(await autonomous(unavailable), { action: merge }))
+            .toMatchObject({ status: 'pending', result: expect.stringContaining('could not be checked') });
+
+          writeFileSync(join(root, '.ai/cezar/config.json'), JSON.stringify({ factory: { improvement: { approval: 'owner' } } }));
+          requests.length = 0;
+          const owner = protectedEngine(changes(1), root);
+          expect(await owner.propose(await autonomous(owner), { action: merge }))
+            .toMatchObject({ status: 'pending', result: expect.stringContaining('requires owner approval') });
+          expect(merged()).toBe(false);
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
       });
 
       it('holds an unreadable file list only where the project has protected paths', async () => {
