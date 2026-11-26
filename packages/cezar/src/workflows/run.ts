@@ -7890,6 +7890,9 @@ export class RunManager {
           status: step.status, startedAt: step.startedAt, finishedAt: step.finishedAt, error: step.error,
           backend: step.backend, modelIdentity: step.modelIdentity, actualModel: step.actualModel, toolPolicy: step.toolPolicy,
           tokensUsed: step.tokensUsed, inputTokens: step.inputTokens, outputTokens: step.outputTokens, costUsd: step.costUsd,
+          iterations: step.iterations, taskStats: step.taskStats,
+          usageInvocationsStarted: step.usageInvocationsStarted, usageInvocationsObserved: step.usageInvocationsObserved,
+          usageTurnsStarted: step.usageTurnsStarted, usageTurnsRecorded: step.usageTurnsRecorded,
         });
       }
       for (const entry of result.events) {
