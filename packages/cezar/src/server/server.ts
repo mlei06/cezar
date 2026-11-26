@@ -307,6 +307,8 @@ import { summarizeRunMetrics } from '../runs/task-metrics.ts';
 import { ScoringService, type ScoringProject, type SettledScore } from '../scoring/service.ts';
 import { readRunScores } from '../scoring/store.ts';
 import { aggregateScores, groupScoreColumns } from '../scoring/summary.ts';
+import { benchmarkAddInputSchema, benchmarkAddResponseSchema, benchmarkSuitesResponseSchema } from '@open-mercato/cezar-contract';
+import { addBenchmarkTask, loadBenchmarkSuites } from '../benchmarks/suites.ts';
 import { checkFactory } from '../factory/check.ts';
 import { detectHarnessProject, harnessCauseQueuePath, projectCauseQueuePath, readCauseQueue, recordCauses, routeCauses } from '../factory/causes.ts';
 import { byLastActivityDesc, compareIsoDesc, lastActivityAt, readRunIndexDiagnostic, readRunIndexFromDisk } from '../runs/run-index.ts';
@@ -5784,6 +5786,41 @@ export function createApp(deps: ServerDeps) {
     .get('/scores', queryZodValidator(scoresQuerySchema), (c): Response & TypedResponse<ScoresBody, 200, 'json'> => {
       const { dataDir, store } = c.get('project');
       return c.json(aggregateScores(dataDir, store.listRuns(), c.req.valid('query')));
+    })
+
+    .get('/benchmarks', async (c) => {
+      const catalog = await loadBenchmarkSuites(c.get('project').root);
+      return c.json(benchmarkSuitesResponseSchema.parse({
+        issues: catalog.issues, suites: catalog.suites.map(({ name, suite }) => ({ name, ...suite })),
+      }));
+    })
+
+    .post('/benchmarks', jsonZodValidator(benchmarkAddInputSchema), async (c) => {
+      if (!capabilities().localHandoff || inRelayScope()) return c.json({ error: 'Benchmark files are authored from the local cockpit.' }, 403);
+      const project = c.get('project');
+      const input = c.req.valid('json');
+      const original = project.store.getRun(input.run);
+      if (!original?.startCommit || !original.finishedAt || !original.workflowDef || original.replayOf) {
+        return c.json({ error: 'A settled original task with a saved workflow and project commit is required.' }, 409);
+      }
+      const workspace = await loadWorkspaceConfig();
+      if (detectHarnessProject(workspace.projects, workspace.factory?.harnessProject) === project.id ||
+          detectHarnessProject([{ id: project.id, root: project.root }]) === project.id) {
+        return c.json({ error: 'Author synthetic benchmark fixtures for the public harness.' }, 409);
+      }
+      const outcome = original.scoreSummary?.outcome?.label ?? original.completionReason;
+      const successCriteria = input.criteria ?? (outcome ? 'Match the recorded outcome: ' + outcome + '.' : undefined);
+      if (!successCriteria) return c.json({ error: 'Supply success criteria with --criteria when the original task has no recorded outcome.' }, 409);
+      const redact = (value: string) => project.store.redactRunText(original.id, value);
+      try {
+        const saved = await addBenchmarkTask(project.root, input.suite, 'run-' + original.id.toLowerCase(), {
+          title: redact(original.title).slice(0, 300), sourceRun: original.id, workflow: original.workflow,
+          prompt: redact(original.task), successCriteria: redact(successCriteria), startCommit: original.startCommit,
+        });
+        return c.json(benchmarkAddResponseSchema.parse(saved), 201);
+      } catch {
+        return c.json({ error: 'The frozen benchmark file or suite could not be written. Check the suite and task definitions.' }, 409);
+      }
     })
 
     .get('/factory/check', async (c): Promise<Response & TypedResponse<FactoryCheckBody, 200, 'json'>> => {

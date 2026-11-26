@@ -1,3 +1,4 @@
+import { loadBenchmarkSuites } from '../benchmarks/suites.ts';
 import { discoverSkills } from '../skills.ts';
 import { loadWorkflows } from '../workflows/load.ts';
 import { ScorerCatalog, type ScorerIssue } from './scorers.ts';
@@ -15,6 +16,7 @@ export async function checkFactory(repoRoot: string): Promise<ScorerIssue[]> {
       }
     }
   }
-  const { issues: scorerIssues } = await new ScorerCatalog().load(repoRoot, names);
-  return [...issuesFound, ...scorerIssues];
+  const { scorers, issues: scorerIssues } = await new ScorerCatalog().load(repoRoot, names);
+  const { issues: benchmarkIssues } = await loadBenchmarkSuites(repoRoot, names, new Set(scorers.map(({ name }) => name)));
+  return [...issuesFound, ...scorerIssues, ...benchmarkIssues];
 }
