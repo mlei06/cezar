@@ -99,6 +99,8 @@ Release `7dd520c` passed health and contained both playbooks and the charter loa
 | M4-3 | Replay checks need an execution boundary before the replay entry points can admit them. | The installed Linux sandbox allowed the temporary worktree and scratch writes, blocked an outside write and a loopback connection, and received no inherited test credential. The redirected output retained the Node check's stdout. | harness | Use the isolated check path in D8 (v5.24). Agent execution still needs its own proof. |
 | M4-4 | Worktree creation and teardown can run hooks before a replay reaches its first check. | A real Git fixture with a checkout hook and configured lifecycle scripts materialized the exact commit, bypassed both types of hook and refused scripted cleanup. Ordinary lifecycle fixtures still passed. | harness | Reuse the existing worktree creation path with checkout hooks disabled and keep replay cleanup outside the lifecycle scripts (D8, v5.25). |
 
+| M4-5 | Workspace-write can still read host files. Autosave can invoke Git filters after a replay check. | The native named-profile fixture blocked reads of synthetic files in the host home and temporary directories, blocked Git metadata and loopback, and left both host files untouched. Three replay variants checked the saved commit while the original checkout retained a later change. | harness | Apply a minimal filesystem profile with no network, suppress checkout filters and autosave, and refuse unsupported configurations (D8, v5.26). |
+
 ## Judge calibration
 
 Blind comparisons: the overseer's verdict is written before the judge's is read, on every third task and every failing one (roadmap runbook). The spec's targets are 80% agreement on pass/fail and 70% on the main cause's target.

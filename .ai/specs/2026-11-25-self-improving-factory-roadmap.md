@@ -366,7 +366,7 @@ New features and improvements found so far, not yet scheduled into a milestone. 
 | M1 | 1–2 sessions | six small PRs |
 | M2 | done 2026-11-26 | Run identity (#13), delegated routing (#14), shared USD storage (#15), task metrics (#16), budget enforcement (#17), the workflow PR gate (#18) and lower task CPU priority (#19) are released and checked live. Historical metrics replay passed locally. The live scratch check observed niceness 5 with the workspace cap still at 2. |
 | M3 | 2 sessions | plus calibration over about 20 runs |
-| M4 | 1–2 sessions | |
+| M4 | in progress | Staging passed five release checks and blocked a benchmark regression. Rollback and admission controls are staged. Check-only replay passed exact-commit grouping and Linux isolation. Replay API and CLI are in focused validation. Agent and alternate-version replay and the first owner-run release remain open. |
 | M5 | 2–3 sessions | plus two weeks for its acceptance |
 | M6 | 2 sessions | |
 
