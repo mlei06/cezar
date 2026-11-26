@@ -2695,6 +2695,7 @@ export class RunManager {
         // no runner, and then the account it would use is the configured default.
         const defaultRunner = anyHold ? (await loadConfig(this.repoRoot)).defaultRunner : undefined;
         const startable = (id: string): boolean => {
+          if (this.semaphore.releaseHold?.current()) return false;
           const queued = this.store.getRun(id);
           if (queued && anyHold && accountHeldFor(queued, holds, defaultRunner ?? 'claude', this.askingAccounts(), this.pendingJobs.get(id)?.workflow)) return false;
           // "Start now" goes over `maxParallel` on purpose, but a non-git root still runs one at a time.
@@ -6150,6 +6151,9 @@ export class RunManager {
     /** The fallback and manual switch can open a fresh session even on a pre-launch failure. */
     internal: { freshSessionAllowed?: boolean; agentSwitch?: ManualAgentHandoff } = {},
   ): { ok: boolean; error?: string } {
+    if (!deferForCapacity && this.semaphore.releaseHold?.current()) {
+      return { ok: false, error: 'Wait for the harness release before continuing this task.' };
+    }
     if (!internal.agentSwitch && this.lifecycle.isBlocked(runId)) return {ok: false, error: 'Resolve the worktree lifecycle operation first'};
     if (agentModelsLocked(this.repoRoot) && (opts.model?.trim() || opts.reasoningEffort?.trim())) {
       return { ok: false, error: AGENT_MODELS_LOCKED_ERROR };
@@ -11190,6 +11194,10 @@ export class RunManager {
 
   /** The wake-up turn itself: counted against the cap, then the nudge into the parked session. */
   private monitoringWake(runId: string, state: ActiveRun): void {
+    if (this.semaphore.releaseHold?.current()) {
+      this.armMonitoringWakeTimer(runId, state);
+      return;
+    }
     const wakeups = state.monitoringWakeups ?? 0;
     if (wakeups >= MAX_AUTO_CONTINUES) {
       this.monitoringWakeCapReached(runId, state);

@@ -63,7 +63,7 @@ describe('the plan-usage ledger store', () => {
   });
 
   it('ends each request’s sample at its answer, and the 07:11 case then charges the re-cache to its turn', () => {
-    const t0 = Date.parse('2026-11-22T06:12:24Z');
+    const t0 = Date.now() - 300_000;
     let clock = t0;
     const task = new PlanUsageTracker('claude', { key: 'claude:default' }, { id: 'run:cezar/t', kind: 'task', title: 'T' }, {}, () => clock);
     task.ui({ type: 'turn.started' });
@@ -81,8 +81,9 @@ describe('the plan-usage ledger store', () => {
     expect(samples.map((s) => [s.from - t0, s.to - t0])).toEqual([[0, 14_000], [14_000, 221_000]]);
     expect(samples[0]!.to).toBeLessThan(end.t === 'end' ? end.at : 0);
     // The manager's cheap fresh turn ended just before; Claude read 0% during it, 5% after the task's first answer.
-    const reading = (at: number, usedPercent: number) => ({ t: 'reading', at, account: 'claude:default', window: 'five-hour', usedPercent, resetsAt: Date.parse('2026-11-22T11:10:00Z'), status: 'allowed', source: 'claude-stream' }) as const;
-    // The 'tracking started' marker carries the real clock; this replay runs on the fake one.
+    // The five-hour window opened 144 seconds before the task.
+    const resetsAt = t0 + 5 * 60 * 60_000 - 144_000;
+    const reading = (at: number, usedPercent: number) => ({ t: 'reading', at, account: 'claude:default', window: 'five-hour', usedPercent, resetsAt, status: 'allowed', source: 'claude-stream' }) as const;
     const windows = computeWindows([
       ...records.filter((r) => r.t !== 'tracking'),
       reading(t0 - 22_000, 0),
