@@ -2,7 +2,7 @@
 
 The overseer's resume point for the self-improving factory build. Updated and pushed at every milestone step and every overseer decision, so the work survives a crashed machine or a new session. Read this first, then the roadmap's Progress table and the observation log.
 
-Last updated: 2026-11-26 04:05 UTC.
+Last updated: 2026-11-26 04:29 UTC.
 
 ## Where the build stands
 
@@ -11,8 +11,8 @@ Last updated: 2026-11-26 04:05 UTC.
 - **M1 PRs:** #2 (known host test failures), #3 (secret descriptions), #4 (workflow budgets and agent-step secrets), #5 (typecheck repair), #6 (built-in `implement`, `plan`, `operate`), #7 (the capability block), #8 (manager discovery and task flags), #9 (`manage-project` update), #10 (test-resource rules in `factory-work`).
 - **M1 follow-ups** (from reviews, not blocking): generated validation checks get an explicit secrets allowlist; forge-adapter-level draft-PR assertions; check-artifact exclusions survive a cockpit restart (tracked before M1).
 - **Live delegated routing:** applied `highReasoning`, `switchAbove: 0.8` and the ordered hosted fallback list through the config merge-writer. With the VPN available, an isolated `operate` task completed on the configured OpenCode primary. With a temporary unreachable probe target, a second `operate` completed on the first hosted fallback and recorded the runner, model and fallback note. Restored the real probe URL immediately after admission.
-- **In flight:** the USD storage slice is on `impl/m2-budget-storage` at `751271be4`, typechecked with 335 focused tests passing. The PR publication handoff patch is on `impl/m1-pr-publishing` at `0236f7f53` and has passed typecheck and focused tests on its existing base. Update both branches to current factory before opening PRs.
-- **Next:** finish D4 budget enforcement, active time, manager alerts and their cockpit indicators. Then add task metrics. The concurrent two-project live acceptance remains open. One manager completed a live rollout and created a workflow PR.
+- **In flight:** PR #15 merged as `646670323` (shared dispatch USD storage). Release `6466703` is running. Task metrics are pushed on `impl/m2-task-stats` at `07f9ce7d2`, with initial typecheck and 279 focused tests passed. That branch is now based on the #15 squash and needs the full validation sequence. Budget enforcement is in the `impl/m2-budget-enforcement` worktree, pending the latest focused checks and the metrics branch. `impl/m1-pr-publishing` at `0236f7f53` still needs to be updated before its PR.
+- **Next:** confirm release `6466703` and smoke-test it. Then finish validation of the metrics and budget branches, add the five largest outputs to budget follow-up messages, and verify the M2 acceptance cases. The concurrent two-project live acceptance remains open. One manager completed a live rollout and created a workflow PR.
 
 ## Standing instructions given to the harness manager
 

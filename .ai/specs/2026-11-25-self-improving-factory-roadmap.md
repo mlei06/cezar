@@ -21,7 +21,7 @@ The factory is built by the factory. After a one-time bootstrap (M0), which the 
 | M0 | done 2026-11-25 | release `0.21.0+release-735fc84` live; warm-up PR #1 merged and released; judge prototype calibrated on 2 runs; observations M0-1 to M0-10 |
 | M1 | done 2026-11-26 | PR #11 shipped slash-skill reporting in release `f1747bd`. Live New task acceptance passed. With `factory.models.lowReasoning` set on this machine, an `operate` task ran on OpenCode with the self-hosted low-reasoning model, read-only in one turn, and its prompt carried the capability block (checked in the runner's stored session, since the model refuses to quote its own system prompt). |
 | M1.5 | released, live acceptance pending | PR #12 shipped the charter and manager playbooks in release `7dd520c`. Isolated concurrent managers passed. One project completed a live rollout. The concurrent live two-project check is pending. |
-| M2 | in progress | Run identity (#13) and delegated routing (#14) shipped. Both live `operate` routing cases passed on `0349ad4`. The dispatch USD storage slice has focused coverage. The rest of D4 and metrics remain open. |
+| M2 | in progress | Run identity (#13) and delegated routing (#14) shipped. Both live `operate` routing cases passed on `0349ad4`. Dispatch USD storage (#15) merged and is releasing. Task metrics and the remaining D4 budget behavior are in separate implementation branches. |
 
 ## Goal and definition of done
 

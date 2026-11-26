@@ -79,6 +79,8 @@ Release `7dd520c` passed health and contained both playbooks and the charter loa
 | M2-2 | The routine model depends on network reachability, and default model pins in built-ins preempt project settings. | Owner's D2 routing decision. | policy | Keep project defaults for ordinary work, add a configurable threshold and high alias, and probe the low-tier primary before selecting a hosted fallback (v5.17). |
 | M2-3 | The relay forwards a credential-free probe upstream. An authentication challenge confirms the path is reachable. | PR #14 and release `0349ad4`. A live `operate` completed with the VPN available. Another completed on the first hosted fallback after switching just the probe to an unreachable target, then restoring the real URL. The run stored its runner, model and fallback note. | harness | Use the configured relay endpoint as the probe. Treat an authentication challenge as reachable and use account holds to select hosted fallbacks when the probe fails. |
 
+| M2-4 | A saved dispatch USD ceiling can be zero. It still means park immediately. | PR #15 tested both legacy zero and new run budget records, including parking and reservations against mixed children. | harness | Read both from one accessor. Copy positive legacy allocations into the run budget on load and preserve the effective zero ceiling. |
+
 ## Judge calibration
 
 Blind comparisons: the overseer's verdict is written before the judge's is read, on every third task and every failing one (roadmap runbook). The spec's targets are 80% agreement on pass/fail and 70% on the main cause's target.
