@@ -83,6 +83,15 @@ describe('graph workflows run through RunManager', () => {
     return workflow!;
   }
 
+  it.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('lowers the CPU priority of workflow checks', async () => {
+    const command = `'${process.execPath}' -p 'require("node:os").getPriority()'`;
+    const workflow: WorkflowDef = { name: 'priority', source: 'file', steps: [{ id: 'check', command }] };
+    const run = manager.startRun(workflow, { task: 'Check inherited priority' });
+    expect((await settle(run.id)).status).toMatch(/review|done/);
+    const output = store.readEvents(run.id).find((event) => event.type === 'check-output');
+    expect(Number(output?.text)).toBeGreaterThanOrEqual(5);
+  });
+
   it('provides factory workflow defaults and lets project files override all three', async () => {
     const defaults = [
       ['implement', undefined, 3_000_000, 30],

@@ -37,7 +37,7 @@ import {
   type PrivateMcpServer,
 } from '../core/private-mcp.ts';
 import { onUsage, registerRunProcess, unregisterRunProcess, type ProcessUsage } from '../core/process-usage.ts';
-import { describeReaped, reapTaskProcesses, taskProcessReapEnabled } from '../core/task-processes.ts';
+import { describeReaped, lowerTaskProcessPriority, reapTaskProcesses, taskProcessReapEnabled } from '../core/task-processes.ts';
 import { isUsageExhaustion, parseUsageLimit } from '../core/usage-limit.ts';
 import { diskFullAgentErrorText } from '../disk-space.ts';
 import { accountStateHint, classifyAgentFailure, isOauthRefreshRace, transientRetryCap, transientRetryDelayMs } from '../core/agent-failure-class.ts';
@@ -6408,6 +6408,7 @@ export class RunManager {
         event.type === 'tool-result' || event.type === 'image' || event.type === 'mcp-servers' ||
         event.type === 'turn-end')) confirm();
     });
+    lowerTaskProcessPriority(started.pid);
     // Claude uses the supplied id and some runners finish without emitting one or doing work.
     void started.result.then(
       () => { saveStats(); if (!confirmed) confirm(); },
@@ -11501,6 +11502,7 @@ export class RunManager {
     return new Promise((resolve) => {
       // Check steps run in the same cwd as the agent steps — the worktree.
       const child = spawn('bash', ['-lc', command], { cwd: state.cwd, env });
+      lowerTaskProcessPriority(child.pid);
       state.interrupt = () => child.kill('SIGTERM');
 
       let output = '';
