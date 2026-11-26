@@ -271,7 +271,7 @@ export function implementWorkflow(commands: readonly string[]): WorkflowDef {
   }));
   const nodes: GraphNode[] = [
     { id: 'start', type: 'start' },
-    { id: 'work', type: 'agent', prompt: '{{task}}\n\nLeave your changes in the task worktree. Cezar runs validation and opens the PR itself.' },
+    { id: 'work', type: 'agent', prompt: '{{task}}\n\nLeave your changes in the task worktree. Cezar runs validation and opens the PR itself. Use focused checks during implementation, and leave the full validation run to the workflow.' },
     ...checks,
     { id: 'pr', type: 'github.draft-pr' },
     { id: 'done', type: 'end', status: 'success' },

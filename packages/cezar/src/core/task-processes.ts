@@ -10,9 +10,20 @@
 
 import { execFile } from 'node:child_process';
 import { readdir, readFile } from 'node:fs/promises';
+import { getPriority, setPriority } from 'node:os';
 
 const MARKER = 'CEZ_TASK_ID';
 const SCAN_BATCH = 64;
+
+/** Give the cockpit preference over its task processes when CPUs are busy. */
+export function lowerTaskProcessPriority(pid: number | undefined): void {
+  if (!pid || (process.platform !== 'linux' && process.platform !== 'darwin')) return;
+  try {
+    if (getPriority(pid) < 5) setPriority(pid, 5);
+  } catch {
+    // Fast commands may already have exited. Unsupported hosts keep their inherited priority.
+  }
+}
 
 export interface TaskProcess {
   pid: number;
