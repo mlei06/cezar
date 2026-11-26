@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { closeSync, constants, fstatSync, openSync, readFileSync, readSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   improvementDecisionsSchema, improvementRecordsSchema,
@@ -36,10 +36,19 @@ export function readImprovementRecords(path: string): ImprovementRecord[] {
 /** The decisions file a finished run wrote, or why it can't be used. */
 export function readImprovementDecisions(path: string): { decisions: ImprovementDecisions } | { error: string } {
   let raw: unknown;
+  let fd: number | undefined;
   try {
-    raw = JSON.parse(readFileSync(path, 'utf8'));
+    fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+    const info = fstatSync(fd);
+    if (!info.isFile() || info.size > 1_000_000) return { error: 'the decisions file must be a bounded regular file' };
+    const contents = Buffer.alloc(info.size + 1);
+    const read = readSync(fd, contents, 0, contents.length, 0);
+    if (read !== info.size) return { error: 'the decisions file changed while reading' };
+    raw = JSON.parse(contents.subarray(0, read).toString('utf8'));
   } catch (error) {
     return { error: (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'the run wrote no decisions file' : 'the decisions file is not valid JSON' };
+  } finally {
+    if (fd !== undefined) closeSync(fd);
   }
   const parsed = improvementDecisionsSchema.safeParse(raw);
   return parsed.success ? { decisions: parsed.data } : { error: `the decisions file is invalid: ${parsed.error.issues[0]?.message ?? 'unknown issue'}` };
@@ -81,11 +90,11 @@ export function startImprovement(paths: ImprovementPaths, input: {
   const wanted = new Set(batch.map((cause) => cause.id));
   // Claim only causes still open: one another run holds, or a decision already settled, stays out.
   const open = new Set(readCauseQueue(paths.queue).filter((cause) => wanted.has(cause.id) && cause.state === 'open').map((cause) => cause.id));
-  setStates(paths.queue, open, () => 'processing');
   const record: ImprovementRecord = {
     ...rest, queue: paths.harnessQueue ? 'project' : 'harness', causeIds: [...open], state: 'running',
   };
   atomicWriteJsonSync(paths.records, [...readImprovementRecords(paths.records), record]);
+  setStates(paths.queue, open, () => 'processing');
   return record;
 }
 
@@ -139,8 +148,8 @@ export function failImprovement(paths: ImprovementPaths, id: string, now: Date):
 }
 
 /** The improvement PR merged: its commit starts the before/after window and the cooldown. */
-export function mergeImprovement(paths: ImprovementPaths, id: string, input: { commit?: string; at: Date }): ImprovementRecord {
-  return updateRecord(paths.records, id, (entry) => ({ ...entry, state: 'merged', ...(input.commit ? { mergeCommit: input.commit } : {}), mergedAt: input.at.toISOString() }));
+export function mergeImprovement(paths: ImprovementPaths, id: string, input: { commit: string; at: Date }): ImprovementRecord {
+  return updateRecord(paths.records, id, (entry) => ({ ...entry, state: 'merged', mergeCommit: input.commit, mergedAt: input.at.toISOString() }));
 }
 
 /** The improvement PR closed unmerged: its fixes never landed, so their causes reopen. */

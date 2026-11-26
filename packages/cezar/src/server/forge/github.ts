@@ -284,6 +284,8 @@ const mergePrSchema = z.object({
   headRefName: z.string(),
   baseRefName: z.string(),
   headRefOid: z.string().regex(/^[0-9a-f]{40}$/),
+  mergeCommit: z.object({ oid: z.string().regex(/^[0-9a-f]{40}$/) }).nullish(),
+  mergedAt: z.string().datetime().nullish(),
   mergeable: z.string().nullish(),
   mergeStateStatus: z.string().nullish(),
   reviewDecision: z.string().nullish(),
@@ -2921,7 +2923,7 @@ export async function createDraftPr(input: DraftPrInput): Promise<DraftPrOutcome
   }
   if (existing) return { ok: true, url: existing, dryRun: false, updated: true };
 
-  const body = buildPrBody(input.handoffText, run.task);
+  const body = input.body ?? buildPrBody(input.handoffText, run.task);
   // Target the branch the worktree forked from (config `baseBranch`) — without
   // --base, gh aims at the repo default (main) even when work started on
   // develop. `<remote>/x` normalizes to `x`; a raw sha (detached-HEAD fork
@@ -3390,6 +3392,8 @@ export function normalizeMergeState(
     headRef: pr.headRefName,
     baseRef: pr.baseRefName,
     headSha: pr.headRefOid,
+    ...(state === 'merged' && pr.mergeCommit ? { mergeCommitSha: pr.mergeCommit.oid } : {}),
+    ...(state === 'merged' && pr.mergedAt ? { mergedAt: pr.mergedAt } : {}),
     mergeable,
     reviewDecision,
     checks,
@@ -3619,7 +3623,7 @@ export async function fetchPrMergeState(
     // token reads all three. The check detail now has its own call, and its own way to degrade.
     const prOut = await gh(repoRoot, [
       'pr', 'view', String(number), '--json',
-      'number,title,url,state,isDraft,headRefName,baseRefName,headRefOid,mergeable,mergeStateStatus,reviewDecision',
+      'number,title,url,state,isDraft,headRefName,baseRefName,headRefOid,mergeable,mergeStateStatus,reviewDecision,mergeCommit,mergedAt',
     ]);
     const parsedPr = mergePrSchema.parse(JSON.parse(prOut));
     const [policyOut, requirements, checks] = await Promise.all([

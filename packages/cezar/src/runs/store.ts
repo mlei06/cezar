@@ -540,6 +540,7 @@ export const runRecordSchema = z.object({
   worktreeReclaimedAt: z.string().optional(),
   replayOf: runRecordContract.shape.replayOf.catch(undefined),
   replayChange: runRecordContract.shape.replayChange.catch(undefined),
+  improvementId: runRecordContract.shape.improvementId.catch(undefined),
   /** Parallel variants (spec 010): tasks sharing a groupId are one group. */
   groupId: z.string().optional(),
   /** Variant letter within the group — 'A' | 'B' | 'C' (kept as a string). */
