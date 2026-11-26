@@ -207,6 +207,24 @@ export const improvementDecisionsSchema = z.object({
 }).passthrough();
 export type ImprovementDecisions = z.infer<typeof improvementDecisionsSchema>;
 
+const improvementScorerStatsSchema = z.object({
+  scorer: scorerNameSchema,
+  passed: z.number().int().nonnegative(),
+  failed: z.number().int().nonnegative(),
+  costSamples: z.number().int().nonnegative(),
+  meanCostUsd: z.number().nonnegative().optional(),
+});
+export const improvementComparisonSchema = z.object({
+  measuredAt: z.string().datetime(),
+  before: z.array(improvementScorerStatsSchema),
+  after: z.array(improvementScorerStatsSchema),
+  beforeRuns: z.number().int().nonnegative(),
+  afterRuns: z.number().int().nonnegative(),
+  harnessVersion: harnessVersionSchema.optional(),
+  regressed: z.boolean(),
+});
+export type ImprovementComparison = z.infer<typeof improvementComparisonSchema>;
+
 export const improvementRecordSchema = z.object({
   id: z.string().min(1).max(64),
   queue: z.enum(['project', 'harness']),
@@ -221,6 +239,7 @@ export const improvementRecordSchema = z.object({
   mergeCommit: z.string().optional(),
   mergedAt: z.string().datetime().optional(),
   finishedAt: z.string().datetime().optional(),
+  comparison: improvementComparisonSchema.optional(),
 }).passthrough();
 export type ImprovementRecord = z.infer<typeof improvementRecordSchema>;
 export const improvementRecordsSchema = z.array(improvementRecordSchema);

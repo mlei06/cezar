@@ -48,15 +48,25 @@ function previewSections(text: string): string {
   }).join('\n\n');
 }
 
+async function committedCharter(root: string) {
+  // Git can discover a parent repository for a separately registered folder.
+  if ((await git(root, ['rev-parse', '--show-prefix']))?.trim() !== '') return;
+  const ref = await charterRef(root);
+  // Read the committed blob. Git doesn't follow symlinks or expose working-tree drafts.
+  return { ref, sections: previewSections(await git(root, ['show', `${ref}:${CHARTER_PATH}`]) ?? '') };
+}
+
+export async function projectCharterProgress(root: string): Promise<string> {
+  return (await committedCharter(root))?.sections ?? '';
+}
+
 export async function projectCharterPrompt(sources: readonly ManagerProjectSource[]): Promise<string> {
   const available = sources.filter((source) => source.available);
   if (available.length === 0) return '';
   const excerpts = await mapWithConcurrency(available, 4, async ({ id, root }) => {
-    // Git can discover a parent repository for a separately registered folder.
-    if ((await git(root, ['rev-parse', '--show-prefix']))?.trim() !== '') return '';
-    const ref = await charterRef(root);
-    // Read the committed blob. Git doesn't follow symlinks or expose working-tree drafts here.
-    const sections = previewSections(await git(root, ['show', `${ref}:${CHARTER_PATH}`]) ?? '');
+    const charter = await committedCharter(root);
+    if (!charter) return '';
+    const { ref, sections } = charter;
     return sections ? `Project ${id} (${ref}):\n${sections}` : '';
   });
   const preview = excerpts.filter(Boolean).join('\n\n');

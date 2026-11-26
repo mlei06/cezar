@@ -6,6 +6,7 @@ import lockfile from 'proper-lockfile';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mergeWriteAgentAccounts } from '../workspace/agent-accounts.ts';
 import { mergeWriteWorkspaceConfig } from '../workspace/config.ts';
+import { FACTORY_REPORT_JOB } from '../factory/report.ts';
 import { appendLedger } from '../usage-ledger/store.ts';
 import { managerAccessOf, type GithubData, type ManagerAsk, type ManagerMessage } from '@open-mercato/cezar-contract';
 import type { AgentEvent, AgentRunner, AgentRunSpec, AgentSession, RunnerId } from '../core/agent-runner.ts';
@@ -2794,6 +2795,27 @@ describe('ManagerEngine', () => {
       expect(spec.allowedTools).toBeUndefined();
       expect(spec.bashAllowlist).toBeUndefined();
       expect(spec.brokeredShell).toBeUndefined();
+    });
+
+    it('posts the weekly factory artifact from one project manager without a model turn', async () => {
+      let now = Date.parse('2026-11-01T12:00:00.000Z');
+      const report = vi.fn(async () => ({ name: 'factory-week-2026-11-08.html', text: 'One score recorded.' }));
+      const engine = makeEngine({ now: () => now, factoryWeeklyReport: report });
+      const manager = await engine.create({ name: 'Lead', instructions: 'Read project status.', projects: ['alpha'], cronMinutes: 0 });
+      if ('error' in manager) throw new Error(manager.error);
+      await engine.ensureProjectManagers();
+      await engine.ensureProjectManagers();
+      expect(store.get(manager.id)?.jobs.map(({ id }) => id)).toEqual([FACTORY_REPORT_JOB]);
+
+      now += 7 * 24 * 60 * 60_000;
+      engine.tick();
+      await settled(engine);
+      engine.tick();
+      await settled(engine);
+
+      expect(report).toHaveBeenCalledTimes(1);
+      expect(backend.specs).toHaveLength(0);
+      expect(assistants(manager.id).at(-1)?.text).toContain('/api/v1/p/alpha/factory/reports/factory-week-2026-11-08.html');
     });
 
     it('skips a disabled job', async () => {

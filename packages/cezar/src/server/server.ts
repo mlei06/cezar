@@ -276,7 +276,7 @@ import { appendHandoffHeartbeat, handoffProgressExcerpt, readHandoff } from '../
 import { markStarted, onTodosChanged, readTodos, removeTodo, todoTaskText, type TodoItem } from '../todos.ts';
 import type { RunEvent, RunRecord, RunStatus, RunStore } from '../runs/store.ts';
 import { readStagedReplayDiff } from '../workflows/staged-replay.ts';
-import { artifactsDir, authParkForAccount, isIdleParked } from '../runs/store.ts';
+import { artifactsDir, authParkForAccount, isIdleParked, readRunEvents } from '../runs/store.ts';
 import { artifactsCdnEnabled, existingVersionDir, findArtifact, scanArtifacts } from '../runs/artifacts.ts';
 import {
   appendToStream,
@@ -307,6 +307,8 @@ import { ScoringService, type ScoringProject, type SettledScore } from '../scori
 import { readRunScores } from '../scoring/store.ts';
 import { aggregateScores, groupScoreColumns } from '../scoring/summary.ts';
 import { checkFactory } from '../factory/check.ts';
+import { factoryReportsDir, writeFactoryReport } from '../factory/report.ts';
+import { projectCharterProgress } from '../managers/project-charter.ts';
 import { detectHarnessProject, harnessCauseQueuePath, projectCauseQueuePath, readCauseQueue, recordCauses, routeCauses } from '../factory/causes.ts';
 import { byLastActivityDesc, compareIsoDesc, lastActivityAt, readRunIndexDiagnostic, readRunIndexFromDisk } from '../runs/run-index.ts';
 import { isV2WireEventType } from '../runs/ui-event-sink.ts';
@@ -5778,6 +5780,16 @@ export function createApp(deps: ServerDeps) {
       return c.json(aggregateScores(dataDir, store.listRuns(), c.req.valid('query')));
     })
 
+    .get('/factory/reports/:name', paramZodValidator(z.object({ name: z.string().regex(/^factory-week-\d{4}-\d{2}-\d{2}\.html$/) })), async (c) => {
+      const { dataDir } = c.get('project');
+      const { name } = c.req.valid('param');
+      const dir = factoryReportsDir(dataDir);
+      const artifact = await findArtifact(dir, name);
+      const stream = artifact ? await openArtifact(dir, name) : null;
+      if (!artifact || !stream) return c.json({ error: 'report not found' }, 404);
+      return c.body(stream, 200, artifactHeaders(artifact, false));
+    })
+
     .get('/factory/check', async (c): Promise<Response & TypedResponse<FactoryCheckBody, 200, 'json'>> => {
       const response: FactoryCheckResponse = { issues: await checkFactory(c.get('project').root) };
       return c.json(response);
@@ -9527,6 +9539,26 @@ export function createApp(deps: ServerDeps) {
     secrets: secretStore,
     emit: (event, data) => workspaceEvents.emit(event, data),
     projects: workspaceProjectSources,
+    factoryWeeklyReport: async (project, now) => {
+      const config = await loadWorkspaceConfig();
+      const dataDir = join(project.root, '.ai/cezar');
+      const forge = await mergeForge(project.root);
+      return writeFactoryReport({
+        dataDir, project: project.id, name: project.name, now, runs: project.runs(),
+        harness: detectHarnessProject(config.projects, config.factory?.harnessProject) === project.id,
+        charter: await projectCharterProgress(project.root),
+        isMerged: async (number) => {
+          const result = await forge?.prMergeState?.(number);
+          return result?.available ? result.mergeState.state === 'merged' : undefined;
+        },
+        humanTouchpoints: (runId) => {
+          const path = join(dataDir, 'runs', `${runId}.ndjson`);
+          if (!existsSync(path)) return undefined;
+          return readRunEvents(path).filter((event) => event.type === 'user-message' && typeof event.text === 'string' &&
+            !event.text.startsWith('Sent automatically by cezar:')).length;
+        },
+      });
+    },
     github: {
       list: (root) => fetchGithub(root, false, 30),
       refStatus: (root, prs) => fetchGithubRefStatus(root, { prs: prs.slice(0, GH_REF_STATUS_MAX), issues: [] }),
