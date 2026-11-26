@@ -2,7 +2,7 @@ import { closeSync, constants, fstatSync, openSync, readFileSync, readSync } fro
 import { join } from 'node:path';
 import {
   improvementDecisionsSchema, improvementRecordsSchema,
-  type ImprovementDecisions, type ImprovementRecord, type QueuedCause,
+  type ImprovementComparison, type ImprovementDecisions, type ImprovementRecord, type QueuedCause,
 } from '@open-mercato/cezar-contract';
 import { readCauseQueue } from '../factory/causes.ts';
 import { cezarHomeDir } from '../paths.ts';
@@ -150,6 +150,11 @@ export function failImprovement(paths: ImprovementPaths, id: string, now: Date):
 /** The improvement PR merged: its commit starts the before/after window and the cooldown. */
 export function mergeImprovement(paths: ImprovementPaths, id: string, input: { commit: string; at: Date }): ImprovementRecord {
   return updateRecord(paths.records, id, (entry) => ({ ...entry, state: 'merged', mergeCommit: input.commit, mergedAt: input.at.toISOString() }));
+}
+
+export function recordImprovementComparison(paths: ImprovementPaths, id: string, comparison: ImprovementComparison): ImprovementRecord {
+  return updateRecord(paths.records, id, (record) =>
+    record.state === 'merged' && !record.comparison ? { ...record, comparison } : record);
 }
 
 /** The improvement PR closed unmerged: its fixes never landed, so their causes reopen. */
