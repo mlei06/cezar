@@ -2,7 +2,7 @@
 
 The overseer's resume point for the self-improving factory build. Updated and pushed at every milestone step and every overseer decision, so the work survives a crashed machine or a new session. Read this first, then the roadmap's Progress table and the observation log.
 
-Last updated: 2026-11-26 03:07 UTC.
+Last updated: 2026-11-26 03:14 UTC.
 
 ## Where the build stands
 
@@ -10,7 +10,7 @@ Last updated: 2026-11-26 03:07 UTC.
 - **Live harness:** `0.21.0+release-7dd520c`. PR #12 installed and healthy. The installed charter loader and both manager playbooks were verified. The harness manager remains inactive and idle.
 - **M1 PRs:** #2 (known host test failures), #3 (secret descriptions), #4 (workflow budgets and agent-step secrets), #5 (typecheck repair), #6 (built-in `implement`, `plan`, `operate`), #7 (the capability block), #8 (manager discovery and task flags), #9 (`manage-project` update), #10 (test-resource rules in `factory-work`).
 - **M1 follow-ups** (from reviews, not blocking): generated validation checks get an explicit secrets allowlist; forge-adapter-level draft-PR assertions; check-artifact exclusions survive a cockpit restart (tracked before M1).
-- **In flight:** M2 run identity, branch `impl/m2-run-identity` at `e7d408647`. Typecheck and 386 focused tests passed. The full suite and package gates are running. Review, PR, release and isolated live checks follow. The PR publication handoff patch is local on `impl/m1-pr-publishing` and has passed typecheck and focused tests.
+- **In flight:** M2 run identity, branch `impl/m2-run-identity` at `e7d408647`. Typecheck, 386 focused tests and an isolated linked CLI smoke passed. The full suite and package gates are running. Review, PR and release follow. The USD storage slice is on `impl/m2-budget-storage` at `751271be4`, typechecked with 335 focused tests passing. Run its full validation after the identity suite. The PR publication handoff patch is local on `impl/m1-pr-publishing` and has passed typecheck and focused tests.
 - **Next:** finish run-identity validation and release. Then extend the existing dispatch budget and add metrics and delegated model routing. The concurrent two-project live acceptance remains open. One manager completed a live rollout and created a workflow PR.
 
 ## Standing instructions given to the harness manager
