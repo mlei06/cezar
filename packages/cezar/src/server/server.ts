@@ -311,7 +311,7 @@ import {
   repoFileQuerySchema,
   type DeleteDraftResponse,
 } from '@open-mercato/cezar-contract';
-import { setFallbackProviderCheck, toPastedContent, type PastedContent, type RunManager } from '../workflows/run.ts';
+import { resolveTaskModelAliases, setFallbackProviderCheck, toPastedContent, type PastedContent, type RunManager } from '../workflows/run.ts';
 import {
   foldedLength,
   imageChars,
@@ -5591,7 +5591,7 @@ export function createApp(deps: ServerDeps) {
           return c.json({ error: 'Requested secrets must be stored for this project or workspace and available to agents. See the secrets list.' }, 400);
         }
       }
-      const selection = await manager.resolveModelAliases(workflow, parsed.data);
+      const selection = await resolveTaskModelAliases(workflow, repoRoot, parsed.data, () => deps.semaphore?.accountHolds());
       const modelRoutePinned = selection.workflow !== workflow;
       workflow = selection.workflow;
       const runner = selection.route?.runner ?? parsed.data.runner;
@@ -5633,8 +5633,7 @@ export function createApp(deps: ServerDeps) {
         reasoningEffort: parsed.data.reasoningEffort,
         runner,
         agentProfile,
-        modelRouteNotes: selection.notes,
-        modelRoutePinned,
+        ...(modelRoutePinned ? { modelRouteNotes: selection.notes, modelRoutePinned: true } : {}),
         secrets: parsed.data.secrets,
         budget: parsed.data.budget,
         images,

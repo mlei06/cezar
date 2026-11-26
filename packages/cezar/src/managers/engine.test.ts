@@ -3490,7 +3490,7 @@ describe('ManagerEngine', () => {
       expect(requests.at(-1)?.body).toMatchObject({ runner: 'codex', agentProfile: 'new-account' });
     });
 
-    it('automatically uses the manager backend instead of the project default', async () => {
+    it('uses the manager backend when the project checkout is unavailable', async () => {
       const engine = makeEngine({ defaultRunner: async () => 'codex' });
       const id = await create(engine, 0);
       await engine.createTask(id, { projectId: 'alpha', task: 'Fix it' });

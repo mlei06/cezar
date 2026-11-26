@@ -1577,6 +1577,33 @@ interface TaskSkillPreparation {
 
 const NO_TASK_SKILLS: TaskSkillPreparation = { installed: [], missingShared: [], guidance: [] };
 
+export function resolveTaskModelAliases(
+  workflow: WorkflowDef,
+  repoRoot: string,
+  input: Pick<StartRunInput, 'runner' | 'model' | 'agentProfile' | 'managerAgent'>,
+  readHolds: () => AccountHolds | undefined,
+  config?: CezConfig,
+) {
+  return resolveWorkflowModelAlias(workflow, repoRoot, config, {
+    model: input.model,
+    accountFor: async (runner) => {
+      const allowed = input.managerAgent?.fallback;
+      const profiles = allowed
+        ? allowed.filter((entry) => entry.provider === runner).map((entry) => entry.profileId)
+        : [runner === input.runner ? input.agentProfile : undefined];
+      if (!profiles.length) return undefined;
+      const store = await loadAgentAccounts().catch(() => undefined);
+      const deadlines = readHolds()?.deadlines;
+      const candidates = profiles.map((agentProfile) => {
+        const key = runAccountKey({ runner, agentProfile }, runner, store && { store, repoRoot });
+        const account = key.slice(runner.length + 1);
+        return { runner, agentProfile, account, label: account, until: deadlines?.get(key) };
+      });
+      return chooseTaskAgent(candidates, { explicitAccount: false, fromSettings: true, now: Date.now() }).chosen;
+    },
+  });
+}
+
 /**
  * The mini workflow engine: executes a `WorkflowDef` against a repo, one step
  * at a time, persisting every event to the RunStore (which the SSE endpoints
@@ -2267,27 +2294,6 @@ export class RunManager {
       this.store.updateStep(runId, stepId, { capabilityPrompt: prompt });
       return prompt;
     };
-  }
-
-  resolveModelAliases(workflow: WorkflowDef, input: Pick<StartRunInput, 'runner' | 'model' | 'agentProfile' | 'managerAgent'>, config?: CezConfig) {
-    return resolveWorkflowModelAlias(workflow, this.repoRoot, config, {
-      model: input.model,
-      accountFor: async (runner) => {
-        const allowed = input.managerAgent?.fallback;
-        const profiles = allowed
-          ? allowed.filter((entry) => entry.provider === runner).map((entry) => entry.profileId)
-          : [runner === input.runner ? input.agentProfile : undefined];
-        if (!profiles.length) return undefined;
-        const store = await loadAgentAccounts().catch(() => undefined);
-        const holds = this.semaphore.accountHolds();
-        const candidates = profiles.map((agentProfile) => {
-          const key = runAccountKey({ runner, agentProfile }, runner, store && { store, repoRoot: this.repoRoot });
-          const account = key.slice(runner.length + 1);
-          return { runner, agentProfile, account, label: account, until: holds.deadlines?.get(key) };
-        });
-        return chooseTaskAgent(candidates, { explicitAccount: false, fromSettings: true, now: Date.now() }).chosen;
-      },
-    });
   }
 
   startRun(
@@ -7196,7 +7202,7 @@ export class RunManager {
     // Resolve the agent backend for this run: the task choice (GUI) wins over
     // the config default. Per-step `runner` can still override it below.
     const config = await loadConfig(this.repoRoot);
-    const selection = await this.resolveModelAliases(workflow, input, config);
+    const selection = await resolveTaskModelAliases(workflow, this.repoRoot, input, () => this.semaphore.accountHolds(), config);
     if (state.cancelled) return;
     if (modelAlias(input.model)) input = { ...input, model: undefined };
     if (selection.route && !original?.agentSwitch?.workflow) {
