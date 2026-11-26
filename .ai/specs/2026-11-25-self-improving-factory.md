@@ -300,6 +300,7 @@ The built-in rubrics start as the overseer's tuned drafts from the build (roadma
 **The judge.**
 - **Who:** the machine's `factory.judge` setting (a runner and model). Cezar names no provider. Unset, the judge is the project's default runner at low effort. A self-hosted model is the intended choice, so transcripts stay inside the owner's network and scoring costs only time.
 - **How:** the same one-shot call Cezar already makes for commit messages and titles. That's `createRunner` and `runner.run` with no tools, a timeout, and two attempts where the second carries the rejection reason. It's tracked in the usage ledger as a new internal consumer, `scoring`. One call per scorer, never a task, so scoring creates no runs. Calls run one at a time per machine (a small queue).
+- **OpenCode:** use stateless text generation for the tool-free call. Show a configuration error if the installed OpenCode cannot provide it. Keep account usage attributed where the runner reports it.
 - **What it reads:** the rubric, the labels, the metrics, then the full transcript as plain text ("Data model" describes the format).
 - **Too long:** a transcript longer than the judge's window is shortened only in its largest tool outputs, keeping each one's head and tail. A call or message is never dropped. When the runner does not publish its input limit, start with a 300,000-character input budget including the rubric. If the provider rejects the context size, use the second attempt with half the rejected input size. If preserving messages and calls cannot fit, record a scoring error.
 - **Its reply:** a JSON object, optionally enclosed in a single code block, validated against the scorer's labels. A failing verdict needs at least one cause supported by an exact quote. An invalid reply uses the remaining attempt, then records an error.
@@ -830,6 +831,7 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
 
 ## Changelog
 
+- **v5.21:** D5 requires OpenCode's stateless text generation for the judge. When the installed version cannot provide it, scoring records a configuration error.
 - **v5.20:** D5 defines the two-attempt context limit fallback and accepts a single fenced JSON object. The scope scorer reads explicitly cited decision headings from the run's pinned commit. It excludes unrelated sections and working-copy edits.
 
 - **v5.19:** D4 specifies child token and time reservations, inclusion of measured cached input and follow-up coalescing. D5 keeps missing historical request and context fields optional.
