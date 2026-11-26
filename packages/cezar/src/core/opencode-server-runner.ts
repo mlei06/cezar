@@ -424,7 +424,9 @@ class OpencodeSession implements AgentSession {
       if (this.spec.mcpServers?.length) {
         env.OPENCODE_CONFIG_CONTENT = opencodeConfigContent(this.spec.mcpServers, env.OPENCODE_CONFIG_CONTENT);
       }
-      if (this.spec.enforceReadOnly) env.OPENCODE_CONFIG_CONTENT = opencodeReadOnlyConfig(env.OPENCODE_CONFIG_CONTENT);
+      if (this.spec.enforceReadOnly || this.spec.noTools) {
+        env.OPENCODE_CONFIG_CONTENT = opencodeReadOnlyConfig(env.OPENCODE_CONFIG_CONTENT, this.spec.noTools);
+      }
       const [file, argv] = disclaimedCommand(this.bin, ['serve', '--hostname', '127.0.0.1', '--port', String(port)], env);
       child = nodeSpawn(file, argv, { cwd: this.spec.cwd, env, detached: process.platform !== 'win32' });
     } catch (err) {
@@ -914,7 +916,7 @@ class OpencodeSession implements AgentSession {
     const id = stringField(props, 'id');
     if (!id || this.permissionsAnswered.has(id)) return;
     this.permissionsAnswered.add(id);
-    const reply = opencodePermissionReply(props, this.spec.env, this.spec.cwd);
+    const reply = this.spec.noTools ? 'reject' : opencodePermissionReply(props, this.spec.env, this.spec.cwd);
     // Ask the user rather than refuse behind their back (#2042) — but only when one can answer:
     // an autonomous or headless run keeps the refusal, never a park only a human could end.
     if (reply === 'reject' && this.opts.onUiEvent && this.opts.canAskPermission?.() === true) {

@@ -218,7 +218,7 @@ export function opencodeConfigContent(servers: readonly PrivateMcpServer[], exis
 }
 
 /** Loaded after the project's own config, so a repository cannot grant itself back these tools. */
-export function opencodeReadOnlyConfig(existing?: string): string {
+export function opencodeReadOnlyConfig(existing?: string, toolFree = false): string {
   let base: Record<string, unknown> = {};
   try {
     const parsed: unknown = JSON.parse(existing ?? '{}');
@@ -226,7 +226,7 @@ export function opencodeReadOnlyConfig(existing?: string): string {
   } catch {
     // an unparseable host value cannot be merged into; the denial still applies
   }
-  const deny = { edit: 'deny', bash: 'deny' };
+  const deny = toolFree ? { '*': 'deny' } : { edit: 'deny', bash: 'deny' };
   // A repository's own agent definitions carry their own `permission`, which outranks the top level.
   const agents = isObject(base.agent) ? base.agent : {};
   const agent = Object.fromEntries(
@@ -235,7 +235,7 @@ export function opencodeReadOnlyConfig(existing?: string): string {
       return [name, { ...(isObject(own) ? own : {}), permission: deny }];
     }),
   );
-  return JSON.stringify({ ...base, permission: deny, agent });
+  return JSON.stringify({ ...base, ...(toolFree ? { default_agent: 'build' } : {}), permission: deny, agent });
 }
 
 const OPENCODE_BUILTIN_AGENTS = ['build', 'plan', 'general'];

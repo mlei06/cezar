@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+import { buildClaudeArgs } from '../core/claude-cli-runner.ts';
+import { opencodeReadOnlyConfig } from '../core/private-mcp.ts';
 import { summarizeRunMetrics } from '../runs/task-metrics.ts';
 import type { RunEvent, RunRecord } from '../runs/store.ts';
 import type { Scorer } from '../factory/scorers.ts';
@@ -18,6 +20,21 @@ const scorer: Scorer = {
 const event = (seq: number, type: string, fields: Record<string, unknown>): RunEvent => ({ seq, ts: stamp, stepId: 'work', type, ...fields });
 
 describe('judge inputs and validation', () => {
+  it('keeps both local judge runner toolsets disabled', () => {
+    const args = buildClaudeArgs({ cwd: '/tmp', userPrompt: 'Judge the task', noTools: true, allowedTools: ['Read'] });
+    expect(args[args.indexOf('--tools') + 1]).toBe('');
+    expect(args).toContain('--strict-mcp-config');
+    expect(args).not.toContain('--allowedTools');
+
+    const config = JSON.parse(opencodeReadOnlyConfig(JSON.stringify({
+      default_agent: 'custom', agent: { custom: { permission: { bash: 'allow' } } },
+    }), true));
+    expect(config).toMatchObject({
+      default_agent: 'build', permission: { '*': 'deny' },
+      agent: { build: { permission: { '*': 'deny' } }, custom: { permission: { '*': 'deny' } } },
+    });
+  });
+
   it('shortens the largest tool output and keeps all messages and call arguments', () => {
     const events = [
       event(1, 'text', { text: 'Starting with the checklist.' }),
