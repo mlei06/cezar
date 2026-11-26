@@ -294,6 +294,29 @@ describe('graph workflows run through RunManager', () => {
     }
   }, 30_000);
 
+  it('names a composer slash skill in the capability block of a selected workflow', async () => {
+    mkdirSync(join(repoRoot, '.ai/cezar/skills'), { recursive: true });
+    writeFileSync(join(repoRoot, '.ai/cezar/skills/fixture-review.md'), [
+      '---', 'name: fixture-review', 'description: Summarize a fixture.', '---', 'Read the fixture.',
+    ].join('\n'));
+    const launch = vi.spyOn(CodexAppServerRunner.prototype, 'startSession');
+    try {
+      const app = createApp({ repoRoot, store, manager, version: 'test' });
+      const response = await apiRequest(app, '/api/v1/runs', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workflow: 'plan', task: '/fixture-review read the fixture', runner: 'codex' }),
+      });
+      expect(response.status).toBe(201);
+      const { id } = await response.json() as { id: string };
+      await vi.waitFor(() => expect(launch).toHaveBeenCalled(), { timeout: 15_000 });
+      expect(launch.mock.calls[0]?.[0]?.userPrompt).toContain('Selected skill: /fixture-review');
+      expect(launch.mock.calls[0]?.[0]?.systemPrompt).toContain('Attached skill: fixture-review');
+      expect(store.getRun(id)?.workflow).toBe('plan');
+    } finally {
+      launch.mockRestore();
+    }
+  }, 30_000);
+
   it.each([false, true])('launches Operate through HTTP with a workspace alias configured: %s', async (configured) => {
     const model = 'mock/mock-model';
     const prior = await mergeWriteWorkspaceConfig((config) => config);
