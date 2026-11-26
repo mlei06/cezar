@@ -1,6 +1,6 @@
 # The self-improving factory
 
-Status: draft v5.28, 2026-11-26. Fork: `mlei06/cezar`, trunk `factory`. Spec owner: the overseer (see the roadmap). Implementation plan: `2026-11-25-self-improving-factory-roadmap.md`. Findings during the build: `2026-11-25-self-improving-factory-observations.md`.
+Status: draft v5.34, 2026-11-26. Fork: `mlei06/cezar`, trunk `factory`. Spec owner: the overseer (see the roadmap). Implementation plan: `2026-11-25-self-improving-factory-roadmap.md`. Findings during the build: `2026-11-25-self-improving-factory-observations.md`.
 
 ## TLDR
 
@@ -377,7 +377,7 @@ The project's **manager** (`cez-manager improve --project <id>`), or the **owner
    - write redrafts to the files that own each cause;
    - mark each cluster `fixed`, `dismissed` (with a reason), `escalated` or `deferred`, in a decisions file Cezar reads.
 2. **Check step:** `cez factory check`, plus the project's validation command if it touched code. On failure it loops back to the agent, at most twice.
-3. **PR step:** one draft PR, marked ready once the checks pass, using the description the agent wrote. That description lists each change, the regressions it addresses (runs, scorers, evidence), its expected effect, and the dismissed and escalated clusters with reasons.
+3. **PR step:** one draft PR, marked ready once the checks pass, using the agent-authored description from the decisions file for a project. A public harness PR uses its generated summary; full evidence and decisions stay in the cockpit. That description lists each change, the regressions it addresses (runs, scorers, evidence), its expected effect, and the dismissed and escalated clusters with reasons.
 
 **Bookkeeping, by Cezar:**
 - marks the batch's causes as processed;
@@ -711,7 +711,7 @@ workflow implement · codex example-model · started by manager · status done �
 
 **API (all under `/api/v1`; project routes also under `/p/:projectId`):**
 - `GET /runs/:id/metrics`, `GET /runs/:id/scores`, `POST /runs/:id/score`;
-- `GET /factory` (definition, settings, queue, improvements), `GET /factory/check`, `POST /factory/improve`;
+- `GET /factory` (definition, settings, queue, improvements), `GET /factory/check`; the built-in factory automation handles improvement run-now;
 - `GET /scores?since&groupBy=scorer|category|target`;
 - `POST /runs/:id/replay` (returns the variant group), and the existing `GET /groups/:groupId`, which gains scores per variant;
 - `GET|POST /benchmarks`, `GET /benchmarks/:suite/results`;
@@ -854,6 +854,8 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
 
 ## Changelog
 
+- **v5.34:** D6 records the checked commit and the decisions before submitting a PR. Final autosave must retain the same commit. Recovery tracks an already-open PR even if the decisions artifact has been removed. The checkpoint preserves recorded outcomes.
+- **v5.33:** D6 workflow hardening. The host claims and records a batch before admission. The built-in workflow is available only to that admission path, with the owner-approved bundled skill. A project validates the exact batch decisions and configured change scope before publication. The harness keeps the agent's task evidence out of the public PR. The ordinary project body comes from the optional `pullRequestDescription` in the decisions file. Use the built-in automation for all user and manager starts. Record a merge only with the forge's exact commit and timestamp.
 - **v5.32:** D6 improvement run as built:
   - the built-in `improve-factory` workflow (the skill, `cez factory check` with two repairs, the draft PR) stays out of the workflow picker, and a project's own `improve-factory` workflow replaces it;
   - the decisions file is `$CEZ_ARTIFACTS_DIR/improvement-decisions.json`, outside the diff;

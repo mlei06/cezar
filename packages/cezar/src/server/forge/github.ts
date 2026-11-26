@@ -7,7 +7,7 @@ import { autosaveCommit, taskRemotes } from '../../git-worktree.ts';
 import { parseRemote, splitRemoteRef } from '../../git-remotes.ts';
 import { GITHUB_COM, isGithubHost } from '../../github-hosts.ts';
 import { baseDivergence, rewriteLeaseArg } from '../git-changes.ts';
-import { getRepoInfo } from '../git.ts';
+import { getHeadCommit, getRepoInfo } from '../git.ts';
 import { fetchIssueMetadata } from './github-issue-metadata.ts';
 import { reportPrClosed } from './pr-closed.ts';
 import type {
@@ -284,6 +284,8 @@ const mergePrSchema = z.object({
   headRefName: z.string(),
   baseRefName: z.string(),
   headRefOid: z.string().regex(/^[0-9a-f]{40}$/),
+  mergeCommit: z.object({ oid: z.string().regex(/^[0-9a-f]{40}$/) }).nullish(),
+  mergedAt: z.string().datetime().nullish(),
   mergeable: z.string().nullish(),
   mergeStateStatus: z.string().nullish(),
   reviewDecision: z.string().nullish(),
@@ -2889,6 +2891,10 @@ export async function createDraftPr(input: DraftPrInput): Promise<DraftPrOutcome
     return { ok: false, error: 'could not commit the final changes — check git status in the worktree' };
   }
 
+  if (input.expectedHead && await getHeadCommit(worktree) !== input.expectedHead) {
+    return { ok: false, error: 'the checked commit changed before publication' };
+  }
+
   // DRY-RUN (CEZ_DRY_RUN=1): no push, no gh — simulate success with a fake PR
   // URL so the whole review → PR flow is testable without GitHub.
   if (process.env.CEZ_DRY_RUN === '1') {
@@ -2910,18 +2916,19 @@ export async function createDraftPr(input: DraftPrInput): Promise<DraftPrOutcome
     return { ok: false, error: nothingToPropose(branch, prBase) };
   }
 
-  let push = await execTool(['push', '-u', remotes.push, branch], worktree, 'git', PUSH_TIMEOUT_MS);
+  const refspec = input.expectedHead ? `${input.expectedHead}:refs/heads/${branch}` : branch;
+  let push = await execTool(['push', '-u', remotes.push, refspec], worktree, 'git', PUSH_TIMEOUT_MS);
   if (!push.ok && /\[rejected\]|non-fast-forward/.test(push.stderr)) {
     // A rebased branch is rejected as non-fast-forward; lease only against a tip this branch held (#1758).
     const lease = await rewriteLeaseArg(worktree, remotes.push, branch, [run.baseBranch, prBase]);
-    if (lease) push = await execTool(['push', lease, '-u', remotes.push, branch], worktree, 'git', PUSH_TIMEOUT_MS);
+    if (lease) push = await execTool(['push', lease, '-u', remotes.push, refspec], worktree, 'git', PUSH_TIMEOUT_MS);
   }
   if (!push.ok) {
     return { ok: false, error: `git push failed — ${tail(push.stderr) || 'unknown error'}` };
   }
   if (existing) return { ok: true, url: existing, dryRun: false, updated: true };
 
-  const body = buildPrBody(input.handoffText, run.task);
+  const body = input.body ?? buildPrBody(input.handoffText, run.task);
   // Target the branch the worktree forked from (config `baseBranch`) — without
   // --base, gh aims at the repo default (main) even when work started on
   // develop. `<remote>/x` normalizes to `x`; a raw sha (detached-HEAD fork
@@ -3390,6 +3397,8 @@ export function normalizeMergeState(
     headRef: pr.headRefName,
     baseRef: pr.baseRefName,
     headSha: pr.headRefOid,
+    ...(state === 'merged' && pr.mergeCommit ? { mergeCommitSha: pr.mergeCommit.oid } : {}),
+    ...(state === 'merged' && pr.mergedAt ? { mergedAt: pr.mergedAt } : {}),
     mergeable,
     reviewDecision,
     checks,
@@ -3619,7 +3628,7 @@ export async function fetchPrMergeState(
     // token reads all three. The check detail now has its own call, and its own way to degrade.
     const prOut = await gh(repoRoot, [
       'pr', 'view', String(number), '--json',
-      'number,title,url,state,isDraft,headRefName,baseRefName,headRefOid,mergeable,mergeStateStatus,reviewDecision',
+      'number,title,url,state,isDraft,headRefName,baseRefName,headRefOid,mergeable,mergeStateStatus,reviewDecision,mergeCommit,mergedAt',
     ]);
     const parsedPr = mergePrSchema.parse(JSON.parse(prOut));
     const [policyOut, requirements, checks] = await Promise.all([

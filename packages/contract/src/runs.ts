@@ -572,6 +572,8 @@ export const runRecordSchema = z.object({
   worktreeReclaimedAt: z.string().optional(),
   /** For D8 experiments, the original task and the single changed input. */
   replayOf: z.string().optional(),
+  /** Host-created association with the claimed improvement batch. */
+  improvementId: z.string().uuid().optional(),
   replayChange: z.string().max(200).optional(),
   /** Parallel variants (spec 010): runs sharing a groupId are one group. */
   groupId: z.string().optional(),

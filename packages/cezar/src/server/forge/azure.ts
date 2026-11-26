@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { autosaveCommit, taskRemotes } from '../../git-worktree.ts';
 import { splitRemoteRef } from '../../git-remotes.ts';
 import { baseDivergence, rewriteLeaseArg } from '../git-changes.ts';
+import { getHeadCommit } from '../git.ts';
 import { createAzureAuth, type ToolRunner } from './azure/auth.ts';
 import {
   azureEvaluationSchema,
@@ -235,6 +236,9 @@ export function createAzureDriver(remote: AzureRemote, deps: AzureDriverDeps = {
       const saved = await autosaveCommit(worktree, 'pre-PR', input.excludedPaths);
       if (saved === 'refused') return { ok: false, error: 'worktree has unresolved merge conflicts — resolve them, then publish again' };
       if (saved === 'failed') return { ok: false, error: 'could not commit the final changes — check git status in the worktree' };
+      if (input.expectedHead && await getHeadCommit(worktree) !== input.expectedHead) {
+        return { ok: false, error: 'the checked commit changed before publication' };
+      }
       if (dryRun()) {
         return existing
           ? { ok: true, url: existing, dryRun: true, updated: true }
@@ -247,10 +251,11 @@ export function createAzureDriver(remote: AzureRemote, deps: AzureDriverDeps = {
       if (!existing && (await baseDivergence(worktree, run.baseBranch)).ahead === 0) {
         return { ok: false, error: `nothing to propose — ${branch} has no commits that ${target ?? 'the base branch'} does not already have` };
       }
-      let push = await gitIn(worktree, ['push', '-u', remotes.push, branch], PUSH_TIMEOUT_MS);
+      const refspec = input.expectedHead ? `${input.expectedHead}:refs/heads/${branch}` : branch;
+      let push = await gitIn(worktree, ['push', '-u', remotes.push, refspec], PUSH_TIMEOUT_MS);
       if (!push.ok && /\[rejected\]|non-fast-forward/.test(push.stderr)) {
         const lease = await rewriteLeaseArg(worktree, remotes.push, branch, [run.baseBranch, prBase]);
-        if (lease) push = await gitIn(worktree, ['push', lease, '-u', remotes.push, branch], PUSH_TIMEOUT_MS);
+        if (lease) push = await gitIn(worktree, ['push', lease, '-u', remotes.push, refspec], PUSH_TIMEOUT_MS);
       }
       if (!push.ok) return { ok: false, error: `git push failed — ${lastLine(push.stderr) || 'unknown error'}` };
       if (existing) return { ok: true, url: existing, dryRun: false, updated: true };
@@ -262,7 +267,7 @@ export function createAzureDriver(remote: AzureRemote, deps: AzureDriverDeps = {
       const repo = await repoFacts();
       const targetRef = target ? `refs/heads/${target}` : 'defaultBranch' in repo ? repo.defaultBranch : undefined;
       if (!targetRef) return { ok: false, error: 'cannot tell which branch the pull request should target' };
-      const body = buildPrBody(input.handoffText, run.task);
+      const body = input.body ?? buildPrBody(input.handoffText, run.task);
       const res = await t.request('POST', ['git', 'repositories', remote.repo, 'pullrequests'], {
         body: {
           sourceRefName: `refs/heads/${branch}`,
