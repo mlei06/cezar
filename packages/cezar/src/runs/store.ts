@@ -113,6 +113,8 @@ const stepStateSchema = z.object({
   usageTurnsRecorded: usageCounterSchema.optional(),
   usageInvocationEpoch: usageCounterSchema.optional(),
   startedAt: z.string().optional(),
+  startCommit: runRecordContract.shape.steps.element.shape.startCommit.catch(undefined),
+  harnessVersion: runRecordContract.shape.steps.element.shape.harnessVersion.catch(undefined),
   finishedAt: z.string().optional(),
   error: z.string().optional(),
   /** Latest backend-owned session id, used for same-backend Continue. */
@@ -522,6 +524,8 @@ export const runRecordSchema = z.object({
   branch: z.string().optional(),
   /** Stable baseline for session git views: a worktree's fork ref, or an in-place run's starting commit. */
   baseBranch: z.string().optional(),
+  startCommit: runRecordContract.shape.startCommit.catch(undefined),
+  harnessVersion: runRecordContract.shape.harnessVersion.catch(undefined),
   /** Set when count-based retention (#483) reclaimed this run's worktree
    *  *directory* (the `cez/<id8>` branch is kept). Presence means "materialized
    *  dir gone, recoverable via `git worktree add`"; it excludes the run from the

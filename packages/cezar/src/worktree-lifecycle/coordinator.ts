@@ -167,6 +167,9 @@ export class WorktreeLifecycleCoordinator {
   }
   /** Caller already holds normal task admission. No second slot is acquired for setup. */
   async prepare(runId: string, base: string, pendingLaunch: LifecyclePendingLaunch, signal?: AbortSignal, choice: LifecycleBranchChoice = {}): Promise<{ready: boolean; path: string; branch: string; baseBranch: string; operationId?: string; seeded?: string[]}> {
+    const onCreated = (startCommit: string) => {
+      if (!this.runs.getRun(runId)?.startCommit) this.runs.updateRun(runId, {startCommit});
+    };
     const initialBranch = choice.branch ?? branchFor(runId);
     this.runs.flush();
     const prior = await this.readRecord(runId);
@@ -187,7 +190,7 @@ export class WorktreeLifecycleCoordinator {
       });
     }
     if (!prior && !configured.config.afterCreate.length && !configured.config.beforeRemove.length) {
-      const wt = await this.materialize(choice, branch => createWorktree(this.root, runId, base, {branch}));
+      const wt = await this.materialize(choice, branch => createWorktree(this.root, runId, base, {branch, onCreated}));
       const seeded = await seedAgentConfigLocalLayer(this.root, wt.path).catch(() => []);
       return {ready: true, ...wt, seeded};
     }
@@ -219,7 +222,7 @@ export class WorktreeLifecycleCoordinator {
         if (signal?.aborted) throw new Error('Preparation cancelled before materialization');
         {
           // Dry run mocks agents and script execution only; git and the store stay real (#1358 review).
-          const wt = await this.materialize({...choice, branch: record.branch ?? choice.branch}, branch => createWorktreeWithOutcome(this.root, runId, base, {branch}));
+          const wt = await this.materialize({...choice, branch: record.branch ?? choice.branch}, branch => createWorktreeWithOutcome(this.root, runId, base, {branch, onCreated}));
           record.worktreePath = wt.path; record.branch = wt.branch;
           this.runs.updateRun(runId, {worktreePath: wt.path, branch: wt.branch, baseBranch: wt.baseBranch, worktreeReclaimedAt: undefined});
           await seedAgentConfigLocalLayer(this.root, wt.path).catch(() => []);

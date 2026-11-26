@@ -482,6 +482,8 @@ describe('graph workflows run through RunManager', () => {
   }, 30_000);
 
   it('Continue on a pruned Claude session picks up in a fresh session, one clean turn in the thread', async () => {
+    const head = async () => (await run('git', ['rev-parse', 'HEAD'], { cwd: repoRoot })).stdout.trim();
+    const originalCommit = await head();
     const first = await settle(
       manager.startRun({ name: 'one', source: 'file', steps: [{ id: 'work', name: 'Work', prompt: '{{task}}' }, { id: 'verify', command: 'true' }] }, {
         task: 'make buttons use a pointer cursor',
@@ -491,6 +493,9 @@ describe('graph workflows run through RunManager', () => {
     );
     const oldSession = first.steps.find((s) => s.id === 'work')?.sessionId;
     expect(oldSession).toBeDefined();
+    expect(first).toMatchObject({ startCommit: originalCommit, harnessVersion: { id: expect.any(String) } });
+    await run('git', [...GIT_ID, 'commit', '--allow-empty', '-q', '-m', 'new base'], { cwd: repoRoot });
+    const continuedCommit = await head();
     process.env.CEZ_MOCK_MISSING_SESSIONS = oldSession!;
     try {
       expect(manager.continueRun(first.id, { text: 'keep going', runner: 'claude' })).toEqual({ ok: true });
@@ -503,6 +508,14 @@ describe('graph workflows run through RunManager', () => {
       const final = store.getRun(first.id)!;
       expect(final.status).toBe('waiting');
       const step = final.steps.find((s) => s.id === 'continue-1');
+      expect(final.startCommit).toBe(originalCommit);
+      expect(step).toMatchObject({ startCommit: continuedCommit, harnessVersion: first.harnessVersion });
+      store.flush();
+      const reloaded = RunStore.open(join(repoRoot, '.ai/cezar'), { keepLive: true }).getRun(first.id);
+      expect(reloaded?.startCommit).toBe(originalCommit);
+      expect(reloaded?.steps.find((s) => s.id === 'continue-1')).toMatchObject({
+        startCommit: continuedCommit, harnessVersion: first.harnessVersion,
+      });
       expect(step?.sessionId).not.toBe(oldSession);
       const events = store.readEvents(first.id).filter((e) => e.stepId === 'continue-1');
       expect(events.filter((e) => e.type === 'error' || e.type === 'session.error')).toEqual([]);

@@ -315,7 +315,7 @@ export async function createWorktree(
   repoRoot: string,
   runId: string,
   baseBranch: string,
-  opts: { branch?: string } = {},
+  opts: { branch?: string; onCreated?: (startCommit: string) => void } = {},
 ): Promise<WorktreeInfo> {
   const {materialized: _materialized, ...info} = await createWorktreeWithOutcome(repoRoot, runId, baseBranch, opts);
   return info;
@@ -326,7 +326,7 @@ export async function createWorktreeWithOutcome(
   repoRoot: string,
   runId: string,
   baseBranch: string,
-  opts: { branch?: string } = {},
+  opts: { branch?: string; onCreated?: (startCommit: string) => void } = {},
 ): Promise<WorktreeInfo & { materialized: boolean }> {
   let base = baseBranch;
   if (!base || base === 'HEAD') {
@@ -405,10 +405,14 @@ export async function createWorktreeWithOutcome(
   // tracking keys to the repository-wide config when `base` is origin/<name>,
   // making concurrent task launches contend on the shared config.lock.
   refuseBelowDiskFloor(absolutePath);
-  const create = await git(repoRoot, ['worktree', 'add', '--no-track', '-b', branch, absolutePath, base]);
+  const revision = await git(repoRoot, ['rev-parse', '--verify', `${base}^{commit}`]);
+  if (!revision.ok) throw new Error(`git worktree add failed: ${revision.stderr.trim()}`);
+  const startCommit = revision.stdout.trim();
+  const create = await git(repoRoot, ['worktree', 'add', '--no-track', '-b', branch, absolutePath, startCommit]);
   if (!create.ok) {
     throw new Error(`git worktree add failed: ${create.stderr.trim() || create.stdout.trim()}`);
   }
+  opts.onCreated?.(startCommit);
   return {...worktreeInfo(absolutePath, branch, base), materialized: true};
 }
 
