@@ -1,4 +1,4 @@
-import type { RunRecord, StepState } from '@open-mercato/cezar-api-client'
+import { runBudgetUsd, type RunRecord, type StepState } from '@open-mercato/cezar-api-client'
 
 /**
  * The one canonical attention function (spec, "Design system" → status grammar).
@@ -85,6 +85,7 @@ export type AttentionInput = Pick<
   | 'awaitingAnswerSince'
   | 'idleClosedAt'
   | 'dispatch'
+  | 'budget'
   | 'costUsd'
   | 'worktreeLifecycle'
   | 'parked'
@@ -98,8 +99,8 @@ export type BudgetStop = {
 /** The dispatch brake is intentionally still an attention state: the user must decide whether
  * to send a message after spending reaches the child's ceiling. This helper only explains the
  * existing persisted brake; it does not alter the engine's stop or resume behavior. */
-export function budgetStop(run: Pick<RunRecord, 'status' | 'dispatch' | 'costUsd'>): BudgetStop | undefined {
-  const ceiling = run.dispatch?.overBudget ? run.dispatch.budgetUsd : undefined
+export function budgetStop(run: Pick<RunRecord, 'status' | 'dispatch' | 'budget' | 'costUsd'>): BudgetStop | undefined {
+  const ceiling = run.dispatch?.overBudget ? runBudgetUsd(run) : undefined
   if (run.status !== 'waiting' || ceiling === undefined) return undefined
   return { spent: run.costUsd ?? 0, ceiling }
 }

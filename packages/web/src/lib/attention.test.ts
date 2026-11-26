@@ -63,11 +63,14 @@ describe('deriveAttention', () => {
     expect(cases.map(([status]) => status).sort()).toEqual([...ALL_STATUSES].sort())
   })
 
-  it('explains a waiting dispatch run stopped by its spend ceiling', () => {
+  it.each([
+    { dispatch: { rootRunId: 'root', budgetUsd: 10, overBudget: true as const } },
+    { dispatch: { rootRunId: 'root', overBudget: true as const }, budget: { usd: 10 } },
+  ])('explains a waiting dispatch run stopped by its spend ceiling (%j)', (allocation) => {
     const stopped = run({
       status: 'waiting',
       costUsd: 20.83,
-      dispatch: { rootRunId: 'root', budgetUsd: 10, overBudget: true },
+      ...allocation,
     })
     expect(deriveAttention(stopped).label).toBe('budget reached')
     expect(budgetStop(stopped)).toEqual({ spent: 20.83, ceiling: 10 })

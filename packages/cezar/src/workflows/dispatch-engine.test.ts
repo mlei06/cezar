@@ -181,7 +181,8 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
       }));
       const child = store.getRun(created.id);
       expect(child?.title).toBe('Take the left flank');
-      expect(child?.dispatch).toEqual({ rootRunId: parent.id, parentRunId: parent.id, budgetUsd: 2.5 });
+      expect(child?.dispatch).toEqual({ rootRunId: parent.id, parentRunId: parent.id });
+      expect(child?.budget).toEqual({ usd: 2.5 });
       expect(child?.autonomous).toBe(true);
       // The child forks off the PARENT's branch, which is what `execute()` reads.
       expect(child?.baseBranch).toBe(store.getRun(parent.id)?.branch);
@@ -275,7 +276,7 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
       expect(refusal(parent.id, order('too rich', { max_cost: 2.5 }))).toMatch(/only \$[\d.]+ of the budget is left/);
       const created = dispatchOk(parent.id, order('mock:done fits'));
       // The uncapped child gets the whole remainder — one child at a time, nobody to share with.
-      const remainder = store.getRun(created.id)?.dispatch?.budgetUsd ?? 0;
+      const remainder = store.getRun(created.id)?.budget?.usd ?? 0;
       expect(remainder).toBeGreaterThan(0.5);
       expect(remainder).toBeLessThanOrEqual(1);
       expect(refusal(parent.id, order('nothing left'))).toContain('no budget left');
@@ -292,7 +293,7 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
       // The first child settled far under its cap (a dry run costs cents at most), so its
       // reservation flows back and a second child of the same size fits.
       const second = dispatchOk(parent.id, order('mock:done second', { max_cost: 3 }));
-      expect(store.getRun(second.id)?.dispatch?.budgetUsd).toBe(3);
+      expect(store.getRun(second.id)?.budget?.usd).toBe(3);
     }, 60_000);
 
     it('honours the user’s intent: a lower in-flight cap, a total cap, and child defaults', async () => {
@@ -315,7 +316,7 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
       // Defaults from the intent fill what the order left out.
       expect(record?.runner).toBe('codex');
       expect(record?.model).toBe('gpt-5');
-      expect(record?.dispatch?.budgetUsd).toBe(1.5);
+      expect(record?.budget?.usd).toBe(1.5);
       // A fourth breaks the total cap, whatever is in flight.
       store.updateRun(third.id, { status: 'done' });
       expect(refusal(parent.id, order('one too many'))).toContain('the user capped it at 3');
@@ -324,7 +325,7 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
       const explicit = dispatchOk(parent.id, order('explicit', { runner: 'claude', model: 'opus', max_cost: 3 }));
       expect(store.getRun(explicit.id)?.runner).toBe('claude');
       expect(store.getRun(explicit.id)?.model).toBe('opus');
-      expect(store.getRun(explicit.id)?.dispatch?.budgetUsd).toBe(3);
+      expect(store.getRun(explicit.id)?.budget?.usd).toBe(3);
     }, 40_000);
 
     it('a child on another runner does not inherit the parent’s or the intent’s model (telemetry 43bdda11)', async () => {
@@ -710,9 +711,12 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
 
   // ---- brakes -------------------------------------------------------------------------------
 
-  it('parks an over-budget run at waiting — no autonomous nudge, no wake timer', async () => {
+  it.each([
+    ['legacy zero ceiling', rootOf('m6', 0), undefined],
+    ['run budget', rootOf('m6'), { usd: 0.001 }],
+  ] as const)('parks a run at its %s — no autonomous nudge, no wake timer', async (_label, dispatch, budget) => {
     reboot({ maxParallel: 1, maxMonitoringSessions: 0 });
-    const record = start('mock:monitoring keep going', rootOf('m6', 0), { autonomous: true });
+    const record = start('mock:monitoring keep going', dispatch, { autonomous: true, budget });
     await waitFor(record.id, (r) => r?.status === 'waiting');
     expect(store.getRun(record.id)?.dispatch?.overBudget).toBe(true);
     expect(store.getRun(record.id)?.activity).toBeUndefined();

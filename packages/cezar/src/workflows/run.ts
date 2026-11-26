@@ -119,7 +119,7 @@ import { backstopRender } from '../impact/publish.ts';
 // Task dispatch (spec 2026-09-10-dispatch). Every import below is inert unless the feature is
 // ON *and* the run carries a `dispatch`: `dispatchOf()` is the single gate, and a run without one
 // takes byte-for-byte the path it took before this feature existed.
-import type { DispatchInput, DispatchIntent, DispatchReport, RunDispatch } from '@open-mercato/cezar-contract';
+import { runBudgetUsd, type DispatchInput, type DispatchIntent, type DispatchReport, type RunDispatch } from '@open-mercato/cezar-contract';
 import { resolveCapabilities } from '../server/capabilities.ts';
 import { composeDispatchPrompt } from '../dispatch/prompts.ts';
 import {
@@ -2286,7 +2286,7 @@ export class RunManager {
         runner,
         model,
         budget: run?.budget ?? run?.workflowDef?.budget,
-        budgetUsd: run?.budget?.usd ?? run?.dispatch?.budgetUsd,
+        budgetUsd: run && runBudgetUsd(run),
         secrets: secrets.filter(({ name }) => !envOverrides || !Object.hasOwn(envOverrides, name)),
         workflows,
         skill,
@@ -3722,8 +3722,9 @@ export class RunManager {
   private enforceDispatchBudget(runId: string, note: (message: string, tone?: 'danger') => void): boolean {
     const run = this.store.getRun(runId);
     const dispatch = run?.dispatch;
-    const budget = dispatch?.budgetUsd;
-    if (!run || !dispatch || budget === undefined) return false;
+    if (!run || !dispatch) return false;
+    const budget = runBudgetUsd(run);
+    if (budget === undefined) return false;
     const spent = run.costUsd ?? 0;
     if (spent < budget) return false;
     if (!dispatch.overBudget) {
@@ -3850,12 +3851,12 @@ export class RunManager {
       ...(childModel ? { model: childModel } : {}),
       ...(childAccount ? { agentProfile: childAccount } : {}),
       autonomous: true,
+      ...(budget.budgetUsd !== undefined ? { budget: { usd: budget.budgetUsd } } : {}),
       dispatch: {
         rootRunId,
         parentRunId: parentId,
         ...(input.kind && input.kind !== 'implement' ? { kind: input.kind } : {}),
         ...(input.review_of?.length ? { reviewOf: input.review_of } : {}),
-        ...(budget.budgetUsd !== undefined ? { budgetUsd: budget.budgetUsd } : {}),
       },
     });
     // The task list shows the order's own title rather than the first line of the envelope, and
@@ -3929,7 +3930,7 @@ export class RunManager {
     if (remaining === undefined) return { budgetUsd: maxCost };
     if (remaining <= 0) {
       return {
-        refused: `no budget left (${usd(parent.dispatch?.budgetUsd ?? 0)} allotted, ${usd(parent.costUsd ?? 0)} spent, the rest promised to children in flight). Report what has been achieved instead of shrinking the remaining work.`,
+        refused: `no budget left (${usd(runBudgetUsd(parent) ?? 0)} allotted, ${usd(parent.costUsd ?? 0)} spent, the rest promised to children in flight). Report what has been achieved instead of shrinking the remaining work.`,
       };
     }
     if (maxCost !== undefined && maxCost > remaining) {

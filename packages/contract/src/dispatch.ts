@@ -94,7 +94,7 @@ export const dispatchSchema = z.object({
   kind: dispatchKindSchema.optional(),
   /** For a `review` task: the run ids or branches it reviews. */
   reviewOf: z.array(z.string().max(120)).max(8).optional(),
-  /** This task's spend ceiling in USD, carved out of its parent's. Absent = none of its own. */
+  /** Legacy USD ceiling. New allocations are recorded in `run.budget.usd`. */
   budgetUsd: z.number().nonnegative().optional(),
   /** This task's own report — last one wins. */
   report: dispatchReportSchema.optional(),

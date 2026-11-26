@@ -9,6 +9,7 @@
  */
 import {
   DISPATCH_MAX_IN_FLIGHT,
+  runBudgetUsd,
   type DispatchInput,
   type DispatchPendingReport,
   type DispatchReport,
@@ -62,7 +63,7 @@ export function progressingChildren(runs: readonly RunRecord[], parentId: string
 }
 
 /**
- * What a parent may still hand out: `budgetUsd − costUsd − Σ children.budgetUsd` (spec §Budget).
+ * What a parent may still hand out: its ceiling minus what it spent and what its children reserve.
  *
  * `undefined` means UNCAPPED — the parent was given no ceiling, which is the pre-existing
  * behaviour of every cezar run, so a spawn under it is never refused for cost. Children are read
@@ -71,7 +72,7 @@ export function progressingChildren(runs: readonly RunRecord[], parentId: string
  * allowed to omit `max_cost` while something is left.
  */
 export function remainingBudgetUsd(parent: RunRecord, children: readonly RunRecord[]): number | undefined {
-  const budget = parent.dispatch?.budgetUsd;
+  const budget = runBudgetUsd(parent);
   if (budget === undefined) return undefined;
   // A child still in flight reserves its whole ceiling — it may yet spend it. A SETTLED child is
   // charged what it actually cost, so the unspent part of its reservation flows back to the
@@ -84,9 +85,8 @@ export function remainingBudgetUsd(parent: RunRecord, children: readonly RunReco
     // reporting budget behavior: zero remains visible but cannot release a reservation.
     const settledCost = child.costUsd !== undefined && child.costUsd > 0
       ? child.costUsd : undefined;
-    return sum + (isTerminalStatus(child.status)
-      ? (settledCost ?? child.dispatch?.budgetUsd ?? 0)
-      : (child.dispatch?.budgetUsd ?? 0));
+    const ceiling = runBudgetUsd(child) ?? 0;
+    return sum + (isTerminalStatus(child.status) ? settledCost ?? ceiling : ceiling);
   }, 0);
   return budget - (parent.costUsd ?? 0) - promised;
 }
