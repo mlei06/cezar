@@ -3,6 +3,7 @@ import type { RunnerId } from '../core/agent-runner.ts';
 import { validateDeferredBinding, DeferredPrelaunchError } from './deferred-start.ts';
 import type { DispatchIntent } from '@open-mercato/cezar-contract';
 import { dispatchIntentSchema, zonedParts } from '@open-mercato/cezar-contract';
+import { credentialHealthWorkflowIssue } from '../factory/credential-health.ts';
 import { loadWorkflows } from '../workflows/load.ts';
 import { stepsIssue, type WorkflowDef } from '../workflows/types.ts';
 import type { RunStore } from '../runs/store.ts';
@@ -69,7 +70,7 @@ export function renderAutomationTask(definition: GithubAutomationDefinition, can
   const issue = validateAutomationPrompt(definition.task.prompt, 'github');
   if (issue) throw new Error(issue);
   const values: Record<string, string> = {
-    'github.kind': candidate.event.startsWith('pull_request') ? 'pull request' : 'issue',
+    'github.kind': candidate.event === 'workflow_run.failed' ? 'CI workflow run' : candidate.event.startsWith('pull_request') ? 'pull request' : 'issue',
     'github.number': String(candidate.number),
     'github.title': bounded(candidate.title, 500),
     'github.url': candidate.url,
@@ -279,6 +280,8 @@ export async function launchScheduledRun(options: {
   try {
     await validateDeferredBinding(options.root, definition);
     workflow = await resolveWorkflow(options.root, definition);
+    const credentialIssue = credentialHealthWorkflowIssue(workflow);
+    if (credentialIssue) throw new Error(credentialIssue);
   } catch (error) {
     if (error instanceof DeferredPrelaunchError) throw error;
     if (definition.deferredStart) throw new DeferredPrelaunchError(error instanceof Error ? error.message : String(error));

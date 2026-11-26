@@ -31,7 +31,7 @@ A GitHub poll:
   "name": "Review every new pull request",          // required, 1-200 chars
   "description": "What this automation is for",      // optional, up to 2000 chars
   "kind": "github",                                  // optional here — omitted means a GitHub poll
-  "events": ["pull_request.opened"],                 // 1-9 of: pull_request.opened, issue.opened, issue.labeled, issue.unlabeled, pull_request.reviewed, pull_request.review_requested, pull_request.rereview_requested, pull_request.closed (closed without merging), pull_request.merged
+  "events": ["pull_request.opened"],                 // 1-10 of: pull_request.opened, issue.opened, issue.labeled, issue.unlabeled, pull_request.reviewed, pull_request.review_requested, pull_request.rereview_requested, pull_request.closed (closed without merging), pull_request.merged, workflow_run.failed
   "intervalSeconds": 300,                            // required: how often GitHub is polled, in seconds, 60-86400 (300 is the usual choice)
   "filters": {                                       // required, may be {}; every key optional; a candidate must pass ALL given filters
     "authors": ["octocat"],                          //   GitHub logins that opened it
@@ -41,6 +41,7 @@ A GitHub poll:
     "excludeLabels": ["wontfix"],                    //   must carry none of these
     "changedLabels": ["needs-agent"],                //   REQUIRED for issue.labeled / issue.unlabeled: the label whose change fires it
     "reviewers": ["octocat"],                        //   GitHub logins a review event must name — the reviewer for pull_request.reviewed, the requested one for the two review_requested events
+    "ciBranch": "main",                               //   optional branch for workflow_run.failed
     "lookbackDays": 7,                               //   1-90 (default 7): how far back one poll looks
     "maxRecords": 25                                 //   1-100 (default 25): the most candidates one poll considers
   },
@@ -124,7 +125,7 @@ An optional "report": { "managerId": "<manager id>", "mode": "post-result" | "no
 
 The server-owned "deferredStart" field marks a scheduled task from the composer; it is not accepted by automation create/update JSON. Manage those starts in Tasks.
 
-A new automation is PAUSED unless created with --enable. Enabling a GitHub poll establishes a current-time baseline: only pull requests and issues that appear AFTER it are ever launched, never the backlog. Enabling a schedule arms its next occurrence. Editing a definition never re-considers what an earlier revision already saw.`;
+A new automation is PAUSED unless created with --enable. Enabling a GitHub poll establishes a current-time baseline: only activity that appears AFTER it are ever launched, never the backlog. Enabling a schedule arms its next occurrence. Editing a definition never re-considers what an earlier revision already saw.`;
 
 /** The part composed into EVERY task's system prompt while automations are on and reachable. */
 export const AUTOMATIONS_PROMPT = `Automations. This cockpit can do recurring work for you without you doing it once: an automation is a tracker event poll for this project’s connected Jira/Linear issues, a bounded GitHub poll — a new pull request, a new issue, a label added to or removed from an issue, a review submitted on a pull request, a review requested (or re-requested from someone who already reviewed) — optionally filtered by author, assignee, labels or reviewer — or a schedule (every day at a time, weekdays, one weekday a week, every N hours, or once at a date and time), and it launches an ordinary cezar task for every match or occurrence, with a prompt template you write. When the user asks for something to happen "whenever", "every time" or "each time" a pull request or issue appears, is labelled, is reviewed or a review is (re-)requested, or "every day at", "on weekdays", "every Friday", "every 6 hours" — or for a task to start later, "tonight at 23:00", "tomorrow at 7" — they are asking for an automation: create one instead of doing the work once, and instead of polling GitHub or sleeping yourself.

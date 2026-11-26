@@ -3,6 +3,7 @@ import { readOnlyEnv } from '../core/read-only-env.ts';
 import { AgentUsageHolds } from '../workspace/agent-usage-holds.ts';
 import { completionReason } from './completion-reason.ts';
 import { prepareReplayCheck, runReplayShell } from './replay-check.ts';
+import { checkImprovementBenchmarks, improvementBenchmarkSummary } from '../improvement/benchmarks.ts';
 import { checkpointImprovementDecisions } from '../improvement/bookkeeping.ts';
 import { checkImprovementStep, improvementPrSummary, runImprovementDecisions } from '../improvement/lifecycle.ts';
 import { hasImprovementSkill, IMPROVE_FACTORY, IMPROVEMENT_CHECK } from '../improvement/workflow.ts';
@@ -18,8 +19,9 @@ import { TrackerAgentBindingError } from '../server/tracker/agent-credentials.ts
 import { trackerBindingComplete, trackerContextPath, trackerPrompt, trackerTaskContext } from '../server/tracker/task-access.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { closeSync, constants, existsSync, fstatSync, openSync, renameSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { mkdir, realpath, access, writeFile } from 'node:fs/promises';
+import { closeSync, constants, existsSync, fstatSync, openSync, renameSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdir, realpath, access, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { assertCezarHomeWriteIsSandboxed, cezarHomeDir, cezBinPath } from '../paths.ts';
 import { basename, dirname, isAbsolute, join, resolve as resolvePath } from 'node:path';
 import {
@@ -1158,6 +1160,8 @@ export interface StartRunInput {
   /** Set only by the factory source after it claims an improvement batch. */
   improvementId?: string;
   improvementAutomation?: RunRecord['automationTrigger'];
+  /** A persisted benchmark matrix reserves these variant IDs before they enter the normal queue. */
+  benchmarkRunId?: string;
   /** The immutable fork and prompt for an admitted replay, persisted before it enters the queue. */
   replay?: { sourceId: string; startCommit: string; change: string; harness: HarnessVersion; systemPrompt?: string };
   secrets?: RunRecord['secretNames'];
@@ -1296,7 +1300,7 @@ const REPLAY_EXTERNAL_NODE_PORTS: Readonly<Partial<Record<ExecutableNode['type']
 
 const REPLAY_CHECK_NODE_TYPES = new Set(['start', 'end', 'loop', 'check', 'if', ...Object.keys(REPLAY_EXTERNAL_NODE_PORTS)]);
 
-function replayMode(workflow: WorkflowDef): 'checks' | 'agent' | undefined {
+export function replayMode(workflow: WorkflowDef): 'checks' | 'agent' | undefined {
   const graph = workflow.graph ?? compileV1(workflow.steps);
   if (graph.nodes.every((node) => REPLAY_CHECK_NODE_TYPES.has(node.type))) return 'checks';
   return graph.nodes.every((node) => {
@@ -1305,6 +1309,13 @@ function replayMode(workflow: WorkflowDef): 'checks' | 'agent' | undefined {
     const tools = node.allowedTools ?? DEFAULT_ALLOWED_TOOLS;
     return tools.includes('Bash') || tools.every(tool => READ_ONLY_TOOLS.includes(tool));
   }) ? 'agent' : undefined;
+}
+
+/** OpenCode uses stateless text generation. The workflow must explicitly ask for zero tools. */
+export function supportsReplayAgent(workflow: WorkflowDef, runner: RunnerId | undefined): runner is 'codex' | 'opencode' {
+  if (runner === 'codex') return true;
+  return runner === 'opencode' && (workflow.graph ?? compileV1(workflow.steps)).nodes.every((node) =>
+    node.type !== 'agent' || node.allowedTools?.length === 0);
 }
 
 
@@ -2385,7 +2396,7 @@ export class RunManager {
       ...(input.forkRef && input.worktree === false ? { worktree: undefined } : {}),
     };
     const run = this.store.createRun({
-      id: input.scheduledLaunch?.id ?? input.improvementId,
+      id: input.scheduledLaunch?.id ?? input.improvementId ?? input.benchmarkRunId,
       title: makeRunTitle(input.task, workflow, input.images?.length) + (group ? ` (${group.variant})` : ''),
       workflow: workflow.name,
       task: input.task,
@@ -2564,12 +2575,15 @@ export class RunManager {
     const changesAgent = input.model || input.runner || input.effort || input.skill;
     if (mode === 'checks' && changesAgent) return { error: 'The replay workflow has no agent input to change.' };
     const runner = input.runner ?? source.runner;
-    if (mode === 'agent' && runner !== 'codex') {
-      return { error: 'Agent replay requires Codex sandbox support.' };
+    if (mode === 'agent' && !supportsReplayAgent(workflow, runner)) {
+      return { error: 'Agent replay requires the Codex sandbox or an explicitly tool-free OpenCode workflow.' };
+    }
+    if (mode === 'agent' && runner === 'opencode' && (source.taskImages?.length || requested !== currentHarness.id)) {
+      return { error: 'OpenCode replay needs text-only inputs and the current harness release.' };
     }
     const replayWorkflow = input.skill ? withReplaySkill(workflow, input.skill) : workflow;
     const model = input.model ?? (source.runner === runner ? source.actualModel || source.model : undefined);
-    if (input.model && modelConflictsWithRunner(input.model, 'codex')) return { error: 'The replay model must belong to the Codex runner.' };
+    if (input.model && runner && modelConflictsWithRunner(input.model, runner)) return { error: 'The replay model must belong to the selected runner.' };
     if ((input.model || input.effort) && agentModelsLocked(this.repoRoot)) return { error: AGENT_MODELS_LOCKED_ERROR };
     if (!await hasReplayCommit(this.repoRoot, startCommit)) return { error: 'The original project commit is unavailable.' };
     if (this.store.getRun(sourceId) !== source || source.startCommit !== startCommit ||
@@ -2596,8 +2610,8 @@ export class RunManager {
     const runs = slots.map((variant) => this.startRun(replayWorkflow, {
       task, images, worktree: true, generateFollowups: false, modelRoutePinned: true,
       ...(mode === 'agent' ? {
-        runner: 'codex', model, agentProfile: input.runner && input.runner !== source.runner ? undefined
-          : source.agentProfile ?? source.steps.find((step) => step.backend === 'codex')?.profileId,
+        runner, model, agentProfile: input.runner && input.runner !== source.runner ? undefined
+          : source.agentProfile ?? source.steps.find((step) => step.backend === runner)?.profileId,
         reasoningEffort: input.effort ?? source.reasoningEffort, readOnly: true, enforceReadOnly: true, secrets: [],
       } : {}),
       replay: { sourceId, startCommit, change, harness: target, systemPrompt: source.systemPrompt },
@@ -7421,7 +7435,8 @@ export class RunManager {
       const sameHarness = current.id === original.harnessVersion?.id && current.commit === original.harnessVersion.commit;
       if (!original.startCommit || !original.workflowDef || input.worktree !== true ||
         !original.harnessVersion?.commit || !mode ||
-        (mode === 'agent' && (input.runner !== 'codex' || !input.enforceReadOnly))) {
+        (mode === 'agent' && (!supportsReplayAgent(workflow, input.runner) || !input.enforceReadOnly ||
+          (input.runner === 'opencode' && !sameHarness)))) {
         const error = 'The replay needs its saved workflow, exact worktree and pinned harness.';
         this.publishRunFailure(runId, { status: 'failed', error, finishedAt: new Date().toISOString(), currentStepId: undefined });
         emit({ type: 'lifecycle', message: error });
@@ -8801,13 +8816,15 @@ export class RunManager {
           }
           checkpointImprovementDecisions(improvement.paths, improvement.id, improvement.decisions.clusters);
         }
+        const benchmarkSummary = improvement && typeof checkedHead === 'string'
+          ? await improvementBenchmarkSummary(this.dataDir, run, checkedHead) : '';
         const outcome = await createTaskPr({
           repoRoot: this.repoRoot,
           run: improvement ? { ...run, title: 'Improve factory reliability' } : title ? { ...run, title } : run,
           handoffText: improvement ? '' : readHandoff(this.dataDir, runId),
-          ...(improvement ? { body: !improvement.harness && improvement.decisions.pullRequestDescription
+          ...(improvement ? { body: (!improvement.harness && improvement.decisions.pullRequestDescription
             ? this.store.redactRunText(runId, improvement.decisions.pullRequestDescription)
-            : improvementPrSummary(improvement.decisions) } : {}),
+            : improvementPrSummary(improvement.decisions)) + benchmarkSummary } : {}),
           ...(excludedPaths.size ? { excludedPaths: [...excludedPaths] } : {}),
           ...(improvement && typeof checkedHead === 'string' ? { expectedHead: checkedHead } : {}),
           ...(readyPr ? { draft: false } : {}),
@@ -9931,7 +9948,13 @@ export class RunManager {
     };
 
     const stepBackend = step.runner ?? taskBackend;
-    if (replay && (stepBackend !== 'codex' || !state.enforceReadOnly)) return 'The replay agent requires enforced Codex read-only tools.';
+    const statelessReplay = replay && stepBackend === 'opencode' && step.allowedTools?.length === 0;
+    if (replay && (!state.enforceReadOnly || (stepBackend !== 'codex' && !statelessReplay))) {
+      return 'The replay agent requires an enforced tool boundary.';
+    }
+    if (statelessReplay && (images?.length || step.runner && step.runner !== taskBackend)) {
+      return 'The tool-free replay needs text and the admitted runner.';
+    }
     // Normalise the selected model to canonical `provider/model` and back to the
     // backend's own wire form via the ONE shared mapper (#405). Fail-loud: an
     // unresolvable model (e.g. a bare id on opencode) returns the step error
@@ -10001,6 +10024,7 @@ export class RunManager {
     const runner = createRunner(stepBackend);
     const stepMcp = stepPrivateMcp && !replay && !launchRecord?.improvementId ? await this.privateMcpForLaunch(stepBackend, onEvent) : [];
     let session: AgentSession;
+    let replayScratch: string | undefined;
     state.currentStepId = step.id;
     this.beginUsageInvocation(runId, state, step.id);
     if (state.cancelled) return 'cancelled';
@@ -10034,12 +10058,13 @@ export class RunManager {
           resumeSystemPrompt: prPrompt ? composeSystemPrompt(capability, prPrompt) : capability,
           userPrompt: [profile.trackerContext, prompt].filter(Boolean).join('\n\n'),
           images,
-          cwd: state.cwd,
+          cwd: replayScratch ?? state.cwd,
           ...stepTools,
+          ...(statelessReplay ? { noTools: true } : {}),
           ...(replayBash ? { replayShell: (command, signal) => runReplayShell(command, state.cwd, signal) } : {}),
           ...(state.bypassPermissions && !stepTools.enforceReadOnly ? { bypassPermissions: true } : {}),
           // The handoff file lives outside the worktree — grant access.
-          additionalDirectories: replay ? [this.attachmentsDir(runId)] : agentDirectories(
+          additionalDirectories: statelessReplay ? [] : replay ? [this.attachmentsDir(runId)] : agentDirectories(
             join(this.dataDir, 'runs'),
             state.grantedAttachmentLibrary,
             profile.env,
@@ -10063,7 +10088,7 @@ export class RunManager {
           // strand the run — both close the session, and a park whose session
           // closed unanswered settles as `failed` with a Continue button (see
           // the `askPark` branch in `execute`), never as a run stuck `waiting`.
-          timeoutMs: interactive ? 0 : undefined,
+          timeoutMs: interactive && !statelessReplay ? 0 : undefined,
         },
         (event) => { observe(event); planUsage?.event(event); onEvent(event); },
         {
@@ -10095,8 +10120,10 @@ export class RunManager {
       return started;
     };
     try {
+      if (statelessReplay) replayScratch = mkdtempSync(join(tmpdir(), 'cez-replay-agent-'));
       session = attach(launch(sessionId, graphHooks?.resumeSessionId !== undefined, userPrompt, stepProfile, secretNames), graphHooks?.resumeSessionId !== undefined);
     } catch (err) {
+      if (replayScratch) await rm(replayScratch, { recursive: true, force: true }).catch(() => undefined);
       state.currentStepId = undefined;
       return err instanceof Error ? err.message : String(err);
     }
@@ -10132,6 +10159,7 @@ export class RunManager {
       }
       // v2 counterpart of v1's `done` (spec: the mappers leave session-close
       // events to the RunManager — only it knows how the session settled).
+      if (statelessReplay && graphHooks?.lastTurn) graphHooks.lastTurn.text = result.text;
       sink.sessionEnded(state.cancelled ? 'cancelled' : 'end_turn');
       if (!state.cancelled && this.active.get(runId) === state) {
         this.store.updateStep(runId, step.id, { tokensUsed: startTokens + result.tokensUsed });
@@ -10142,6 +10170,7 @@ export class RunManager {
       sink.sessionEnded('error', message); // alongside v1's fatal `error`
       return message;
     } finally {
+      if (replayScratch) await rm(replayScratch, { recursive: true, force: true }).catch(() => undefined);
       planUsage?.close();
       this.recordUsagePeaks(runId, state);
       this.clearIdleTimer(state);
@@ -11807,8 +11836,26 @@ export class RunManager {
     emit({ type: 'note', stepId: step.id, message: `$ ${command}` });
     const run = this.store.getRun(runId);
     if (run?.improvementId) {
-      const result = await checkImprovementStep(this.dataDir, this.repoRoot, state.cwd, run, step.id)
+      let result = await checkImprovementStep(this.dataDir, this.repoRoot, state.cwd, run, step.id)
         .catch(() => ({ ok: false, output: 'Unable to validate this improvement.' }));
+      if (result?.ok && step.id === IMPROVEMENT_CHECK) {
+        let benchmark: Awaited<ReturnType<typeof checkImprovementBenchmarks>>;
+        const parked = await this.parkGraphNode(runId, state, step.id, { activity: 'monitoring' }, (resume) => {
+          let abandoned = false;
+          // Replays use the same task queue. Yield the parent slot while their scores settle.
+          void checkImprovementBenchmarks({
+            project: { root: this.repoRoot, dataDir: this.dataDir, store: this.store, manager: this },
+            cwd: state.cwd, run, cancelled: () => state.cancelled || abandoned,
+          })
+            .then((value) => { benchmark = value; }, () => {
+              benchmark = { ok: false, output: 'The improvement benchmark could not be verified.' };
+            })
+            .then(() => resume({ kind: 'answer', text: '' }));
+          return () => { abandoned = true; };
+        });
+        if (parked.kind !== 'answer') benchmark = { ok: false, output: 'The improvement benchmark was stopped.' };
+        if (benchmark) result = benchmark;
+      }
       if (result) {
         const exitCode = result.ok ? 0 : 1;
         emit({ type: 'check-output', stepId: step.id, command, text: result.output, exitCode });

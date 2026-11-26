@@ -22,6 +22,7 @@ import { readCauseQueue } from '../factory/causes.ts';
 import { readImprovementRecords } from '../improvement/bookkeeping.ts';
 import { atomicWriteJsonSync } from '../workspace/config.ts';
 import { runHarnessVersion } from '../self-update/run-version.ts';
+import { writeRunScore } from '../scoring/store.ts';
 import { graphToSteps, type WorkflowGraph } from './graph.ts';
 import { loadWorkflows, resolveWorkflowModelAlias } from './load.ts';
 import { MISSING_SESSION_NOTE } from './resume-fallback.ts';
@@ -204,6 +205,95 @@ describe('graph workflows run through RunManager', () => {
     } finally {
       stop();
       launch.mockRestore();
+    }
+  }, 30_000);
+
+  it.skipIf(process.platform !== 'linux')('uses stateless OpenCode from empty scratch for a tool-free replay', async () => {
+    const shim = join(repoRoot, '.ai', 'cezar', 'stateless-opencode');
+    const mock = new URL('../core/__fixtures__/opencode/mock-opencode-v2-serve.mjs', import.meta.url);
+    writeFileSync(shim, `#!/bin/sh\nexport MOCK_STATELESS_ONLY=1 MOCK_REPLAY_PROMPT='Answer using exactly this fixture text.'\nexec "${mock.pathname}" "$@"\n`, { mode: 0o700 });
+    vi.stubEnv('CEZ_OPENCODE_BIN', shim);
+    const workflow = def({
+      nodes: [{ id: 'start', type: 'start' }, { id: 'work', type: 'agent', prompt: '{{task}}', allowedTools: [] },
+        { id: 'done', type: 'end', status: 'success' }],
+      edges: [{ from: 'start', to: 'work' }, { from: 'work.done', to: 'done' }],
+    });
+    const { stdout } = await run('git', ['rev-parse', 'HEAD'], { cwd: repoRoot });
+    const launch = vi.spyOn(OpencodeServerRunner.prototype, 'startSession');
+    try {
+      const variant = manager.startRun(workflow, {
+        task: 'Answer using exactly this fixture text.', runner: 'opencode', model: 'mock/mock-model#high',
+        worktree: true, readOnly: true, enforceReadOnly: true, secrets: [],
+        replay: { sourceId: 'fixture', startCommit: stdout.trim(), change: 'fixture', harness: await runHarnessVersion() },
+      });
+      const settled = await settle(variant.id);
+      expect(settled.status, settled.error).toMatch(/done|review/);
+      const spec = launch.mock.calls[0]?.[0];
+      expect(spec).toMatchObject({ noTools: true, allowedTools: [], additionalDirectories: [] });
+      expect(spec?.cwd).not.toBe(settled.worktreePath);
+      expect(spec?.cwd && existsSync(spec.cwd)).toBe(false);
+      expect(settled.graphState?.outputs?.work?.summary).toContain('fixture text');
+    } finally {
+      launch.mockRestore();
+    }
+  }, 30_000);
+
+  it.skipIf(process.platform !== 'linux')('gives the benchmark a slot while its improvement waits', async () => {
+    const semaphore = new WorkspaceSemaphore();
+    vi.spyOn(semaphore, 'maxParallel').mockReturnValue(1);
+    manager.dispose();
+    manager = new RunManager(store, repoRoot, { semaphore });
+    await builtin('improve-factory');
+    const dataDir = join(repoRoot, '.ai/cezar');
+    const project = { id: 'test-project', root: repoRoot, dataDir, store, manager };
+    const workflow = '.ai/cezar/workflows/fixture-model.yaml';
+    const contents = (model: string) => `name: fixture-model\nsteps:\n  - id: work\n    model: ${model}\n    prompt: Inspect the fixture.\n    allowedTools: []\n`;
+    mkdirSync(join(dataDir, 'workflows'), { recursive: true });
+    writeFileSync(join(repoRoot, workflow), contents('fixture-old'));
+    await run('git', ['add', '--', workflow], { cwd: repoRoot });
+    await run('git', [...GIT_ID, 'commit', '-qm', 'fixture model'], { cwd: repoRoot });
+    const { stdout } = await run('git', ['rev-parse', 'HEAD'], { cwd: repoRoot });
+    const suite = join(dataDir, 'benchmarks', 'model');
+    atomicWriteJsonSync(join(suite, 'suite.yaml'), { configurations: [{ name: 'baseline', runner: 'codex', model: 'fixture-old' }],
+      tasks: ['sample'], times: 1, scorers: ['outcome'] });
+    atomicWriteJsonSync(join(suite, 'tasks', 'sample.yaml'), { title: 'Fixture model', workflow: 'fixture-model', prompt: 'Inspect the fixture.',
+      successCriteria: 'Return the recorded fixture response.', startCommit: stdout.trim() });
+    const at = new Date().toISOString();
+    atomicWriteJsonSync(improvementPaths(dataDir, false).queue, [{
+      id: 'fixture-cause', projectId: project.id, runId: 'source', scorer: 'outcome', label: 'missed', reasoning: 'Fixture.',
+      at, state: 'open', cause: { category: 'task-setup', target: 'workflow', evidence: 'Fixture evidence.', fix: 'Update selection.' },
+    }]);
+    const launch = CodexAppServerRunner.prototype.startSession;
+    const agent = vi.spyOn(CodexAppServerRunner.prototype, 'startSession').mockImplementationOnce(function (this: CodexAppServerRunner, ...args) {
+      const { cwd, env } = args[0];
+      writeFileSync(join(cwd, workflow), contents('fixture-new'));
+      atomicWriteJsonSync(join(env!.CEZ_ARTIFACTS_DIR!, IMPROVEMENT_DECISIONS), {
+        clusters: [{ id: 'model', causes: ['fixture-cause'], decision: 'fixed', reason: 'Updated the fixture model.' }],
+      });
+      return launch.apply(this, args);
+    });
+    const scoreReplay = (variant: ReturnType<typeof store.listRuns>[number]) => {
+      if (!variant.replayOf || !variant.finishedAt || variant.status !== 'done') return;
+      writeRunScore(dataDir, variant.id, 'outcome', { status: 'scored', finishedAt: variant.finishedAt, score: {
+        scorer: 'outcome', pass: true, score: 1, label: 'delivered', reasoning: 'Fixture scored.',
+        evidence: [], causes: [], judge: { runner: 'codex', transcriptChars: 0, shortened: false }, at,
+      } });
+    };
+    store.on('run', scoreReplay);
+    try {
+      const started = await startFactoryImprovement(project, 'owner');
+      if (!('run' in started)) throw new Error(started.reason);
+      await vi.waitFor(() => expect(store.listRuns().some((run) => run.replayOf && run.status === 'done')).toBe(true), { timeout: 10_000 });
+      const settled = await settle(started.run.id);
+      expect(new Set(store.listRuns().filter((run) => run.replayOf).map((run) => run.model))).toEqual(new Set(['fixture-old', 'fixture-new']));
+      expect(settled.pullRequestUrl).toMatch(/\/777$/);
+      expect(store.readEvents(settled.id)).toContainEqual(expect.objectContaining({
+        type: 'check-output', text: 'The benchmark matrix was recorded with this improvement.',
+      }));
+    } finally {
+      for (const run of store.listRuns()) if (manager.isActive(run.id)) manager.cancel(run.id);
+      agent.mockRestore();
+      store.off('run', scoreReplay);
     }
   }, 30_000);
 

@@ -1,6 +1,7 @@
 import {
   CircleDotIcon,
   GitBranchIcon,
+  FactoryIcon,
   InboxIcon,
   LayersIcon,
   ListChecksIcon,
@@ -68,6 +69,7 @@ export const NAV_ITEMS: NavItem[] = [
   { to: '/automations', label: 'Automations', icon: ZapIcon, match: ['/automations'], automations: true },
   { to: '/skills', label: 'Skills', icon: SparklesIcon, match: ['/skills'], badge: 'skills-update' },
   { to: '/workflows', label: 'Workflows', icon: WorkflowIcon, match: ['/workflows'] },
+  { to: '/factory', label: 'Factory', icon: FactoryIcon, match: ['/factory'] },
   { to: '/settings', label: 'Settings', icon: SettingsIcon, match: ['/settings'], group: 'workspace' },
 ]
 

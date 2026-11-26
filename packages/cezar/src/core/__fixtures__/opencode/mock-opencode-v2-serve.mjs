@@ -47,7 +47,10 @@ const server = createServer((req, res) => {
     try { data = body ? JSON.parse(body) : undefined; } catch { return json(res, {}, 400); }
     if (req.method === 'POST' && path === '/api/experimental/generate/text') {
       if (process.env.MOCK_MISSING_GENERATION === '1') return json(res, {}, 404);
-      if (data?.prompt !== 'RUBRIC\n\n---\n\njudge evidence' || data.model?.id !== 'mock-model'
+      const validPrompt = process.env.MOCK_REPLAY_PROMPT
+        ? typeof data?.prompt === 'string' && data.prompt.endsWith(process.env.MOCK_REPLAY_PROMPT)
+        : data?.prompt === 'RUBRIC\n\n---\n\njudge evidence';
+      if (!validPrompt || data.model?.id !== 'mock-model'
         || data.model.providerID !== 'mock' || data.model.variant !== 'high'
         || Object.keys(data).some((key) => key !== 'prompt' && key !== 'model')) {
         return json(res, { error: 'invalid V2 stateless request shape' }, 400);

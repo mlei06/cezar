@@ -1,3 +1,5 @@
+import { loadBenchmarkSuites } from '../benchmarks/suites.ts';
+import { credentialHealthWorkflowIssue } from './credential-health.ts';
 import { discoverSkills } from '../skills.ts';
 import { loadWorkflows } from '../workflows/load.ts';
 import { ScorerCatalog, type ScorerIssue } from './scorers.ts';
@@ -8,6 +10,8 @@ export async function checkFactory(repoRoot: string): Promise<ScorerIssue[]> {
   const skillNames = new Set(skills.map((skill) => skill.name));
   const issuesFound = [...issues];
   for (const workflow of workflows) {
+    const issue = credentialHealthWorkflowIssue(workflow);
+    if (issue) issuesFound.push({ path: workflow.name, message: issue });
     const steps = workflow.graph ? workflow.graph.nodes.filter((node) => node.type === 'agent') : workflow.steps;
     for (const step of steps) {
       if (step.skill && !skillNames.has(step.skill)) {
@@ -15,6 +19,7 @@ export async function checkFactory(repoRoot: string): Promise<ScorerIssue[]> {
       }
     }
   }
-  const { issues: scorerIssues } = await new ScorerCatalog().load(repoRoot, names);
-  return [...issuesFound, ...scorerIssues];
+  const { scorers, issues: scorerIssues } = await new ScorerCatalog().load(repoRoot, names);
+  const { issues: benchmarkIssues } = await loadBenchmarkSuites(repoRoot, names, new Set(scorers.map(({ name }) => name)));
+  return [...issuesFound, ...scorerIssues, ...benchmarkIssues];
 }

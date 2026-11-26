@@ -28,6 +28,7 @@ import type { AutomationTemplateDraft } from '@/lib/automation-templates'
  * active kind's keys (the server refuses a schedule with filters, spec § Data Model).
  */
 export interface DraftFilters {
+  ciBranch?: string
   /** Comma-separated as typed; split on the way out. */
   authors: string
   assignees: string
@@ -93,6 +94,7 @@ export const GITHUB_EVENTS: readonly AutomationEvent[] = [
   'pull_request.rereview_requested',
   'pull_request.closed',
   'pull_request.merged',
+  'workflow_run.failed',
 ]
 
 type TaskSteps = NonNullable<AutomationDefinition['task']['steps']>
@@ -178,6 +180,7 @@ function draftFiltersOf(filters: AutomationFilters): DraftFilters {
     excludeLabels: joinList(filters.excludeLabels),
     changedLabels: joinList(filters.changedLabels),
     reviewers: joinList(filters.reviewers),
+    ciBranch: filters.ciBranch,
     lookbackDays: filters.lookbackDays,
     maxRecords: filters.maxRecords,
   }
@@ -340,6 +343,7 @@ export function toBody(draft: EditorDraft): AutomationBody {
       ...list(f.excludeLabels, 'excludeLabels'),
       ...list(f.changedLabels, 'changedLabels'),
       ...list(f.reviewers, 'reviewers'),
+      ...(draft.events.includes('workflow_run.failed') && f.ciBranch?.trim() ? { ciBranch: f.ciBranch.trim() } : {}),
       lookbackDays: clamp(f.lookbackDays, 1, 90),
       maxRecords: clamp(f.maxRecords, 1, 100),
     },

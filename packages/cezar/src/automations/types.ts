@@ -24,6 +24,7 @@ export const automationEventSchema = z.enum([
   'pull_request.rereview_requested',
   'pull_request.closed',
   'pull_request.merged',
+  'workflow_run.failed',
 ]);
 
 const boundedString = z.string().trim().min(1).max(200);
@@ -38,6 +39,7 @@ export const automationFiltersSchema = z
     excludeLabels: stringList,
     changedLabels: stringList,
     reviewers: stringList,
+    ciBranch: boundedString.optional(),
     lookbackDays: z.number().int().min(1).max(90).default(7),
     maxRecords: z.number().int().min(1).max(100).default(25),
     /** Tracker kind only: the vendor workflow status a matching item must currently be in

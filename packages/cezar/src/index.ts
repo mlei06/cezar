@@ -84,6 +84,7 @@ import { handoffMarkerLine, handoffProject } from './runtime/cockpit-handoff.ts'
 import { checkFactory } from './factory/check.ts';
 import { runScoreCommand } from './scoring/cli.ts';
 import { runImproveCommand } from './improvement/cli.ts';
+import { runBenchmarkCommand } from './benchmarks/cli.ts';
 import { runReplayCommand } from './workflows/replay-cli.ts';
 
 const HELP = `cezar — local cockpit for AI agent tasks in your repo
@@ -103,7 +104,8 @@ Usage:
   cezar usage [--json]      which tasks and managers used your Claude/Codex plan limits (\`cezar usage --help\`)
   cezar impact <evidence|render>  collect evidence for, and render, an impact report
                             (local, no cockpit; paths default to $CEZ_ARTIFACTS_DIR)
-  cezar factory check       validate workflows, referenced skills, and scorers
+  cezar factory check       validate workflows, skills, scorers, and benchmark suites
+  cezar benchmark           list suites or add a frozen task from a saved run
   cezar score <run> [--scorer <name>]  queue scoring for a finished run
   cezar improve              start the project's factory improvement
   cezar replay <run> [--times n]      replay a finished task in its comparison group
@@ -160,6 +162,12 @@ Skills live in .ai/skills/, .ai/cezar/skills/ and your team skills repo
 workflows in .ai/cezar/workflows/.`;
 
 async function main(): Promise<void> {
+  if (process.argv[2] === 'benchmark') {
+    const cwd = process.cwd();
+    const repo = await getRepoInfo(cwd);
+    process.exitCode = await runBenchmarkCommand(process.argv.slice(3), repo?.root ?? cwd);
+    return;
+  }
   if (process.argv[2] === 'score' || process.argv[2] === 'replay' || process.argv[2] === 'improve') {
     const cwd = process.cwd();
     const repo = await getRepoInfo(cwd);

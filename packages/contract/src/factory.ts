@@ -253,3 +253,84 @@ export const factoryWeeklyMetricsSchema = z.object({
   meanCostUsd: z.number().nonnegative().optional(),
   meanHumanTouchpoints: z.number().nonnegative().optional(),
 });
+
+export const benchmarkNameSchema = z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/);
+export const benchmarkConfigSchema = z.object({
+  name: benchmarkNameSchema,
+  runner: runnerSchema.optional(),
+  model: z.string().trim().min(1).max(190).optional(),
+  effort: reasoningEffortSchema.optional(),
+}).strict();
+export type BenchmarkConfiguration = z.infer<typeof benchmarkConfigSchema>;
+export const benchmarkSuiteSchema = z.object({
+  description: z.string().trim().max(2000).default(''),
+  configurations: z.array(benchmarkConfigSchema).min(1).max(8),
+  tasks: z.array(benchmarkNameSchema).min(1).max(40),
+  scorers: z.array(scorerNameSchema).min(1).max(20).default(['outcome']),
+  times: z.number().int().min(1).max(5).default(1),
+}).strict().superRefine((suite, ctx) => {
+  const fields = { configurations: suite.configurations.map(({ name }) => name), tasks: suite.tasks, scorers: suite.scorers };
+  for (const [key, entries] of Object.entries(fields)) {
+    if (new Set(entries).size !== entries.length) ctx.addIssue({ code: 'custom', path: [key], message: 'Names must be unique.' });
+  }
+});
+export type BenchmarkSuite = z.infer<typeof benchmarkSuiteSchema>;
+export const benchmarkTaskSchema = z.object({
+  title: z.string().trim().min(1).max(300),
+  sourceRun: z.string().min(1).max(120).optional(),
+  workflow: z.string().trim().min(1).max(190),
+  prompt: z.string().min(1).max(100_000),
+  successCriteria: z.string().trim().min(1).max(4000),
+  startCommit: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/),
+}).strict();
+export type BenchmarkTask = z.infer<typeof benchmarkTaskSchema>;
+export const benchmarkAddInputSchema = z.object({
+  run: z.string().min(1).max(120), suite: benchmarkNameSchema,
+  criteria: z.string().trim().min(1).max(4000).optional(),
+}).strict();
+export const benchmarkAddResponseSchema = z.object({ task: benchmarkNameSchema, path: z.string() });
+export const benchmarkSuitesResponseSchema = z.object({
+  suites: z.array(benchmarkSuiteSchema.safeExtend({ name: benchmarkNameSchema })),
+  issues: z.array(z.object({ path: z.string(), message: z.string() })),
+});
+
+export const benchmarkSuiteParamsSchema = z.object({ suite: benchmarkNameSchema });
+export const benchmarkRunInputSchema = z.object({ config: benchmarkNameSchema.optional() }).strict();
+const benchmarkCellIdentitySchema = z.object({ task: benchmarkNameSchema, config: benchmarkNameSchema });
+export const benchmarkCellRunSchema = z.discriminatedUnion('state', [
+  benchmarkCellIdentitySchema.extend({ state: z.literal('started'), runId: z.uuid() }),
+  benchmarkCellIdentitySchema.extend({ state: z.literal('unavailable'), reason: z.string() }),
+]);
+export const benchmarkMatrixRunSchema = z.object({
+  id: z.uuid(),
+  suite: benchmarkNameSchema,
+  createdAt: z.iso.datetime(),
+  scorers: z.array(scorerNameSchema),
+  runs: z.array(benchmarkCellRunSchema),
+});
+export type BenchmarkMatrixRun = z.infer<typeof benchmarkMatrixRunSchema>;
+export const benchmarkMatrixParamsSchema = benchmarkSuiteParamsSchema.extend({ id: z.uuid() });
+export const benchmarkMatrixRowSchema = z.object({
+  name: benchmarkNameSchema, started: z.number(), unsettled: z.number(), unavailable: z.number(),
+  passed: z.number(), failed: z.number(), pending: z.number(), missing: z.number(),
+  meanCostUsd: z.number().optional(), meanWallMs: z.number().optional(),
+});
+export const benchmarkResultsResponseSchema = z.object({
+  batch: benchmarkMatrixRunSchema,
+  rows: z.array(benchmarkMatrixRowSchema),
+  artifact: z.object({ runId: z.uuid(), name: z.string() }).optional(),
+});
+export type BenchmarkResultsResponse = z.infer<typeof benchmarkResultsResponseSchema>;
+export const benchmarkHistoryResponseSchema = z.object({ batches: z.array(benchmarkMatrixRunSchema) });
+
+export const factorySummaryResponseSchema = z.object({
+  current: scoresResponseSchema,
+  previous: z.array(scoreGroupSchema),
+  improvements: z.array(z.object({
+    id: z.string(), state: improvementRecordSchema.shape.state, startedAt: z.string(),
+    pr: improvementRecordSchema.shape.pr,
+  })),
+  report: z.string().optional(),
+  weekly: factoryWeeklyMetricsSchema.optional(),
+});
+export type FactorySummaryResponse = z.infer<typeof factorySummaryResponseSchema>;

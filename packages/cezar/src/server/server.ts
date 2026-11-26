@@ -113,7 +113,7 @@ import {
 } from '../automations/types.ts';
 import { trackerAutomationOptionsSchema, trackerAutomationOptionsQuerySchema, schedulesOf, nextScheduleOccurrence, localTimeZone } from '@open-mercato/cezar-contract';
 import type { IncomingMessage } from 'node:http';
-import { access, constants as fsConstants, lstat, mkdir, readFile, realpath, stat, unlink, writeFile } from 'node:fs/promises';
+import { access, constants as fsConstants, lstat, mkdir, readdir, readFile, realpath, stat, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, join, posix, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -307,9 +307,16 @@ import { summarizeRunMetrics } from '../runs/task-metrics.ts';
 import { ScoringService, type ScoringProject, type SettledScore } from '../scoring/service.ts';
 import { readRunScores } from '../scoring/store.ts';
 import { aggregateScores, groupScoreColumns } from '../scoring/summary.ts';
+import { benchmarkAddInputSchema, benchmarkAddResponseSchema, benchmarkHistoryResponseSchema, benchmarkMatrixParamsSchema,
+  type FactorySummaryResponse, factorySummaryResponseSchema, factoryWeeklyMetricsSchema, benchmarkMatrixRunSchema, benchmarkResultsResponseSchema, benchmarkRunInputSchema, benchmarkSuiteParamsSchema, benchmarkSuitesResponseSchema } from '@open-mercato/cezar-contract';
+import { addBenchmarkTask, loadBenchmarkSuites } from '../benchmarks/suites.ts';
+import { benchmarkResults, readBenchmarkBatches, runBenchmarkSuite } from '../benchmarks/run-suite.ts';
 import { checkFactory } from '../factory/check.ts';
 import { factoryReportsDir, writeFactoryReport } from '../factory/report.ts';
 import { projectCharterProgress } from '../managers/project-charter.ts';
+import { harnessImprovementRecordsPath, projectImprovementRecordsPath, readImprovementRecords } from '../improvement/bookkeeping.ts';
+import { ensureCredentialHealthAutomation, watchCredentialHealth } from '../factory/credential-health.ts';
+import { ensureFixCiAutomation } from '../factory/ci-trigger.ts';
 import { detectHarnessProject, harnessCauseQueuePath, projectCauseQueuePath, readCauseQueue, recordCauses, routeCauses } from '../factory/causes.ts';
 import { byLastActivityDesc, compareIsoDesc, lastActivityAt, readRunIndexDiagnostic, readRunIndexFromDisk } from '../runs/run-index.ts';
 import { isV2WireEventType } from '../runs/ui-event-sink.ts';
@@ -5804,6 +5811,102 @@ export function createApp(deps: ServerDeps) {
       return c.body(stream, 200, artifactHeaders(artifact, false));
     })
 
+    .get('/benchmarks', async (c) => {
+      const catalog = await loadBenchmarkSuites(c.get('project').root);
+      return c.json(benchmarkSuitesResponseSchema.parse({
+        issues: catalog.issues, suites: catalog.suites.map(({ name, suite }) => ({ name, ...suite })),
+      }));
+    })
+
+    .post('/benchmarks', jsonZodValidator(benchmarkAddInputSchema), async (c) => {
+      if (!capabilities().localHandoff || inRelayScope()) return c.json({ error: 'Benchmark files are authored from the local cockpit.' }, 403);
+      const project = c.get('project');
+      const input = c.req.valid('json');
+      const original = project.store.getRun(input.run);
+      if (!original?.startCommit || !original.finishedAt || !original.workflowDef || original.replayOf) {
+        return c.json({ error: 'A settled original task with a saved workflow and project commit is required.' }, 409);
+      }
+      const workspace = await loadWorkspaceConfig();
+      if (detectHarnessProject(workspace.projects, workspace.factory?.harnessProject) === project.id ||
+          detectHarnessProject([{ id: project.id, root: project.root }]) === project.id) {
+        return c.json({ error: 'Author synthetic benchmark fixtures for the public harness.' }, 409);
+      }
+      const outcome = original.scoreSummary?.outcome?.label ?? original.completionReason;
+      const successCriteria = input.criteria ?? (outcome ? 'Match the recorded outcome: ' + outcome + '.' : undefined);
+      if (!successCriteria) return c.json({ error: 'Supply success criteria with --criteria when the original task has no recorded outcome.' }, 409);
+      const redact = (value: string) => project.store.redactRunText(original.id, value);
+      try {
+        const saved = await addBenchmarkTask(project.root, input.suite, 'run-' + original.id.toLowerCase(), {
+          title: redact(original.title).slice(0, 300), sourceRun: original.id, workflow: original.workflow,
+          prompt: redact(original.task), successCriteria: redact(successCriteria), startCommit: original.startCommit,
+        });
+        return c.json(benchmarkAddResponseSchema.parse(saved), 201);
+      } catch {
+        return c.json({ error: 'The frozen benchmark file or suite could not be written. Check the suite and task definitions.' }, 409);
+      }
+    })
+
+    .post('/benchmarks/:suite/run', paramZodValidator(benchmarkSuiteParamsSchema), jsonZodValidator(benchmarkRunInputSchema, { absent: ({}) }), async (c) => {
+      if (!capabilities().localHandoff || inRelayScope()) return c.json({ error: 'Start benchmarks from the local cockpit.' }, 403);
+      const project = c.get('project');
+      const { suite } = c.req.valid('param');
+      const { config } = c.req.valid('json');
+      const catalog = await loadBenchmarkSuites(project.root);
+      const entry = catalog.suites.find(({ name }) => name === suite);
+      if (!entry) return c.json({ error: 'The benchmark suite is missing or invalid.' }, 404);
+      const result = await runBenchmarkSuite(project, suite, entry.suite, entry.tasks, config);
+      return 'reason' in result ? c.json({ error: result.reason }, 409) : c.json(benchmarkMatrixRunSchema.parse(result.batch), 202);
+    })
+
+    .get('/benchmarks/:suite/results', paramZodValidator(benchmarkSuiteParamsSchema), (c) => {
+      const batches = readBenchmarkBatches(c.get('project').dataDir, c.req.valid('param').suite);
+      return c.json(benchmarkHistoryResponseSchema.parse({ batches }));
+    })
+
+    .get('/benchmarks/:suite/results/:id', paramZodValidator(benchmarkMatrixParamsSchema), async (c) => {
+      const project = c.get('project');
+      const { suite, id } = c.req.valid('param');
+      const batch = readBenchmarkBatches(project.dataDir, suite).find((entry) => entry.id === id);
+      if (!batch) return c.json({ error: 'Benchmark batch not found.' }, 404);
+      return c.json(benchmarkResultsResponseSchema.parse(await benchmarkResults(project, batch)), 200);
+    })
+
+    .get('/factory', async (c) => {
+      const project = c.get('project');
+      const id = project === bootContext ? await resolveBootProject() : project.id;
+      const workspace = await loadWorkspaceConfig();
+      const harness = detectHarnessProject(workspace.projects, workspace.factory?.harnessProject) === id;
+      const records = harness ? harnessImprovementRecordsPath() : projectImprovementRecordsPath(project.dataDir);
+      const now = Date.now();
+      const week = 7 * 24 * 60 * 60_000;
+      const runs = project.store.listRuns().filter((run) => !run.replayOf && run.finishedAt && Date.parse(run.finishedAt) <= now);
+      const recent = runs.filter((run) => Date.parse(run.finishedAt!) >= now - week);
+      const earlier = runs.filter((run) => Date.parse(run.finishedAt!) >= now - 2 * week && Date.parse(run.finishedAt!) < now - week);
+      const current = aggregateScores(project.dataDir, recent, { groupBy: 'scorer' });
+      if (harness) {
+        try {
+          const queue = readCauseQueue(harnessCauseQueuePath());
+          const counts: NonNullable<typeof current.queue>['counts'] = {};
+          for (const cause of queue) counts[cause.state] = (counts[cause.state] ?? 0) + 1;
+          current.queue = { counts, openCauses: queue.filter(({ state }) => state === 'open').slice(0, 20) };
+        } catch { current.queue = null; }
+      }
+      let improvements: FactorySummaryResponse['improvements'];
+      try {
+        improvements = readImprovementRecords(records).filter((record) => record.projectId === id).slice(-25).reverse()
+          .map(({ id: recordId, state, startedAt, pr }) => ({ id: recordId, state, startedAt, ...(pr ? { pr } : {}) }));
+      } catch { improvements = []; }
+      const reportsDir = join(project.dataDir, 'factory', 'reports');
+      const reports = await readdir(reportsDir).catch(() => []);
+      const report = reports.filter((file) => /^factory-week-\d{4}-\d{2}-\d{2}\.html$/.test(file)).sort().at(-1);
+      const weekly = report ? await readFile(join(reportsDir, report + '.json'), 'utf8')
+        .then((raw) => factoryWeeklyMetricsSchema.parse(JSON.parse(raw))).catch(() => undefined) : undefined;
+      return c.json(factorySummaryResponseSchema.parse({
+        current, previous: aggregateScores(project.dataDir, earlier, { groupBy: 'scorer' }).groups,
+        improvements, ...(report ? { report } : {}), ...(weekly ? { weekly } : {}),
+      }));
+    })
+
     .get('/factory/check', async (c): Promise<Response & TypedResponse<FactoryCheckBody, 200, 'json'>> => {
       const response: FactoryCheckResponse = { issues: await checkFactory(c.get('project').root) };
       return c.json(response);
@@ -9832,6 +9935,8 @@ export function createApp(deps: ServerDeps) {
     void Promise.resolve(project === bootContext ? resolveBootProject() : project.id).then((id) => {
       if (stoppedImprovement) return;
       const offRuns = watchImprovementRuns(project.dataDir, project.store, id);
+      const offCredentials = watchCredentialHealth(id, project.dataDir, project.store,
+        (cause) => managerEngine.reportInfrastructureCause(cause));
       const offPr = onPrClosed((root, number) => {
         if (root !== project.root || pendingPrReads.has(number) || !hasOpenImprovementPr(project.dataDir, id, number)) return;
         pendingPrReads.add(number);
@@ -9848,7 +9953,7 @@ export function createApp(deps: ServerDeps) {
         })().catch(() => console.warn('[cezar] improvement PR reconciliation deferred'))
           .finally(() => pendingPrReads.delete(number));
       });
-      offImprovement = () => { offRuns(); offPr(); };
+      offImprovement = () => { offRuns(); offPr(); offCredentials(); };
     }).catch(() => undefined);
     detach.push(() => { stoppedImprovement = true; offImprovement?.(); });
     if (deps.enableFactoryScoring) {
@@ -10392,6 +10497,8 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
   const automationCoordinator = new AutomationCoordinator({
     listProjects, pinned: bootProjectId, warn: warnAutomations,
     configureStore: (store, project) => {
+      ensureCredentialHealthAutomation(store, project.root);
+      ensureFixCiAutomation(store, project.root);
       if (process.env.CEZ_SELF_IMPROVEMENT === '0' || store.get(FACTORY_AUTOMATION)) return;
       ensureDataGitignore(project.root);
       ensureFactoryAutomation(store);
