@@ -23,12 +23,14 @@ export function renderJudgeTranscript(
   metrics: RunMetrics,
   events: readonly RunEvent[],
   maxChars: number,
+  specContext?: string,
 ): JudgeTranscript {
   const start = Date.parse(run.startedAt ?? run.createdAt);
   const headings = [
     `# Run ${run.id.slice(0, 8)}: ${run.titleSummary ?? run.title}`,
     [run.workflow, metrics.runner, metrics.model, `started by ${metrics.startedBy}`, run.status, run.pullRequestUrl].filter(Boolean).join(' · '),
     '## Brief', run.task,
+    ...(specContext ? ['## Referenced specification', specContext] : []),
     '## Metrics', JSON.stringify(metrics, null, 2),
     '## Transcript',
   ].join('\n');

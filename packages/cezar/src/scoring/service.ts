@@ -9,6 +9,7 @@ import { loadWorkspaceConfig } from '../workspace/config.ts';
 import { evaluateScorer } from './evaluate.ts';
 import { JudgeQueue } from './queue.ts';
 import { resolveJudgeRoute, type JudgeRoute } from './runner.ts';
+import { referencedSpecContext } from './spec-context.ts';
 import { readRunScores, writeRunScore } from './store.ts';
 import { renderJudgeTranscript } from './transcript.ts';
 
@@ -94,12 +95,12 @@ export class ScoringService {
     const now = Date.now();
     const queued: string[] = [];
     let snapshot: { events: ReturnType<RunStore['readEvents']>; metrics: ReturnType<typeof summarizeRunMetrics> } | undefined;
-    const transcript = (maxChars: number) => {
+    const transcript = (maxChars: number, specContext?: string) => {
       if (!snapshot) {
         const events = project.store.readEvents(run.id);
         snapshot = { events, metrics: summarizeRunMetrics(run, events) };
       }
-      return renderJudgeTranscript(run, snapshot.metrics, snapshot.events, maxChars);
+      return renderJudgeTranscript(run, snapshot.metrics, snapshot.events, maxChars, specContext);
     };
     for (const scorer of scorers) {
       if (selected ? scorer.name !== selected : scorer.workflows && !scorer.workflows.includes(run.workflow)) continue;
@@ -130,7 +131,8 @@ export class ScoringService {
           const chosen = await this.judgeFor(project.root);
           if ('error' in chosen) return { status: 'error', reason: chosen.error };
           route = chosen;
-          return evaluateScorer(scorer, transcript, route.call);
+          const spec = scorer.name === 'scope' ? await referencedSpecContext(project.root, run) : undefined;
+          return evaluateScorer(scorer, (maxChars) => transcript(maxChars, spec), route.call);
         },
         update: (result) => {
           if (!stillCurrent()) return;

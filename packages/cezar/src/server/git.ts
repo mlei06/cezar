@@ -127,6 +127,12 @@ export async function getHeadCommit(root: string): Promise<string | null> {
   }
 }
 
+/** Read a committed repository file without involving the current checkout. */
+export async function readFileAtCommit(root: string, commit: string, path: string): Promise<string | undefined> {
+  if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(commit)) return undefined;
+  return git(root, ['cat-file', 'blob', `${commit}:${path}`]).catch(() => undefined);
+}
+
 export async function getStatus(root: string): Promise<StatusEntry[]> {
   const out = await git(root, ['status', '--porcelain']);
   return out
