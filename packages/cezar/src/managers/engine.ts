@@ -154,6 +154,7 @@ import { PlanUsageTracker, recordUsageObservation, type LedgerAccountRef } from 
 import { ledgerAccountRef } from '../usage-ledger/identity.ts';
 import { readLedger } from '../usage-ledger/store.ts';
 import { managerConsumerId } from '../usage-ledger/report.ts';
+import { hasProtectedPaths, protectedChanges } from '../improvement/protection.ts';
 
 /**
  * The manager turn engine (spec 2026-10-31-managers § Turns, § Watching, § Safety). One turn per
@@ -3620,6 +3621,12 @@ ${guidance}` : ''}`,
     if (action.type === 'merge-pr') this.managerActed(id, { prs: [{ projectId: action.projectId, number: action.number }] }, `you proposed merging #${action.number} since`);
     this.deps.telemetry?.track('manager_action_proposed', managerActionLabel(action));
     this.emitChange(id);
+    // Owner-protected paths (factory D6): the card waits for the owner even for an autonomous manager.
+    const ownerOnly = action.type === 'merge-pr' && scope.manager.autonomous === true ? await this.ownerOnlyMerge(action) : undefined;
+    if (ownerOnly) {
+      this.alert(id, message, `Needs your approval: ${describeAction(action)} (${ownerOnly})`, 'approval');
+      return { actionId: message.id, status: 'pending', result: `Waiting for the owner: ${ownerOnly}.`, ...(replaced.length ? { replaced } : {}) };
+    }
     // Autonomous: the card is the record, not a question — it runs now, as an approval would.
     if (scope.manager.autonomous === true) {
       const decided = await this.decide(id, message.id, 'approve');
@@ -3864,6 +3871,20 @@ ${guidance}` : ''}`,
     });
     if (merged.ok) return { ok: true, result: `Merged #${action.number}` };
     return { ok: false, result: (await ManagerEngine.refusalOf(merged)).error };
+  }
+
+  /** Why a merge needs the owner (it touches an owner-protected path), or undefined when it doesn't. */
+  private async ownerOnlyMerge(action: Extract<ManagerActionRequest, { type: 'merge-pr' }>): Promise<string | undefined> {
+    const response = await this.forward(`/p/${encodeURIComponent(action.projectId)}/github/prs/${action.number}/changes?refresh=1`).catch(() => undefined);
+    const body = response?.ok ? (await response.json().catch(() => ({}))) as { available?: boolean; files?: { path: string; previousPath?: string }[] } : {};
+    if (body.available === true && Array.isArray(body.files)) {
+      const hits = protectedChanges(body.files);
+      return hits.length ? `it changes owner-protected ${hits.slice(0, 5).join(', ')}${hits.length > 5 ? ', …' : ''}` : undefined;
+    }
+    const source = (await this.deps.projects().catch(() => [])).find((project) => project.id === action.projectId);
+    return source?.root && hasProtectedPaths(source.root)
+      ? 'its changed files could not be checked against the owner-protected paths'
+      : undefined;
   }
 
   /** Reached only from an approved `add-job`; the cockpit edits jobs through `update`. */

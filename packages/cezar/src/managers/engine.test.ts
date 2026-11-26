@@ -2811,6 +2811,58 @@ describe('ManagerEngine', () => {
   describe('safety', () => {
     const merge = { type: 'merge-pr', projectId: 'alpha', number: 7 } as const;
 
+    describe('owner-protected paths (factory D6)', () => {
+      const protectedEngine = (changes: unknown, root = '/alpha') => makeEngine({
+        projects: async () => [{ ...connected, root }],
+        request: async (path, init) => {
+          requests.push({ path, method: init?.method ?? 'GET' });
+          if (path.includes('/merge-state')) return Response.json({ available: true, mergeState: { title: 'Ship', state: 'open', headSha: 'sha-1', defaultMethod: 'squash', methods: ['squash'] } });
+          if (path.includes('/changes')) return Response.json(changes);
+          if (path.endsWith('/merge')) return Response.json({ merged: true });
+          return Response.json({ ok: true });
+        },
+      });
+      const autonomous = async (engine: ManagerEngine) => {
+        const id = await create(engine);
+        await engine.update(id, { autonomous: true });
+        return id;
+      };
+      const merged = () => requests.some((request) => request.path.endsWith('/merge') && request.method === 'POST');
+
+      it('holds an autonomous merge that changes a scorer for the owner', async () => {
+        const engine = protectedEngine({ available: true, files: [{ path: 'README.md' }, { path: '.ai/cezar/scorers/outcome/scorer.md' }] });
+        const id = await autonomous(engine);
+        const proposed = await engine.propose(id, { action: merge });
+        expect(proposed).toMatchObject({ status: 'pending', result: expect.stringContaining('.ai/cezar/scorers/outcome/scorer.md') });
+        expect(merged()).toBe(false);
+      });
+
+      it('catches a rename out of a protected skill, and still merges ordinary changes', async () => {
+        const engine = protectedEngine({ available: true, files: [{ path: 'docs/x.md', previousPath: 'packages/cezar/skills/improve-factory/SKILL.md' }] });
+        const id = await autonomous(engine);
+        expect(await engine.propose(id, { action: merge })).toMatchObject({ status: 'pending' });
+        requests.length = 0;
+        const clean = protectedEngine({ available: true, files: [{ path: 'src/app.ts' }] });
+        const other = await autonomous(clean);
+        expect(await clean.propose(other, { action: merge })).toMatchObject({ status: 'done' });
+        expect(merged()).toBe(true);
+      });
+
+      it('holds an unreadable file list only where the project has protected paths', async () => {
+        const root = mkdtempSync(join(tmpdir(), 'cez-protected-'));
+        try {
+          mkdirSync(join(root, '.ai/cezar/scorers'), { recursive: true });
+          const held = protectedEngine({ available: false, reason: 'unsupported' }, root);
+          expect(await held.propose(await autonomous(held), { action: merge })).toMatchObject({ status: 'pending', result: expect.stringContaining('could not be checked') });
+          requests.length = 0;
+          const plain = protectedEngine({ available: false, reason: 'unsupported' });
+          expect(await plain.propose(await autonomous(plain), { action: merge })).toMatchObject({ status: 'done' });
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
+      });
+    });
+
     it('a job the agent asks for waits for approval, and its interval starts at the click', async () => {
       const now = Date.parse('2026-10-31T12:00:00.000Z');
       const engine = makeEngine({ now: () => now });
