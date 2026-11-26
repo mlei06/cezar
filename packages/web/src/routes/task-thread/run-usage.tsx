@@ -2,7 +2,7 @@ import { ChevronDownIcon } from 'lucide-react'
 import type { ReactNode } from 'react'
 
 import { useRunClaudeAccount } from '@/api/agent-accounts'
-import { useHealth } from '@/api/queries'
+import { useHealth, useRunMetrics } from '@/api/queries'
 import type { ApiRun, ModelUsage } from '@open-mercato/cezar-api-client'
 import { accountPart, LiveUsage, liveUsageParts } from '@/components/live-usage'
 import { IconTooltip } from '@/components/ui/icon-tooltip'
@@ -126,7 +126,7 @@ function UsageChip({
           </button>
         </PopoverTrigger>
       </IconTooltip>
-      <PopoverContent align="end" data-slot="run-usage-details" className="w-72 p-3 text-label">
+      <PopoverContent align="end" data-slot="run-usage-details" className="max-h-[70vh] w-72 overflow-auto p-3 text-label">
         <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
           {duration ? (
             <>
@@ -179,6 +179,7 @@ function UsageChip({
             </>
           ) : null}
         </dl>
+        <RunMetricsDetails runId={run.id} showTokens={showTokens} />
         {steps.length > 1 || steps.some((row) => row.others.length > 0) ? (
           <div data-slot="agent-badge-step-models" className="mt-3 border-t border-border pt-2">
             <p className="pb-1 text-meta text-muted-foreground">Models per step</p>
@@ -208,6 +209,44 @@ function UsageChip({
         ) : null}
       </PopoverContent>
     </Popover>
+  )
+}
+
+function RunMetricsDetails({ runId, showTokens }: { runId: string; showTokens: boolean }) {
+  const { data } = useRunMetrics(runId)
+  if (!data) return null
+  const rows = [
+    ['Model time', formatDuration(data.modelMs)],
+    ['Tool time', formatDuration(data.toolMs)],
+    ['Tool calls', data.toolCalls.toLocaleString()],
+    ...(data.requests === undefined ? [] : [['Model requests', data.requests.toLocaleString()]]),
+    ...(showTokens && data.contextAvg !== undefined ? [['Average context', compactTokens(data.contextAvg)]] : []),
+    ...(showTokens && data.contextPeak !== undefined ? [['Peak context', compactTokens(data.contextPeak)]] : []),
+  ]
+  return (
+    <div data-slot="run-metrics" className="mt-3 border-t border-border pt-2">
+      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+        {rows.map(([label, value]) => (
+          <div key={label} className="contents">
+            <dt className="text-muted-foreground">{label}</dt>
+            <dd className="tabular-nums">{value}</dd>
+          </div>
+        ))}
+      </dl>
+      {data.largestOutputs.length > 0 ? (
+        <div className="mt-2">
+          <p className="text-muted-foreground">Largest tool outputs</p>
+          <ul className="mt-1">
+            {data.largestOutputs.map((output) => (
+              <li key={output.call} className="flex justify-between gap-2 tabular-nums">
+                <span className="truncate">{output.tool} #{output.call}</span>
+                <span>{output.chars.toLocaleString()} chars</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </div>
   )
 }
 

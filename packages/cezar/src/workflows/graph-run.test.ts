@@ -585,6 +585,7 @@ describe('graph workflows run through RunManager', () => {
     );
     const oldSession = first.steps.find((s) => s.id === 'work')?.sessionId;
     expect(oldSession).toBeDefined();
+    expect(first.steps.find((s) => s.id === 'work')?.taskStats?.requests).toBeGreaterThan(0);
     expect(first).toMatchObject({ startCommit: originalCommit, harnessVersion: { id: expect.any(String) } });
     await run('git', [...GIT_ID, 'commit', '--allow-empty', '-q', '-m', 'new base'], { cwd: repoRoot });
     const continuedCommit = await head();
@@ -607,6 +608,15 @@ describe('graph workflows run through RunManager', () => {
       expect(reloaded?.startCommit).toBe(originalCommit);
       expect(reloaded?.steps.find((s) => s.id === 'continue-1')).toMatchObject({
         startCommit: continuedCommit, harnessVersion: first.harnessVersion,
+      });
+      expect(step?.taskStats?.requests).toBeGreaterThan(0);
+      expect(reloaded?.steps.find((s) => s.id === 'continue-1')?.taskStats).toEqual(step?.taskStats);
+      const app = createApp({ repoRoot, store, manager, version: 'test' });
+      const response = await apiRequest(app, `/api/v1/runs/${first.id}/metrics`);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        runId: first.id, startCommit: originalCommit,
+        requests: first.steps[0]!.taskStats!.requests + step!.taskStats!.requests,
       });
       expect(step?.sessionId).not.toBe(oldSession);
       const events = store.readEvents(first.id).filter((e) => e.stepId === 'continue-1');

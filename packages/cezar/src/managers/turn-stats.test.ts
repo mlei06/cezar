@@ -53,6 +53,10 @@ describe('TurnStatsCollector', () => {
     stats.event({ type: 'tool-result', toolCallId: '1', result: 'x'.repeat(120), isError: false });
     stats.event({ type: 'usage-status', status: { turnTokens: { cacheReadTokens: 70_000, cacheWriteTokens: 9_000, outputTokens: 800 } } });
     expect(stats.context).toBe(39_000);
+    expect(stats.taskStats()).toEqual({
+      requests: 3, contextFirst: 30_000, contextTotal: 110_000, contextPeak: 41_000,
+      toolCalls: 1, toolResultChars: 120, cacheReadTokens: 70_000, cacheWriteTokens: 9_000,
+    });
     expect(stats.stats({ fresh: true, sessionTurn: 1 })).toEqual({
       requests: 3, contextFirst: 30_000, contextPeak: 41_000, toolResultChars: 120,
       tools: { route: 0, look: 1, own: 0, write: 0 }, fresh: true, sessionTurn: 1,

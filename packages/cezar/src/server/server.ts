@@ -281,6 +281,7 @@ import {
   validateLiveCursor,
 } from '../runs/event-history.ts';
 import { readRunUserMessages } from '../runs/user-messages.ts';
+import { summarizeRunMetrics } from '../runs/task-metrics.ts';
 import { byLastActivityDesc, compareIsoDesc, lastActivityAt, readRunIndexDiagnostic, readRunIndexFromDisk } from '../runs/run-index.ts';
 import { isV2WireEventType } from '../runs/ui-event-sink.ts';
 import { onRunDeleted, onRunEvent } from './sse-subscriptions.ts';
@@ -5675,6 +5676,13 @@ export function createApp(deps: ServerDeps) {
       const { store } = c.get('project');
       const run = store.getRun(c.req.param('id'));
       return run ? c.json(withUsage(run)) : c.json({ error: 'not found' }, 404);
+    })
+
+    .get('/runs/:id/metrics', paramZodValidator(runIdParamSchema), (c) => {
+      const { store } = c.get('project');
+      const { id } = c.req.valid('param');
+      const run = store.getRun(id);
+      return run ? c.json(summarizeRunMetrics(run, store.readEvents(id))) : c.json({ error: 'not found' }, 404);
     })
 
     .get(

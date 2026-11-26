@@ -1,4 +1,4 @@
-import type { PlanUsageTurnStats } from '@open-mercato/cezar-contract';
+import type { PlanUsageTurnStats, TaskTurnStats } from '@open-mercato/cezar-contract';
 import type { AgentEvent, AgentUsageStatus } from '../core/agent-runner.ts';
 import { isManagerCommand, MANAGER_ROUTES, MANAGER_SUBCOMMANDS } from './cli-vocabulary.ts';
 
@@ -43,6 +43,7 @@ export function managerToolKind(tool: string, input: unknown): ToolKind {
 export class TurnStatsCollector {
   private requests = 0;
   private contextFirst = 0;
+  private contextTotal = 0;
   private contextPeak = 0;
   private lastContext = 0;
   private toolResultChars = 0;
@@ -56,6 +57,7 @@ export class TurnStatsCollector {
       // The runner sends a reading only when it changed: one per model request.
       const context = event.status.contextTokens;
       this.requests++;
+      this.contextTotal += context;
       if (this.requests === 1) {
         this.contextFirst = context;
         if (event.status.cacheWriteTokens !== undefined && context > 0) this.cold = event.status.cacheWriteTokens > context / 2;
@@ -74,6 +76,20 @@ export class TurnStatsCollector {
     return this.lastContext;
   }
 
+  taskStats(): TaskTurnStats | undefined {
+    const toolCalls = Object.values(this.tools).reduce((sum, value) => sum + value, 0);
+    if (!this.requests && !toolCalls && !this.toolResultChars && !this.tokens) return undefined;
+    return {
+      requests: this.requests,
+      contextFirst: this.contextFirst,
+      contextTotal: this.contextTotal,
+      contextPeak: this.contextPeak,
+      toolCalls,
+      toolResultChars: this.toolResultChars,
+      ...(this.tokens ? { cacheReadTokens: this.tokens.cacheReadTokens, cacheWriteTokens: this.tokens.cacheWriteTokens } : {}),
+    };
+  }
+
   stats(session: { fresh: boolean; sessionTurn: number; idleMs?: number; session?: string }): Omit<PlanUsageTurnStats, 'usd'> {
     return {
       requests: this.requests,
@@ -89,4 +105,20 @@ export class TurnStatsCollector {
       ...(session.session ? { session: session.session } : {}),
     };
   }
+}
+
+export function addTaskTurnStats(previous: TaskTurnStats | undefined, next: TaskTurnStats): TaskTurnStats {
+  if (!previous) return next;
+  return {
+    requests: previous.requests + next.requests,
+    contextFirst: previous.requests > 0 ? previous.contextFirst : next.contextFirst,
+    contextTotal: previous.contextTotal + next.contextTotal,
+    contextPeak: Math.max(previous.contextPeak, next.contextPeak),
+    toolCalls: previous.toolCalls + next.toolCalls,
+    toolResultChars: previous.toolResultChars + next.toolResultChars,
+    ...(previous.cacheReadTokens !== undefined || next.cacheReadTokens !== undefined
+      ? { cacheReadTokens: (previous.cacheReadTokens ?? 0) + (next.cacheReadTokens ?? 0) } : {}),
+    ...(previous.cacheWriteTokens !== undefined || next.cacheWriteTokens !== undefined
+      ? { cacheWriteTokens: (previous.cacheWriteTokens ?? 0) + (next.cacheWriteTokens ?? 0) } : {}),
+  };
 }
