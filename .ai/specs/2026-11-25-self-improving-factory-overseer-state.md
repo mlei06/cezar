@@ -2,7 +2,7 @@
 
 The overseer's resume point for the self-improving factory build. Updated and pushed at every milestone step and every overseer decision, so the work survives a crashed machine or a new session. Read this first, then the roadmap's Progress table and the observation log.
 
-Last updated: 2026-11-26 18:39 UTC.
+Last updated: 2026-11-26 18:53 UTC.
 
 ## Where the build stands
 
@@ -12,8 +12,8 @@ Last updated: 2026-11-26 18:39 UTC.
 - **Scoring.** #20–24 released the catalog, stateless judge, storage, `cez score`, cause routing and UI. Installed fixtures verified pending and recorded events, score summaries and reconstruction of both cause queues. The outage fixture recovered all four scores after 304 seconds. The configured judge needed 65 seconds and 82.2 seconds to record all four scores on two installed fixtures. The overseer subsequently cleared the M5 gate on adjudicated labels. A fresh blind result and the one-minute acceptance are open.
 - **Release controls.** #25–26 are live. Isolated fixtures from the installed entries verified draining before admission, expiry, resuming queued work, exact rollback selection, and all five benchmark cases. A failed restart or post-switch check rolled back in fixtures. A benchmark drop stopped before activation. Reporting and the exact-release revert PR passed with test sinks.
 - **Protected release workflow.** Draft PR #29 (`8a933af1d`) is open for the owner. Typecheck, 148 focused tests, 18,646 full-suite tests, 54 unit checks, build and 35 package checks passed. The dry-run cockpit loaded and completed the YAML. The staged authenticated replay and tool-free fixture judge passed separately. The failed-required-replay fixture kept the active version in place.
-- **M5 in flight.** `impl/m5-improvement-workflow` (`793ce8317`) passed typecheck, 464 focused tests and the red admission regression. Its full suite is queued while another workflow branch is in validation. `impl/m5-factory-source` is stacked on it and integrating the hourly source, commands and reports. The separate `impl/m5-improve-workflow` checkout includes draft #30. Review the workflow changes together before shipping and keep the protected skill under owner review.
-- **Next.** M5 workflow and trigger acceptance in disposable cockpits, then harness inputs, report and settings. Owner review of #29 and its first live invocation remain open. The harness manager is inactive pending the real two-project test. M6 follows M5. Relevant carryovers include Azure PR action parity (B6), settled PR cleanup (B14), post-restart runner retry (B21), judge acceptance (B25) and additional replay runner isolation (B26).
+- **M5 in flight.** The overseer handed M5 back and opened protected draft #33, replacing #30; the skill remains for owner review. Independent review identified admission, scope and public PR evidence risks in the draft. `impl/m5-improvement-workflow` (`793ce8317`) has claim-first admission, validation, and bounded publication and is running the full suite after 464 focused tests. Use that work to prepare hardening for #33 while preserving its skill text. `impl/m5-factory-source` (`b582c073a`) passed 1,388 focused tests. `impl/m5-improvement-insights` (`7fe538d9a`) adds the cross-project cause digest and post-release comparisons. `impl/m5-factory-settings` is implementing and validating workspace and project settings separately.
+- **Next.** M5 workflow hardening review and trigger acceptance in disposable cockpits, then the merge-policy and weekly-report slices. Settings can ship separately from the protected draft. Owner review of #29 and its first live invocation remain open. The harness manager is inactive pending the real two-project test. M6 follows M5. Relevant carryovers include Azure PR action parity (B6), settled PR cleanup (B14), post-restart runner retry (B21), judge acceptance (B25) and additional replay runner isolation (B26).
 
 ## Standing instructions given to the harness manager
 
