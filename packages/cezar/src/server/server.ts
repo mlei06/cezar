@@ -164,7 +164,6 @@ import {
   scoresQuerySchema,
   managerScoresQuerySchema,
   type FactoryCheckResponse,
-  type FactoryImproveResponse,
   type WorkspaceScoresResponse,
   type CauseQueueResponse,
   type ScoreRunResponse,
@@ -308,9 +307,6 @@ import { ScoringService, type ScoringProject, type SettledScore } from '../scori
 import { readRunScores } from '../scoring/store.ts';
 import { aggregateScores, groupScoreColumns } from '../scoring/summary.ts';
 import { checkFactory } from '../factory/check.ts';
-import { ImprovementService, type ImprovementProject } from '../improvement/service.ts';
-import { resolveImprovementSettings } from '../improvement/settings.ts';
-import { IMPROVE_FACTORY } from '../workflows/templates.ts';
 import { detectHarnessProject, harnessCauseQueuePath, projectCauseQueuePath, readCauseQueue, recordCauses, routeCauses } from '../factory/causes.ts';
 import { byLastActivityDesc, compareIsoDesc, lastActivityAt, readRunIndexDiagnostic, readRunIndexFromDisk } from '../runs/run-index.ts';
 import { isV2WireEventType } from '../runs/ui-event-sink.ts';
@@ -468,6 +464,7 @@ import { parseRemote, resolveForge, type ForgeAvailability } from './forge/index
 import { isGithubHost } from '../github-hosts.ts';
 import { createGithubDriver } from './forge/github.ts';
 import { onPrClosed, reportPrClosed } from './forge/pr-closed.ts';
+import { hasOpenImprovementPr, settleImprovementPr, watchImprovementRuns } from '../improvement/lifecycle.ts';
 import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, fetchGithubRefStatus, forgetRefStatus, readCachedPrEnds, readCachedRefStatuses, refNumberFromUrl, searchGithubItems, GithubPrNotFoundError, GH_CHECKS_MAX, GH_SEARCH_MAX, GH_REF_STATUS_MAX, forgetGithubListCache } from './github.ts';
 import { ensureLaunchKey } from './launch-key.ts';
 import { openInTerminal } from './open-in-terminal.ts';
@@ -1014,7 +1011,6 @@ async function workflowCatalog(repoRoot: string) {
 // Give both mounts a named response so declaration emit doesn't inline the full catalog twice.
 interface WorkflowCatalogBody extends Awaited<ReturnType<typeof workflowCatalog>> {}
 interface FactoryCheckBody extends FactoryCheckResponse {}
-type FactoryImproveBody = FactoryImproveResponse;
 interface ScoresBody extends ScoresResponse {}
 interface WorkspaceScoresBody extends WorkspaceScoresResponse {}
 interface GroupCompareBody extends GroupResponse {}
@@ -1889,35 +1885,6 @@ export function createApp(deps: ServerDeps) {
     routeSavedScores(project, [{ run, score: event.score }]);
   }, undefined, secretStore, routeSavedScores, (event) => workspaceEvents.emit('score.changed', event));
   deps.onDispose?.(() => scoring.dispose());
-  // Self-improvement (factory D6): runs from the cause queues, and their bookkeeping.
-  const improvement = new ImprovementService({
-    isHarness: async (project) => {
-      const config = await loadWorkspaceConfig();
-      return detectHarnessProject(config.projects, config.factory?.harnessProject) === project.id;
-    },
-    settings: async (project, harness) => {
-      const [workspace, local] = await Promise.all([loadWorkspaceConfig(), loadConfig(project.root)]);
-      return resolveImprovementSettings({ harness, workspace: workspace.factory?.improvement, project: local.factory?.improvement });
-    },
-    prState: async (project, number) => {
-      const forge = resolveForge(await getRepoInfo(project.root));
-      const result = await forge?.prMergeState?.(number, { refresh: true });
-      const state = result?.available ? result.mergeState.state : undefined;
-      return state === 'open' || state === 'merged' || state === 'closed' ? state : undefined;
-    },
-  });
-  const improvementProject = (project: ProjectContext, id: string): ImprovementProject => ({
-    id, root: project.root, dataDir: project.dataDir,
-    listRuns: () => project.store.listRuns(),
-    getRun: (runId) => project.store.getRun(runId),
-    onRun: (listener) => { project.store.on('run', listener); return () => { project.store.off('run', listener); }; },
-    startRun: async (task) => {
-      const [{ workflows }, skills] = await Promise.all([loadWorkflows(project.root), discoverSkills(project.root)]);
-      if (!skills.some((skill) => skill.name === 'improve-factory')) return { error: 'the improve-factory skill is not installed (it needs the owner\'s review first)' };
-      const workflow = workflows.find((entry) => entry.name === 'improve-factory') ?? IMPROVE_FACTORY;
-      return { id: project.manager.startRun(workflow, { task, worktree: true, autonomous: true }).id };
-    },
-  });
   const emitAutomationChange = (
     project: ProjectContext,
     automationId: string,
@@ -5811,12 +5778,6 @@ export function createApp(deps: ServerDeps) {
       return c.json(response);
     })
 
-    .post('/factory/improve', async (c): Promise<Response & TypedResponse<FactoryImproveBody, 200, 'json'>> => {
-      const project = c.get('project');
-      const response: FactoryImproveResponse = await improvement.start(improvementProject(project, project.id), { startedBy: 'owner', manual: true });
-      return c.json(response);
-    })
-
     .get('/runs/:id/scores', paramZodValidator(runIdParamSchema), (c): Response & (
       TypedResponse<RunScoresBody, 200, 'json'> | TypedResponse<{ error: string }, 404 | 409, 'json'>
     ) => {
@@ -6792,6 +6753,7 @@ export function createApp(deps: ServerDeps) {
       const activeRun = store.getRun(id);
       if (!activeRun) return c.json({ error: 'not found' }, 404);
       if (activeRun.replayOf) return c.json({ error: 'Replay variants cannot publish pull requests.' }, 409);
+      if (activeRun.improvementId) return c.json({ error: 'The improvement workflow owns its validated pull request.' }, 409);
       if (manager.isActive(id)) {
         return c.json({
           error: hasPrPublishStep(activeRun.workflowDef)
@@ -8246,7 +8208,7 @@ export function createApp(deps: ServerDeps) {
       paramZodValidator(mergeNumberParams, { message: 'invalid pull request number' }),
       jsonZodValidator(() => mergeBodySchema, { message: 'invalid merge request' }),
       async (c) => {
-        const { root: repoRoot } = c.get('project');
+        const { root: repoRoot, dataDir } = c.get('project');
         const parsedNumber = { data: c.req.valid('param') };
         const body = { data: c.req.valid('json') };
         const forge = await mergeForge(repoRoot);
@@ -8258,6 +8220,10 @@ export function createApp(deps: ServerDeps) {
           // a minute after the user watched this server merge it. Forget it; the next reader asks
           // the forge, gets `merged`, and then stops polling it at all.
           forgetRefStatus(repoRoot, parsedNumber.data.number);
+          if (result.mergeCommitSha) {
+            try { settleImprovementPr(dataDir, result.url, { at: new Date(), mergedCommit: result.mergeCommitSha }); }
+            catch { console.warn('[cezar] improvement merge recording deferred'); }
+          }
           return c.json(result);
         }
         return c.json(
@@ -9799,15 +9765,36 @@ export function createApp(deps: ServerDeps) {
     };
     project.store.on('budget.exceeded', publishBudget);
     const detach = [watchReports(project), watchTasks(project), () => { project.store.off('budget.exceeded', publishBudget); }];
+    let stoppedImprovement = false;
+    let offImprovement: (() => void) | undefined;
+    const pendingPrReads = new Set<number>();
+    void Promise.resolve(project === bootContext ? resolveBootProject() : project.id).then((id) => {
+      if (stoppedImprovement) return;
+      const offRuns = watchImprovementRuns(project.dataDir, project.store, id);
+      const offPr = onPrClosed((root, number) => {
+        if (root !== project.root || pendingPrReads.has(number) || !hasOpenImprovementPr(project.dataDir, id, number)) return;
+        pendingPrReads.add(number);
+        void (async () => {
+          const forge = await mergeForge(root);
+          const result = await forge?.prMergeState?.(number);
+          if (stoppedImprovement || !result?.available) return;
+          const pr = result.mergeState;
+          if (pr.state === 'closed') settleImprovementPr(project.dataDir, pr.url, { at: new Date() });
+          if (pr.state === 'merged' && pr.mergeCommitSha) {
+            const at = new Date(pr.mergedAt ?? Date.now());
+            settleImprovementPr(project.dataDir, pr.url, { at, mergedCommit: pr.mergeCommitSha });
+          }
+        })().catch(() => console.warn('[cezar] improvement PR reconciliation deferred'))
+          .finally(() => pendingPrReads.delete(number));
+      });
+      offImprovement = () => { offRuns(); offPr(); };
+    }).catch(() => undefined);
+    detach.push(() => { stoppedImprovement = true; offImprovement?.(); });
     if (deps.enableFactoryScoring) {
       let stopped = false;
       let offScoring: (() => void) | undefined;
       void Promise.resolve(project === bootContext ? resolveBootProject() : project.id).then((id) => {
-        if (stopped) return;
-        offScoring = scoring.watch({ ...project, id }, deps.factoryScoringRecoveredSince);
-        const offImprovement = improvement.watch(improvementProject(project, id));
-        const offBoth = offScoring;
-        offScoring = () => { offBoth(); offImprovement(); };
+        if (!stopped) offScoring = scoring.watch({ ...project, id }, deps.factoryScoringRecoveredSince);
       }).catch(() => undefined);
       detach.push(() => { stopped = true; offScoring?.(); });
     }

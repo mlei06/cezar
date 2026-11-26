@@ -3,6 +3,8 @@ import { readOnlyEnv } from '../core/read-only-env.ts';
 import { AgentUsageHolds } from '../workspace/agent-usage-holds.ts';
 import { completionReason } from './completion-reason.ts';
 import { prepareReplayCheck, runReplayShell } from './replay-check.ts';
+import { checkImprovementStep, improvementPrSummary, runImprovementDecisions } from '../improvement/lifecycle.ts';
+import { hasImprovementSkill, IMPROVE_FACTORY } from '../improvement/workflow.ts';
 import { resolveReplayHarness, saveStagedReplayDiff, stagedReplay } from './staged-replay.ts';
 import { WorktreeLifecycleCoordinator } from '../worktree-lifecycle/coordinator.ts';
 import type { RunParked, RunSubject, WebhookAttentionRequest, TrackerAssociation, UsageWindowsObservation } from '@open-mercato/cezar-contract';
@@ -1152,6 +1154,8 @@ function formatWakeInstant(at: Date): string {
 }
 
 export interface StartRunInput {
+  /** Set only by the factory source after it claims an improvement batch. */
+  improvementId?: string;
   /** The immutable fork and prompt for an admitted replay, persisted before it enters the queue. */
   replay?: { sourceId: string; startCommit: string; change: string; harness: HarnessVersion; systemPrompt?: string };
   secrets?: RunRecord['secretNames'];
@@ -2356,6 +2360,9 @@ export class RunManager {
     if (plan) {
       input = { ...input, readOnly: true, enforceReadOnly: true };
     }
+    if (workflow.source === 'built-in' && workflow.name === IMPROVE_FACTORY) {
+      input = { ...input, worktree: true, secrets: [], generateFollowups: false };
+    }
     if (workflow.source === 'built-in' && workflow.name === 'implement' && !input.readOnly) {
       input = { ...input, worktree: true };
     }
@@ -2376,7 +2383,7 @@ export class RunManager {
       ...(input.forkRef && input.worktree === false ? { worktree: undefined } : {}),
     };
     const run = this.store.createRun({
-      id: input.scheduledLaunch?.id,
+      id: input.scheduledLaunch?.id ?? input.improvementId,
       title: makeRunTitle(input.task, workflow, input.images?.length) + (group ? ` (${group.variant})` : ''),
       workflow: workflow.name,
       task: input.task,
@@ -2417,6 +2424,7 @@ export class RunManager {
     const budget = workflow.budget ?? input.budget;
     this.store.updateRun(run.id, {
       workflowDef: workflow,
+      ...(input.improvementId ? { improvementId: input.improvementId } : {}),
       ...(input.secrets !== undefined ? { secretNames: input.secrets } : {}),
       ...(budget !== undefined ? { budget: { ...budget, ...input.budget } } : {}),
       ...(input.onBudget !== undefined ? { onBudget: input.onBudget } : {}),
@@ -2501,7 +2509,7 @@ export class RunManager {
     // (under `branchNaming` its branch keeps the default `cez/<id8>`).
     this.pendingBranchNames.set(
       run.id,
-      input.task.trim() && !input.replay ? this.autoNameRun(run.id, skillHint, input.task) : Promise.resolve(undefined),
+      input.task.trim() && !input.replay && !input.improvementId ? this.autoNameRun(run.id, skillHint, input.task) : Promise.resolve(undefined),
     );
     // `default` = no explicit pick; the runner/CLI chose. Never the prompt itself.
     track(
@@ -7393,6 +7401,16 @@ export class RunManager {
       this.store.appendEvent(runId, event);
     };
 
+    if (workflow.source === 'built-in' && workflow.name === IMPROVE_FACTORY && (
+      !original?.improvementId || (!hasImprovementSkill() && process.env.CEZ_DRY_RUN !== '1')
+    )) {
+      const error = original?.improvementId ? 'The approved improve-factory skill is unavailable.'
+        : 'Start this workflow through the factory improvement queue.';
+      this.publishRunFailure(runId, { status: 'failed', error, finishedAt: new Date().toISOString(), currentStepId: undefined });
+      emit({ type: 'lifecycle', message: error });
+      this.dropActive(runId, state);
+      return;
+    }
     if (original?.replayOf) {
       const current = await runHarnessVersion();
       if (state.cancelled) return;
@@ -7469,7 +7487,7 @@ export class RunManager {
     if (
       input.worktree === undefined &&
       config.taskWorkspace === 'in-place' &&
-      !(workflow.source === 'built-in' && workflow.name === 'implement') &&
+      !(workflow.source === 'built-in' && (workflow.name === 'implement' || workflow.name === IMPROVE_FACTORY)) &&
       !defaultable?.groupId &&
       !defaultable?.dispatch &&
       !input.dispatchIntent &&
@@ -7953,7 +7971,7 @@ export class RunManager {
     },
   ): Promise<string | null> {
     const { input, skills, emit, taskBackend, extraSystemPrompt } = ctx;
-    const isImplement = workflow.source === 'built-in' && workflow.name === 'implement';
+    const isImplement = workflow.source === 'built-in' && (workflow.name === 'implement' || workflow.name === IMPROVE_FACTORY);
     const validationChecks = isImplement ? graph.nodes.filter((node) => node.type === 'check') : [];
     let { startImages } = ctx;
     const { startAttachments } = ctx;
@@ -8725,11 +8743,16 @@ export class RunManager {
         if (record()?.worktreeReclaimedAt) await this.restoreReclaimedWorktree(runId);
         const run = record();
         if (!run) return 'failed';
+        const improvement = run.improvementId ? runImprovementDecisions(this.dataDir, run) : undefined;
+        if (improvement && 'error' in improvement) {
+          note(improvement.error, 'danger');
+          return 'failed';
+        }
         // A gate answered "open a full PR": ready for review instead of a draft.
-        const markReady = async (url: string): Promise<boolean> => {
+        const markReady = async (url: string, createdHere = false): Promise<boolean> => {
           // A stored URL can come from the agent's transcript. Confirm the PR belongs
           // to this task branch before changing a PR we did not just find by branch.
-          if (url === run.pullRequestUrl && process.env.CEZ_DRY_RUN !== '1' && !/\/pullrequest\/\d+/.test(url)) {
+          if (!createdHere && url === run.pullRequestUrl && process.env.CEZ_DRY_RUN !== '1' && !/\/pullrequest\/\d+/.test(url)) {
             const target = await resolvePrTarget(run);
             const existing = target && run.worktreePath ? await findBranchPr(run.worktreePath, target) : null;
             if (existing?.url !== url) {
@@ -8747,7 +8770,7 @@ export class RunManager {
           const n = prNumberOfUrl(run.pullRequestUrl);
           outputs.set(node.id, { url: run.pullRequestUrl, number: n ? Number(n) : '' });
           note(`PR already open: ${run.pullRequestUrl}`);
-          return !readyPr || await markReady(run.pullRequestUrl) ? 'created' : 'failed';
+          return !(readyPr || improvement) || await markReady(run.pullRequestUrl) ? 'created' : 'failed';
         }
         const excludedPaths = run.worktreePath
           ? new Set(await currentCheckExclusions(run.worktreePath, state.autosaveExcludedPaths))
@@ -8766,8 +8789,11 @@ export class RunManager {
         const title = node.title ? render(node.title) : undefined;
         const outcome = await createTaskPr({
           repoRoot: this.repoRoot,
-          run: title ? { ...run, title } : run,
-          handoffText: readHandoff(this.dataDir, runId),
+          run: improvement ? { ...run, title: 'Improve factory reliability' } : title ? { ...run, title } : run,
+          handoffText: improvement ? '' : readHandoff(this.dataDir, runId),
+          ...(improvement ? { body: !improvement.harness && improvement.decisions.pullRequestDescription
+            ? this.store.redactRunText(runId, improvement.decisions.pullRequestDescription)
+            : improvementPrSummary(improvement.decisions) } : {}),
           ...(excludedPaths.size ? { excludedPaths: [...excludedPaths] } : {}),
           ...(readyPr ? { draft: false } : {}),
           ...(run.pullRequestUrl && updateExistingPr ? { updateExisting: true } : {}),
@@ -8781,7 +8807,7 @@ export class RunManager {
         if (number) this.store.recordPrRef(runId, { number: Number(number), url: outcome.url, origin: 'created' });
         outputs.set(node.id, { url: outcome.url, number: number ? Number(number) : '' });
         // An adopted PR (the agent opened one already) keeps its own draft state until told.
-        if (readyPr && outcome.updated && !await markReady(outcome.url)) return 'failed';
+        if ((improvement || (readyPr && outcome.updated)) && !await markReady(outcome.url, !outcome.updated)) return 'failed';
         note(`${readyPr ? 'PR (ready for review)' : 'PR'} ${outcome.updated ? 'already open' : 'opened'}: ${outcome.url}`);
         return 'created';
       }
@@ -9480,6 +9506,10 @@ export class RunManager {
   ): Promise<string | null> {
     const launchRecord = this.store.getRun(runId);
     const replay = !!launchRecord?.replayOf;
+    if (launchRecord?.improvementId && step.skill === IMPROVE_FACTORY &&
+      !(state.skills ?? skills).some((candidate) => candidate.name === IMPROVE_FACTORY && candidate.source === 'builtin' && !candidate.extension)) {
+      return 'The approved improve-factory skill is unavailable or shadowed.';
+    }
     const resumeStep = graphHooks?.usageLimitResume;
     let systemPrompt: string | undefined;
     let attachedSkill: string | undefined;
@@ -9953,7 +9983,7 @@ export class RunManager {
     );
     const stepPrivateMcp = !stepDef || !isReadOnlyWorkflow(stepDef);
     const runner = createRunner(stepBackend);
-    const stepMcp = stepPrivateMcp && !replay ? await this.privateMcpForLaunch(stepBackend, onEvent) : [];
+    const stepMcp = stepPrivateMcp && !replay && !launchRecord?.improvementId ? await this.privateMcpForLaunch(stepBackend, onEvent) : [];
     let session: AgentSession;
     state.currentStepId = step.id;
     this.beginUsageInvocation(runId, state, step.id);
@@ -11663,7 +11693,8 @@ export class RunManager {
   ): Promise<NodeJS.ProcessEnv> {
     // A fork's head is untrusted code (Phase 3): like GitHub Actions withholding secrets from fork
     // PRs, its checks get the server env only — the credentials are neither read nor handed over.
-    const untrusted = this.store.getRun(runId)?.untrustedHead === true;
+    const run = this.store.getRun(runId);
+    const untrusted = run?.untrustedHead === true || run?.improvementId !== undefined;
     const resolved = untrusted
       ? { values: {} as Record<string, string>, notes: [] as string[] }
       : await this.secrets.resolve(
@@ -11758,6 +11789,16 @@ export class RunManager {
   ): Promise<{ ok: boolean; output: string; exitCode: number }> {
     const command = step.command as string;
     emit({ type: 'note', stepId: step.id, message: `$ ${command}` });
+    const run = this.store.getRun(runId);
+    if (run?.improvementId) {
+      const result = await checkImprovementStep(this.dataDir, this.repoRoot, state.cwd, run, step.id)
+        .catch(() => ({ ok: false, output: 'Unable to validate this improvement.' }));
+      if (result) {
+        const exitCode = result.ok ? 0 : 1;
+        emit({ type: 'check-output', stepId: step.id, command, text: result.output, exitCode });
+        return { ...result, exitCode };
+      }
+    }
     let sandbox: Awaited<ReturnType<typeof prepareReplayCheck>> | undefined;
     if (this.store.getRun(runId)?.replayOf) {
       try {

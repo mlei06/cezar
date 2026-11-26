@@ -180,6 +180,7 @@ export const improvementClusterSchema = z.object({
 export type ImprovementCluster = z.infer<typeof improvementClusterSchema>;
 export const improvementDecisionsSchema = z.object({
   clusters: z.array(improvementClusterSchema).max(200),
+  pullRequestDescription: z.string().trim().min(1).max(12_000).optional(),
 }).passthrough();
 export type ImprovementDecisions = z.infer<typeof improvementDecisionsSchema>;
 
@@ -200,10 +201,3 @@ export const improvementRecordSchema = z.object({
 }).passthrough();
 export type ImprovementRecord = z.infer<typeof improvementRecordSchema>;
 export const improvementRecordsSchema = z.array(improvementRecordSchema);
-
-/** `POST /factory/improve`: the owner's "Improve now" (spec D6); guards still apply. */
-export const factoryImproveResponseSchema = z.discriminatedUnion('started', [
-  z.object({ started: z.literal(true), improvementId: z.string(), runId: z.string(), causes: z.number().int().nonnegative() }),
-  z.object({ started: z.literal(false), reason: z.string() }),
-]);
-export type FactoryImproveResponse = z.infer<typeof factoryImproveResponseSchema>;

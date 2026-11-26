@@ -170,6 +170,8 @@ export interface ForgePrMergeState {
   headRef: string;
   baseRef: string;
   headSha: string;
+  mergeCommitSha?: string;
+  mergedAt?: string;
   mergeable: 'mergeable' | 'conflicting' | 'unknown';
   reviewDecision: 'approved' | 'changes-requested' | 'review-required' | 'not-required' | 'unknown';
   checks: ForgePrCheck[];
@@ -256,6 +258,8 @@ export interface DraftPrInput {
   run: RunRecord;
   /** The task's handoff.md — becomes the PR body (goal + progress skim). */
   handoffText: string;
+  /** Already prepared and redacted by the factory improvement workflow. */
+  body?: string;
   /** Check-generated paths to leave in the worktree during the final autosave. */
   excludedPaths?: readonly string[];
   /** Open it as a draft. Absent = draft — what every caller got before this flag existed. */
