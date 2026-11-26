@@ -183,3 +183,20 @@ export const selfUpdateDevelopmentSchema = z.object({
   }),
 });
 export type SelfUpdateDevelopment = z.infer<typeof selfUpdateDevelopmentSchema>;
+
+export const releaseHoldInputSchema = z.object({
+  seconds: z.number().int().min(1).max(15 * 60),
+}).strict();
+
+export const releaseHoldParamSchema = z.object({ id: z.string().uuid() });
+export const releaseHoldLeaseSchema = z.object({
+  id: releaseHoldParamSchema.shape.id,
+  expiresAt: z.string().datetime(),
+});
+export type ReleaseHoldLease = z.infer<typeof releaseHoldLeaseSchema>;
+
+export const releaseHoldStatusSchema = releaseHoldLeaseSchema.extend({
+  activeTasks: z.number().int().nonnegative(),
+  activeManagers: z.number().int().nonnegative(),
+});
+export type ReleaseHoldStatus = z.infer<typeof releaseHoldStatusSchema>;

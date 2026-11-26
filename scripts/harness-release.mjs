@@ -10,6 +10,7 @@
 //   flags: --force (skip the idle wait)  --wait-minutes N (default 15)  --no-restart
 //          --health-url URL (default http://127.0.0.1:4321/api/v1/health)  --keep N (default 5)
 //          --unit NAME (default cezar)  --skip-checks (build only; no typecheck/tests)
+//          --hold-new-tasks (lease admission while waiting and switching; needs a compatible live cockpit)
 //          --stage-only (build and check an isolated cockpit; leave the live version active)
 //          --simulate-unhealthy (test the automatic rollback: the new version's health check fails)
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -89,14 +90,53 @@ async function waitForIdle() {
   }
 }
 
-async function healthy() {
+async function withReleaseHold(action) {
+  if (!flag('hold-new-tasks') || flag('force')) {
+    await waitForIdle();
+    return action();
+  }
+  const endpoint = API + '/workspace/factory/release-hold';
+  const seconds = Math.min(15 * 60, Math.ceil(WAIT_MS / 1000));
+  const response = await fetch(endpoint, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ seconds }), signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) throw new Error('Could not hold traffic for a release (HTTP ' + response.status + ').');
+  const lease = await response.json();
+  const path = endpoint + '/' + encodeURIComponent(lease.id);
+  // Leave a minute for restart and health verification within the lease.
+  const deadline = Date.parse(lease.expiresAt) - 60_000;
+  try {
+    log({ action: 'hold', result: 'started', expiresAt: lease.expiresAt });
+    let status = lease;
+    while (Date.now() < deadline) {
+      if (status.activeTasks === 0 && status.activeManagers === 0) {
+        log({ action: 'hold', result: 'idle' });
+        return await action();
+      }
+      say('waiting for ' + status.activeTasks + ' active tasks and ' + status.activeManagers + ' manager turns');
+      await sleep(Math.min(5000, Math.max(0, deadline - Date.now())));
+      status = await getJson(path);
+    }
+    throw Object.assign(new Error('The cockpit did not drain before the release hold deadline.'), { code: 'busy' });
+  } finally {
+    await fetch(path, { method: 'DELETE', signal: AbortSignal.timeout(10_000) }).catch(() => undefined);
+  }
+}
+
+async function healthy(priorRuntime) {
   const deadline = Date.now() + 60_000;
   let last = 'no answer';
   while (Date.now() < deadline) {
     try {
       const res = await fetch(HEALTH, { signal: AbortSignal.timeout(5_000) });
-      if (res.ok) return { ok: true };
-      last = `HTTP ${res.status}`;
+      if (!res.ok) {
+        last = 'HTTP ' + res.status;
+      } else {
+        const runtime = priorRuntime ? (await res.json()).runtimeId : undefined;
+        if (!priorRuntime || runtime && runtime !== priorRuntime) return { ok: true };
+        last = 'the new process has not answered';
+      }
     } catch (error) {
       last = error.message;
     }
@@ -118,20 +158,23 @@ async function selfUpdate(packageRoot) {
   return { ...layout, ...launcher };
 }
 
-function lastSwitch() {
+function lastSwitch(id) {
   if (!existsSync(LOG)) return undefined;
   const lines = readFileSync(LOG, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
-  return lines.reverse().find((e) => (e.action === 'switch' || e.action === 'rollback') && e.result === 'ok');
+  // An automatic rollback's 'from' is the failed candidate, never a rollback target.
+  return lines.reverse().find((e) => e.action === 'switch' && e.result === 'ok' && e.id === id);
 }
 
 async function activateAndVerify(su, id, simulateFailure = false) {
   try {
+    const priorRuntime = flag('no-restart') || simulateFailure ? undefined
+      : (await getJson(HEALTH).catch(() => undefined))?.runtimeId;
     su.activate(id);
     su.writeLaunchers();
     restart();
     if (flag('no-restart')) return { ok: true };
     if (simulateFailure) return { ok: false, reason: 'simulated (--simulate-unhealthy)' };
-    return await healthy();
+    return await healthy(priorRuntime);
   } catch (error) {
     return { ok: false, reason: error.message };
   }
@@ -212,23 +255,19 @@ async function release() {
     say('already the active release');
     return 0;
   }
-  await waitForIdle();
-  const ok = await switchTo(su, linked.id, previous, { action: 'switch', sha });
+  const ok = await withReleaseHold(() => switchTo(su, linked.id, previous, { action: 'switch', sha }));
   pruneBuilds(su, [linked.id, previous].filter(Boolean));
   return ok ? 0 : 1;
 }
 
 async function rollback() {
-  const last = lastSwitch();
-  if (!last?.previous && last?.action !== 'rollback') throw new Error('no previous release recorded to roll back to');
-  const target = last.action === 'rollback' ? last.from : last.previous;
-  if (!target) throw new Error('no previous release recorded to roll back to');
-  const entryRoot = resolve(join(HOME, 'versions', target, 'node_modules', '@open-mercato', 'cezar'));
+  const entryRoot = resolve(join(HOME, 'versions', 'current', 'node_modules', '@open-mercato', 'cezar'));
   const su = await selfUpdate(entryRoot);
   const current = su.activeId();
-  await waitForIdle();
+  const target = lastSwitch(current)?.previous;
+  if (!target || target === current) throw new Error('no previous release recorded to roll back to');
   say(`rolling back ${current} → ${target}`);
-  const ok = await switchTo(su, target, current, { action: 'rollback', from: current });
+  const ok = await withReleaseHold(() => switchTo(su, target, current, { action: 'rollback', from: current }));
   return ok ? 0 : 1;
 }
 
