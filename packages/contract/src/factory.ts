@@ -23,3 +23,11 @@ export const scorerMetadataSchema = z.object({
   }
 });
 export type ScorerMetadata = z.infer<typeof scorerMetadataSchema>;
+
+export const scoreCauseSchema = z.object({
+  category: z.enum(['harness', 'task-setup', 'repository', 'access', 'model', 'requirements', 'external']),
+  target: z.enum(['harness', 'manager-skill', 'workflow', 'skill', 'agents-md', 'docs', 'code', 'brief', 'infra']),
+  evidence: z.string().trim().min(1).max(2000),
+  fix: z.string().trim().min(1).max(2000),
+}).strict();
+export type ScoreCause = z.infer<typeof scoreCauseSchema>;

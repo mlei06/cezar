@@ -217,6 +217,7 @@ const factoryModelRouteSchema = z.object({
 export const workspaceConfigSchema = z
   .object({
     factory: z.object({
+      judge: factoryModelRouteSchema.optional().catch(undefined),
       budget: runBudgetSchema.optional().catch(undefined),
       models: z.object({
         lowReasoning: factoryModelRouteSchema.extend({

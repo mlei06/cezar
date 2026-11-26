@@ -214,6 +214,7 @@ export const INTERNAL_CONSUMERS = {
   naming: { id: 'internal:auto-naming', kind: 'internal', title: 'Auto-naming (task titles, branches)' },
   commit: { id: 'internal:commit-messages', kind: 'internal', title: 'Commit messages' },
   planner: { id: 'internal:planner', kind: 'internal', title: 'Planner' },
+  scoring: { id: 'internal:scoring', kind: 'internal', title: 'Task scoring' },
 } as const satisfies Record<string, LedgerConsumer>;
 
 /**

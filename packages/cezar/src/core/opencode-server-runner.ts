@@ -153,6 +153,8 @@ class OpencodeStatusError extends Error {
 
 /** No session id in the text: the store's secret redaction would print it as `[REDACTED]`. */
 const OPENCODE_MISSING_SESSION = 'opencode no longer has the session this task resumes';
+export const OPENCODE_TOOL_FREE_UNAVAILABLE =
+  'OpenCode judge stateless text generation is unavailable. Check the OpenCode version and judge model.';
 
 /** True only for the runner's own "reopen answered 404" error — never a URL that merely names a session. */
 export function isOpencodeMissingSessionError(message: string): boolean {
@@ -324,7 +326,7 @@ class OpencodeSession implements AgentSession {
   }
 
   sendMessage(content: ContentBlock[]): boolean {
-    if (!this.serverOpen) return false;
+    if (!this.serverOpen || this.spec.noTools) return false;
     if (this.autoEndTimer) {
       clearTimeout(this.autoEndTimer);
       this.autoEndTimer = undefined;
@@ -421,10 +423,12 @@ class OpencodeSession implements AgentSession {
       env.OPENCODE_PASSWORD = this.password;
       // Private MCP servers (spec 2026-10-07-private-project-mcp): OpenCode loads
       // OPENCODE_CONFIG_CONTENT after the project config, so these are added and win on a clash.
-      if (this.spec.mcpServers?.length) {
+      if (!this.spec.noTools && this.spec.mcpServers?.length) {
         env.OPENCODE_CONFIG_CONTENT = opencodeConfigContent(this.spec.mcpServers, env.OPENCODE_CONFIG_CONTENT);
       }
-      if (this.spec.enforceReadOnly) env.OPENCODE_CONFIG_CONTENT = opencodeReadOnlyConfig(env.OPENCODE_CONFIG_CONTENT);
+      if (!this.spec.noTools && this.spec.enforceReadOnly) {
+        env.OPENCODE_CONFIG_CONTENT = opencodeReadOnlyConfig(env.OPENCODE_CONFIG_CONTENT);
+      }
       const [file, argv] = disclaimedCommand(this.bin, ['serve', '--hostname', '127.0.0.1', '--port', String(port)], env);
       child = nodeSpawn(file, argv, { cwd: this.spec.cwd, env, detached: process.platform !== 'win32' });
     } catch (err) {
@@ -605,6 +609,10 @@ class OpencodeSession implements AgentSession {
   }
 
   private async bootstrap(): Promise<void> {
+    if (this.spec.noTools) {
+      await this.generateWithoutTools();
+      return;
+    }
     // Only 1.x is reopened: a 2.x resume still starts a new session, as before.
     const resumeId = this.spec.resume && this.apiVersion === 1 ? this.spec.sessionId : undefined;
     if (resumeId) await this.openSession(await this.reopenSession(resumeId));
@@ -613,6 +621,27 @@ class OpencodeSession implements AgentSession {
       resumeId ? this.spec.resumeSystemPrompt : this.spec.systemPrompt,
       this.spec.userPrompt,
     ));
+  }
+
+  private async generateWithoutTools(): Promise<void> {
+    // The judge reads untrusted text. The stateless route calls the model without
+    // starting the agent loop or inheriting a session's tool permissions.
+    if (this.apiVersion !== 2) throw new Error(OPENCODE_TOOL_FREE_UNAVAILABLE);
+    const id = parseModelIdentity(this.spec.model);
+    const data = await this.http('POST', '/api/experimental/generate/text', {
+      prompt: prependSystemPrompt(this.spec.systemPrompt, this.spec.userPrompt),
+      ...(id ? { model: v2Model(id.provider, id.model) } : {}),
+    }).catch((error: unknown) => {
+      if (error instanceof OpencodeStatusError && (error.status === 404 || error.status === 405)) {
+        throw new Error(OPENCODE_TOOL_FREE_UNAVAILABLE);
+      }
+      throw error;
+    });
+    if (this.stopped) return;
+    const text = stringField(data, 'text') ?? '';
+    this.textChunks.push(text);
+    if (text) this.emit({ type: 'text', text });
+    this.end();
   }
 
   private async createSession(): Promise<Record<string, unknown>> {

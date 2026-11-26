@@ -145,7 +145,7 @@ export class ClaudeCliRunner implements AgentRunner {
     try {
       const env = buildChildEnv({ backend: this.backend, extraEnv: spec.env });
       // `--strict-mcp-config` drops configured servers; claude.ai connectors need their own switch.
-      if (spec.noMcpServers) env.ENABLE_CLAUDEAI_MCP_SERVERS = 'false';
+      if (spec.noMcpServers || spec.noTools) env.ENABLE_CLAUDEAI_MCP_SERVERS = 'false';
       sessionCost = new ClaudeSessionCost(spec.sessionId, spec.resume === true, spec.cwd, env.CLAUDE_CONFIG_DIR);
       // Mock auth replays share one marker directory across worktrees.
       if (this.bin === mockClaudePath()) env.CEZ_HOME = resolvePath(cezarHomeDir(env));
@@ -490,13 +490,14 @@ export function buildClaudeArgs(
   const allowed = buildAllowedTools(spec.allowedTools ?? [], spec.bashAllowlist);
   // Private MCP servers (spec 2026-10-07-private-project-mcp): `--mcp-config` ADDS to the repo's
   // own MCP config, and their tools are allowed — `dontAsk` would deny every one of them otherwise.
-  if (spec.noMcpServers) {
+  if (spec.noTools) args.push('--tools', '');
+  if (spec.noMcpServers || spec.noTools) {
     args.push('--strict-mcp-config');
   } else if (mcpConfigPath && spec.mcpServers?.length) {
     args.push('--mcp-config', mcpConfigPath);
     allowed.push(...claudeMcpAllowRules(spec.mcpServers));
   }
-  if (allowed.length > 0) {
+  if (!spec.noTools && allowed.length > 0) {
     args.push('--allowedTools', allowed.join(','));
   }
   // A prefix rule cannot say "gh api GET only"; the hook can, and its deny outranks the allow rules.
