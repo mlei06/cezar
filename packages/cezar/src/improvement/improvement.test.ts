@@ -4,11 +4,13 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ImprovementRecord, QueuedCause } from '@open-mercato/cezar-contract';
 import { readCauseQueue } from '../factory/causes.ts';
+import { RunStore } from '../runs/store.ts';
 import { atomicWriteJsonSync } from '../workspace/config.ts';
 import {
-  closeImprovement, failImprovement, finishImprovement, mergeImprovement, readImprovementDecisions,
+  checkpointImprovementDecisions, closeImprovement, failImprovement, finishImprovement, mergeImprovement, readImprovementDecisions,
   readImprovementRecords, startImprovement, type ImprovementPaths,
 } from './bookkeeping.ts';
+import { improvementPaths, settleImprovementPr, watchImprovementRuns } from './lifecycle.ts';
 import { improvementDefaults, resolveImprovementSettings } from './settings.ts';
 import { evaluateImprovementTrigger, FAILURE_PAUSE, MAX_BATCH } from './trigger.ts';
 
@@ -136,6 +138,31 @@ describe('improvement bookkeeping', () => {
     finishImprovement(paths, 'imp1', { now, pr: { number: 8 }, decisions: { clusters: [{ id: 'a', causes: ['fix'], decision: 'fixed', reason: 'Done.' }] } });
     closeImprovement(paths, 'imp1', now);
     expect(states()).toMatchObject({ fix: 'open' });
+  });
+
+  it.each([true, false])('recovers an opened PR with decisions checkpointed = %s after its artifact disappears', (checkpointed) => {
+    const store = RunStore.open(root);
+    const run = store.createRun({ id: 'published', task: 'Improve', title: 'Improve', workflow: 'improve-factory', steps: [] });
+    const recorded = improvementPaths(root, false);
+    atomicWriteJsonSync(recorded.queue, [cause('fix')]);
+    startImprovement(recorded, { id: run.id, runId: run.id, projectId: 'fixture', startedBy: 'owner', startedAt: now.toISOString(), batch: [cause('fix')] });
+    const clusters = [{ id: 'verified', causes: ['fix'], decision: 'fixed' as const, reason: 'Checked.' }];
+    if (checkpointed) checkpointImprovementDecisions(recorded, run.id, clusters);
+    const url = 'https://github.com/example/project/pull/17';
+    store.recordPrRef(run.id, { number: 17, url, origin: 'created' });
+    store.updateRun(run.id, { improvementId: run.id, finishedAt: now.toISOString(), status: 'failed' });
+
+    const stop = watchImprovementRuns(root, store, 'fixture');
+    try {
+      expect(readImprovementRecords(recorded.records)).toMatchObject([{ state: 'pr-open', pr: { number: 17, url } }]);
+      expect(states(recorded.queue)).toEqual({ fix: checkpointed ? 'processed' : 'open' });
+      settleImprovementPr(root, url, { at: now });
+      expect(readImprovementRecords(recorded.records)).toMatchObject([{ state: 'closed' }]);
+      expect(states(recorded.queue)).toEqual({ fix: 'open' });
+    } finally {
+      stop();
+      store.flush();
+    }
   });
 
   it('records the merge commit, and treats the harness queue escalation as a return', () => {

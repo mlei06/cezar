@@ -467,6 +467,7 @@ import { parseRemote, resolveForge, type ForgeAvailability } from './forge/index
 import { isGithubHost } from '../github-hosts.ts';
 import { createGithubDriver } from './forge/github.ts';
 import { onPrClosed, reportPrClosed } from './forge/pr-closed.ts';
+import { hasOpenImprovementPr, settleImprovementPr, watchImprovementRuns } from '../improvement/lifecycle.ts';
 import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, fetchGithubRefStatus, forgetRefStatus, readCachedPrEnds, readCachedRefStatuses, refNumberFromUrl, searchGithubItems, GithubPrNotFoundError, GH_CHECKS_MAX, GH_SEARCH_MAX, GH_REF_STATUS_MAX, forgetGithubListCache } from './github.ts';
 import { ensureLaunchKey } from './launch-key.ts';
 import { openInTerminal } from './open-in-terminal.ts';
@@ -6770,6 +6771,7 @@ export function createApp(deps: ServerDeps) {
       const activeRun = store.getRun(id);
       if (!activeRun) return c.json({ error: 'not found' }, 404);
       if (activeRun.replayOf) return c.json({ error: 'Replay variants cannot publish pull requests.' }, 409);
+      if (activeRun.improvementId) return c.json({ error: 'The improvement workflow owns its validated pull request.' }, 409);
       if (manager.isActive(id)) {
         return c.json({
           error: hasPrPublishStep(activeRun.workflowDef)
@@ -8224,7 +8226,7 @@ export function createApp(deps: ServerDeps) {
       paramZodValidator(mergeNumberParams, { message: 'invalid pull request number' }),
       jsonZodValidator(() => mergeBodySchema, { message: 'invalid merge request' }),
       async (c) => {
-        const { root: repoRoot } = c.get('project');
+        const { root: repoRoot, dataDir } = c.get('project');
         const parsedNumber = { data: c.req.valid('param') };
         const body = { data: c.req.valid('json') };
         const forge = await mergeForge(repoRoot);
@@ -8236,6 +8238,10 @@ export function createApp(deps: ServerDeps) {
           // a minute after the user watched this server merge it. Forget it; the next reader asks
           // the forge, gets `merged`, and then stops polling it at all.
           forgetRefStatus(repoRoot, parsedNumber.data.number);
+          if (result.mergeCommitSha) {
+            try { settleImprovementPr(dataDir, result.url, { at: new Date(), mergedCommit: result.mergeCommitSha }); }
+            catch { console.warn('[cezar] improvement merge recording deferred'); }
+          }
           return c.json(result);
         }
         return c.json(
@@ -9805,6 +9811,31 @@ export function createApp(deps: ServerDeps) {
     };
     project.store.on('budget.exceeded', publishBudget);
     const detach = [watchReports(project), watchTasks(project), () => { project.store.off('budget.exceeded', publishBudget); }];
+    let stoppedImprovement = false;
+    let offImprovement: (() => void) | undefined;
+    const pendingPrReads = new Set<number>();
+    void Promise.resolve(project === bootContext ? resolveBootProject() : project.id).then((id) => {
+      if (stoppedImprovement) return;
+      const offRuns = watchImprovementRuns(project.dataDir, project.store, id);
+      const offPr = onPrClosed((root, number) => {
+        if (root !== project.root || pendingPrReads.has(number) || !hasOpenImprovementPr(project.dataDir, id, number)) return;
+        pendingPrReads.add(number);
+        void (async () => {
+          const forge = await mergeForge(root);
+          const result = await forge?.prMergeState?.(number);
+          if (stoppedImprovement || !result?.available) return;
+          const pr = result.mergeState;
+          if (pr.state === 'closed') settleImprovementPr(project.dataDir, pr.url, { at: new Date() });
+          if (pr.state === 'merged' && pr.mergeCommitSha) {
+            const at = new Date(pr.mergedAt ?? Date.now());
+            settleImprovementPr(project.dataDir, pr.url, { at, mergedCommit: pr.mergeCommitSha });
+          }
+        })().catch(() => console.warn('[cezar] improvement PR reconciliation deferred'))
+          .finally(() => pendingPrReads.delete(number));
+      });
+      offImprovement = () => { offRuns(); offPr(); };
+    }).catch(() => undefined);
+    detach.push(() => { stoppedImprovement = true; offImprovement?.(); });
     if (deps.enableFactoryScoring) {
       let stopped = false;
       let offScoring: (() => void) | undefined;

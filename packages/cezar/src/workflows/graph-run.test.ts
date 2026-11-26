@@ -14,7 +14,13 @@ import * as taskPr from '../server/forge/task-pr.ts';
 import { apiRequest } from '../server/loopback-request.testkit.ts';
 import { createApp } from '../server/server.ts';
 import * as templates from './templates.ts';
-import { RunStore } from '../runs/store.ts';
+import { artifactsDir, RunStore } from '../runs/store.ts';
+import { improvementPaths, watchImprovementRuns } from '../improvement/lifecycle.ts';
+import { startFactoryImprovement } from '../improvement/start.ts';
+import { IMPROVEMENT_DECISIONS } from '../improvement/workflow.ts';
+import { readCauseQueue } from '../factory/causes.ts';
+import { readImprovementRecords } from '../improvement/bookkeeping.ts';
+import { atomicWriteJsonSync } from '../workspace/config.ts';
 import { runHarnessVersion } from '../self-update/run-version.ts';
 import { graphToSteps, type WorkflowGraph } from './graph.ts';
 import { loadWorkflows, resolveWorkflowModelAlias } from './load.ts';
@@ -103,6 +109,103 @@ describe('graph workflows run through RunManager', () => {
     vi.stubEnv('CEZ_CODEX_BIN', sandbox);
     vi.stubEnv('FIXTURE_PASSWORD', 'fixture-secret');
   }
+
+  it('limits the built-in improvement workflow to its claimed batch', async () => {
+    const workflow = await builtin('improve-factory');
+    const original = manager.startRun(workflow, { task: 'mock:done', runner: 'codex' });
+    await vi.waitFor(() => expect(store.getRun(original.id)).toMatchObject({
+      status: 'failed', error: 'Start this workflow through the factory improvement queue.',
+      steps: expect.arrayContaining([expect.objectContaining({ id: 'work', status: 'pending' })]),
+    }));
+  });
+
+  it('claims one runnable improvement and settles its decisions without publishing an empty PR', async () => {
+    await builtin('improve-factory');
+    const dataDir = join(repoRoot, '.ai/cezar');
+    const project = { id: 'test-project', root: repoRoot, dataDir, store, manager };
+    const paths = improvementPaths(dataDir, false);
+    const at = new Date().toISOString();
+    const ids = ['one', 'two', 'three', 'four', 'five'];
+    atomicWriteJsonSync(paths.queue, ids.map((id) => ({
+      id, at, projectId: project.id, runId: 'source-' + id, scorer: 'efficiency', label: 'wasteful',
+      state: 'open', reasoning: 'A fixture for the improvement engine.',
+      cause: { category: 'task-setup', target: 'workflow', evidence: 'mock:done', fix: 'Review it.' },
+    })));
+    writeFileSync(join(repoRoot, '.ai', 'agentic.config.json'), JSON.stringify({ validation: { commands: ['exit 23'] } }));
+    const start = manager.startRun.bind(manager);
+    vi.spyOn(manager, 'startRun').mockImplementation((workflow, input) => {
+      expect(input.improvementId).toBeDefined();
+      atomicWriteJsonSync(join(artifactsDir(dataDir, input.improvementId!), IMPROVEMENT_DECISIONS), {
+        clusters: [{ id: 'invalid-fixture', causes: ids, decision: 'dismissed', reason: 'Synthetic only.' }],
+      });
+      return start(workflow, { ...input, runner: 'codex' });
+    });
+    const stop = watchImprovementRuns(dataDir, store, project.id);
+    try {
+      const results = await Promise.all(Array.from({ length: 2 }, () => startFactoryImprovement(project, 'automation')));
+      const admitted = results.flatMap((result) => 'run' in result ? [result.run] : []);
+      expect(admitted).toHaveLength(1);
+      const settled = await settle(admitted[0]!.id);
+      expect(settled.status).toMatch(/done|review/);
+      expect(settled.pullRequestUrl).toBeUndefined();
+      expect(readCauseQueue(paths.queue).every(({ state }) => state === 'dismissed')).toBe(true);
+      expect(readImprovementRecords(paths.records)).toMatchObject([
+        { runId: settled.id, state: 'closed', causeIds: ids },
+      ]);
+      expect(store.readEvents(settled.id)).toContainEqual(expect.objectContaining({
+        type: 'check-output', text: 'No code changed. Project code validation skipped.',
+      }));
+    } finally {
+      stop();
+    }
+  }, 25_000);
+
+  it.each([false, true])('publishes the validated improvement head when the project check changes HEAD = %s', async (changesHead) => {
+    await builtin('improve-factory');
+    const dataDir = join(repoRoot, '.ai/cezar');
+    const project = { id: 'test-project', root: repoRoot, dataDir, store, manager };
+    const paths = improvementPaths(dataDir, false);
+    atomicWriteJsonSync(paths.queue, [{
+      id: 'cause', projectId: project.id, runId: 'fixture-run', scorer: 'efficiency', label: 'wasteful',
+      at: new Date().toISOString(), state: 'open', reasoning: 'Fixture improvement.',
+      cause: { category: 'task-setup', target: 'workflow', evidence: 'Synthetic cause.', fix: 'Test publication.' },
+    }]);
+    const command = changesHead
+      ? 'printf unchecked > late.ts; git add late.ts && git -c user.name=fixture -c user.email=fixture@example.test commit -qm unchecked'
+      : 'true';
+    writeFileSync(join(repoRoot, '.ai', 'agentic.config.json'), JSON.stringify({ validation: { commands: [command] } }));
+    const start = CodexAppServerRunner.prototype.startSession;
+    const launch = vi.spyOn(CodexAppServerRunner.prototype, 'startSession').mockImplementationOnce(function (this: CodexAppServerRunner, ...args) {
+      const { cwd, env } = args[0];
+      writeFileSync(join(cwd, 'fix.ts'), '// Checked change\n');
+      atomicWriteJsonSync(join(env!.CEZ_ARTIFACTS_DIR!, IMPROVEMENT_DECISIONS), {
+        clusters: [{ id: 'fix', causes: ['cause'], decision: 'fixed', reason: 'Implemented the fixture change.' }],
+      });
+      return start.apply(this, args);
+    });
+    const stop = watchImprovementRuns(dataDir, store, project.id);
+    try {
+      const admitted = await startFactoryImprovement(project, 'owner');
+      expect(admitted).toHaveProperty('run');
+      if (!('run' in admitted)) throw new Error(admitted.reason);
+      const settled = await settle(admitted.run.id);
+      expect(settled.graphState?.outputs?.['factory-check']).toMatchObject({ checkedHead: expect.stringMatching(/^[0-9a-f]{40}$/) });
+      if (changesHead) {
+        expect(settled.pullRequestUrl).toBeUndefined();
+        expect(store.readEvents(settled.id)).toContainEqual(expect.objectContaining({
+          type: 'note', message: expect.stringContaining('the checked commit changed before publication'),
+        }));
+        expect(readCauseQueue(paths.queue)[0]?.state).toBe('open');
+      } else {
+        expect(settled.pullRequestUrl).toMatch(/\/777$/);
+        expect(readImprovementRecords(paths.records)).toMatchObject([{ state: 'pr-open', clusters: [{ id: 'fix' }] }]);
+        expect(readCauseQueue(paths.queue)[0]?.state).toBe('processed');
+      }
+    } finally {
+      stop();
+      launch.mockRestore();
+    }
+  }, 30_000);
 
   it.skipIf(process.platform !== 'linux')('replays a saved check workflow in a group from its original commit', async () => {
     stubReplaySandbox();

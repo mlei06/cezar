@@ -102,6 +102,16 @@ describe('createDraftPr pre-PR autosave (#471 follow-up)', () => {
     expect(outcome.ok).toBe(true);
     expect(warn).not.toHaveBeenCalled();
   });
+
+  it('publishes only the checked commit for improvement tasks', async () => {
+    const { stdout } = await git(['rev-parse', 'HEAD']);
+    const expectedHead = stdout.trim();
+    expect(await createDraftPr({ ...input(), expectedHead })).toMatchObject({ ok: true });
+    writeFileSync(join(repo, 'late.txt'), 'Change after validation\n');
+    expect(await createDraftPr({ ...input(), expectedHead })).toEqual({
+      ok: false, error: 'the checked commit changed before publication',
+    });
+  });
 });
 
 /** The `draft` flag reaches `gh pr create`: absent keeps the draft every caller had before it

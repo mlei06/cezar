@@ -6,7 +6,8 @@ import { loadConfig, type CezConfig } from '../config.ts';
 import { runnerSupportsReasoningEffort, type RunnerId } from '../core/agent-runner.ts';
 import { loadWorkspaceConfig } from '../workspace/config.ts';
 import { graphIssues, graphToSteps, workflowGraphFileSchema } from './graph.ts';
-import { ASSESS_IMPACT_WORKFLOW, BUILT_IN_GRAPH_WORKFLOWS, HIGH_REASONING_MODEL_ALIAS, implementWorkflow, LOW_REASONING_MODEL_ALIAS } from './templates.ts';
+import { ASSESS_IMPACT_WORKFLOW, BUILT_IN_GRAPH_WORKFLOWS, HIGH_REASONING_MODEL_ALIAS, implementWorkflow, improveFactoryWorkflow, LOW_REASONING_MODEL_ALIAS } from './templates.ts';
+import { IMPROVE_FACTORY } from '../improvement/workflow.ts';
 import { chooseTaskAgent, type AccountOption } from '../managers/task-agent-choice.ts';
 import {
   QUICK_TASK_WORKFLOW,
@@ -140,13 +141,15 @@ export async function loadWorkflows(
     ...[QUICK_TASK_WORKFLOW, ASSESS_IMPACT_WORKFLOW, ...BUILT_IN_GRAPH_WORKFLOWS]
       .filter((w) => !fileNames.has(w.name) && w.name !== 'implement'),
   ];
-  if (!fileNames.has('implement')) {
+  if (!fileNames.has('implement') || !fileNames.has(IMPROVE_FACTORY)) {
     try {
-      workflows.push(implementWorkflow(await validationCommands(repoRoot)));
+      const commands = await validationCommands(repoRoot);
+      if (!fileNames.has('implement')) workflows.push(implementWorkflow(commands));
+      if (!fileNames.has(IMPROVE_FACTORY)) workflows.push(improveFactoryWorkflow(commands));
     } catch (err) {
       issues.push({
         path: join(repoRoot, validationConfigPath),
-        message: `cannot construct the implement workflow: ${err instanceof Error ? err.message : String(err)}`,
+        message: `cannot construct the ${fileNames.has('implement') ? IMPROVE_FACTORY : 'implement'} workflow: ${err instanceof Error ? err.message : String(err)}`,
       });
     }
   }
