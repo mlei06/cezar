@@ -185,3 +185,7 @@ The live cockpit released `a0766b2` through its named workflow. Staging, the aut
 ### Factory scoring visibility
 
 The Factory view received pending and error counts but only rendered pass rates. A regression reproduced the hidden counts. The fix reuses the existing summary and score events. In the second two-manager exercise on the prior release, both Efficiency scores arrived within 18 seconds. Outcome took 24.6 and 76.7 seconds.
+
+### M6 release review
+
+The live cockpit released `f1c8724` through the protected workflow. #38 passed 18,684 full-suite tests plus unit, build and package checks. Installed fixture automation recorded an access failure before dependent work and kept one CI task across restart and repeated polls. The installed Factory view exposed the real-route benchmark matrix and its artifact. The stateless provider omitted cost, so the matrix preserved measured time and displayed cost as unavailable.
