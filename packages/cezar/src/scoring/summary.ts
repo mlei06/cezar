@@ -1,4 +1,4 @@
-import type { CauseQueueCounts, ScoreGroup, ScoresQuery, ScoresResponse } from '@open-mercato/cezar-contract';
+import type { CauseQueueCounts, GroupVariant, ScoreGroup, ScoresQuery, ScoresResponse } from '@open-mercato/cezar-contract';
 import { projectCauseQueuePath, readCauseQueue } from '../factory/causes.ts';
 import type { RunRecord } from '../runs/store.ts';
 import { readRunScores } from './store.ts';
@@ -45,5 +45,18 @@ export function aggregateScores(dataDir: string, runs: readonly RunRecord[], que
     return { groups: sorted, queue: { counts, openCauses } };
   } catch {
     return { groups: sorted, queue: null };
+  }
+}
+
+
+export function groupScoreColumns(dataDir: string, run: RunRecord): NonNullable<GroupVariant['scores']> {
+  if (!run.finishedAt) return [];
+  try {
+    return Object.entries(readRunScores(dataDir, run.id)).flatMap(([scorer, entry]) => {
+      if (entry.status !== 'scored' || entry.finishedAt !== run.finishedAt) return [];
+      return [{ scorer, label: entry.score.label, pass: entry.score.pass }];
+    });
+  } catch {
+    return [];
   }
 }

@@ -1094,6 +1094,8 @@ export const groupVariantSchema = z.object({
   inputTokens: usageCounterSchema.optional(),
   outputTokens: usageCounterSchema.optional(),
   costUsd: z.number().optional(),
+  activeMs: usageCounterSchema.optional(),
+  scores: z.array(scoreColumnSchema.extend({ scorer: z.string() })).optional(),
   diffStat: z.string(),
   /** First lines of the handoff journal's "## Progress log" section, as markdown. */
   handoffExcerpt: z.string(),

@@ -301,7 +301,7 @@ import { readRunUserMessages } from '../runs/user-messages.ts';
 import { summarizeRunMetrics } from '../runs/task-metrics.ts';
 import { ScoringService, type ScoringProject, type SettledScore } from '../scoring/service.ts';
 import { readRunScores } from '../scoring/store.ts';
-import { aggregateScores } from '../scoring/summary.ts';
+import { aggregateScores, groupScoreColumns } from '../scoring/summary.ts';
 import { checkFactory } from '../factory/check.ts';
 import { detectHarnessProject, harnessCauseQueuePath, projectCauseQueuePath, readCauseQueue, recordCauses, routeCauses } from '../factory/causes.ts';
 import { byLastActivityDesc, compareIsoDesc, lastActivityAt, readRunIndexDiagnostic, readRunIndexFromDisk } from '../runs/run-index.ts';
@@ -7017,22 +7017,27 @@ export function createApp(deps: ServerDeps) {
       const runs = groupRuns(store, c.req.param('groupId'));
       if (runs.length === 0) return c.json({ error: 'not found' }, 404);
       const detailed = await Promise.all(
-        runs.map(async (r): Promise<GroupVariant> => ({
-          id: r.id,
-          variant: r.variant ?? '?',
-          title: r.title,
-          status: r.status,
-          archived: r.archived,
-          tokensUsed: r.tokensUsed,
-          ...(r.inputTokens !== undefined ? { inputTokens: r.inputTokens } : {}),
-          ...(r.outputTokens !== undefined ? { outputTokens: r.outputTokens } : {}),
-          ...(r.costUsd !== undefined ? { costUsd: r.costUsd } : {}),
-          diffStat:
-            r.worktreePath && existsSync(r.worktreePath)
-              ? await worktreeDiffStat(r.worktreePath, r.baseBranch ?? 'HEAD')
-              : '',
-          handoffExcerpt: handoffProgressExcerpt(readHandoff(dataDir, r.id)),
-        })),
+        runs.map(async (r): Promise<GroupVariant> => {
+          const scores = groupScoreColumns(dataDir, r);
+          return {
+            id: r.id,
+            variant: r.variant ?? '?',
+            title: r.title,
+            status: r.status,
+            archived: r.archived,
+            tokensUsed: r.tokensUsed,
+            ...(r.inputTokens !== undefined ? { inputTokens: r.inputTokens } : {}),
+            ...(r.outputTokens !== undefined ? { outputTokens: r.outputTokens } : {}),
+            ...(r.costUsd !== undefined ? { costUsd: r.costUsd } : {}),
+            ...(r.activeMs !== undefined ? { activeMs: r.activeMs } : {}),
+            ...(scores.length ? { scores } : {}),
+            diffStat:
+              r.worktreePath && existsSync(r.worktreePath)
+                ? await worktreeDiffStat(r.worktreePath, r.baseBranch ?? 'HEAD')
+                : '',
+            handoffExcerpt: handoffProgressExcerpt(readHandoff(dataDir, r.id)),
+          };
+        }),
       );
       return c.json({
         groupId: c.req.param('groupId'),

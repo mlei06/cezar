@@ -28,6 +28,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { toast } from '@/components/ui/toaster'
 import { deriveAttention, isIdleClosed } from '@/lib/attention'
+import { formatDuration } from '@/lib/format'
 import { groupTitle } from '@/lib/task-groups'
 import { TERMINAL_STATUSES, formatCost } from '@/lib/tasks-table'
 import { usageMetricVisibility } from '@/lib/token-metrics'
@@ -277,6 +278,25 @@ function VariantColumn({
           </span>
         ) : null}
       </div>
+
+      {variant.scores?.length || variant.activeMs !== undefined ? (
+        <dl aria-label="Scores and active time" className="grid grid-cols-[1fr_auto] items-center gap-x-2 gap-y-1 text-label">
+          {variant.activeMs !== undefined ? (
+            <div className="contents">
+              <dt className="text-muted-foreground">Active time</dt>
+              <dd className="font-mono tabular-nums">{formatDuration(variant.activeMs)}</dd>
+            </div>
+          ) : null}
+          {variant.scores?.map((score) => (
+            <div className="contents" key={score.scorer}>
+              <dt className="min-w-0 truncate capitalize text-muted-foreground" title={score.scorer}>{score.scorer}</dt>
+              <dd>
+                <Pill dot={score.pass ? 'success' : 'danger'} title={score.label}>{score.pass ? 'Pass' : 'Fail'}</Pill>
+              </dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
 
       {/* Honestly labeled: this block is git's own `git diff --stat` output from the variant's
           worktree, not this UI's ± stat — the numbers can disagree with a partial fetch. */}

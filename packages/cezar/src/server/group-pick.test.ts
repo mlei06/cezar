@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { groupResponseSchema } from '@open-mercato/cezar-contract';
+import { writeRunScore } from '../scoring/store.ts';
 import { RunStore, type RunRecord } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
 import { createApp } from './server.ts';
@@ -80,6 +82,25 @@ describe('POST /api/v1/groups/:groupId/pick — review gate', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ runId: id }),
     });
+
+  it('compares the current score and active time for a group member', async () => {
+    const run = winnerRun();
+    const at = '2026-01-02T00:00:00.000Z';
+    store.updateRun(run.id, { activeMs: 12_000, finishedAt: at });
+    writeRunScore(join(repoRoot, '.ai/cezar'), run.id, 'outcome', {
+      status: 'scored', finishedAt: at, score: {
+        scorer: 'outcome', label: 'delivered', pass: true, score: 1, reasoning: 'fixture result',
+        causes: [], evidence: [], at, judge: { runner: 'codex', transcriptChars: 100, shortened: false },
+      },
+    });
+    writeRunScore(join(repoRoot, '.ai/cezar'), run.id, 'scope', {
+      status: 'pending', finishedAt: at, retryAt: at, outages: 0,
+    });
+    const response = await apiRequest(app, '/api/v1/groups/g1');
+    expect(groupResponseSchema.parse(await response.json()).runs[0]).toMatchObject({
+      activeMs: 12_000, scores: [{ scorer: 'outcome', label: 'delivered', pass: true }],
+    });
+  });
 
   it('gate off (default): a changed winner stays done', async () => {
     delete process.env.CEZ_REVIEW_GATE;

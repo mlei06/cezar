@@ -118,6 +118,24 @@ async function waitForColumns(count: number) {
 // ---- the columns ------------------------------------------------------------------------------
 
 describe('the compare columns', () => {
+  it('shows score verdicts and active time beside the other variant metrics', async () => {
+    stubFetch(group(variant('A', 'done', {
+      activeMs: 12_000,
+      scores: [{ scorer: 'outcome', label: 'delivered', pass: true }],
+    }), variant('B', 'done', {
+      activeMs: 25_000,
+      scores: [{ scorer: 'outcome', label: 'partial', pass: false }],
+    })))
+    renderCompare()
+    await waitForColumns(2)
+
+    const [a, b] = columns()
+    expect(a?.textContent).toContain('Active time12s')
+    expect(a?.textContent).toContain('outcomePass')
+    expect(b?.textContent).toContain('Active time25s')
+    expect(b?.textContent).toContain('outcomeFail')
+  })
+
   it('renders a column per variant: letter, status pill, spend, --stat text, Progress excerpt', async () => {
     stubFetch(group(variant('A', 'review'), variant('B', 'done')))
     renderCompare()
