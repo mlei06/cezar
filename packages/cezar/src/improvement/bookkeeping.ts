@@ -98,6 +98,11 @@ export function startImprovement(paths: ImprovementPaths, input: {
   return record;
 }
 
+/** Preserve the validated decisions before handing publication to a forge. */
+export function checkpointImprovementDecisions(paths: ImprovementPaths, id: string, clusters: ImprovementDecisions['clusters']): void {
+  updateRecord(paths.records, id, (record) => ({ ...record, clusters }));
+}
+
 /**
  * Apply a finished run's decisions (spec D6 bookkeeping): fixed causes are processed, dismissed
  * ones dismissed, escalated ones move to the harness queue, and deferred or undecided ones

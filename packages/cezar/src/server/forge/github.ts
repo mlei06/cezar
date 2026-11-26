@@ -7,7 +7,7 @@ import { autosaveCommit, taskRemotes } from '../../git-worktree.ts';
 import { parseRemote, splitRemoteRef } from '../../git-remotes.ts';
 import { GITHUB_COM, isGithubHost } from '../../github-hosts.ts';
 import { baseDivergence, rewriteLeaseArg } from '../git-changes.ts';
-import { getRepoInfo } from '../git.ts';
+import { getHeadCommit, getRepoInfo } from '../git.ts';
 import { fetchIssueMetadata } from './github-issue-metadata.ts';
 import { reportPrClosed } from './pr-closed.ts';
 import type {
@@ -2891,6 +2891,10 @@ export async function createDraftPr(input: DraftPrInput): Promise<DraftPrOutcome
     return { ok: false, error: 'could not commit the final changes — check git status in the worktree' };
   }
 
+  if (input.expectedHead && await getHeadCommit(worktree) !== input.expectedHead) {
+    return { ok: false, error: 'the checked commit changed before publication' };
+  }
+
   // DRY-RUN (CEZ_DRY_RUN=1): no push, no gh — simulate success with a fake PR
   // URL so the whole review → PR flow is testable without GitHub.
   if (process.env.CEZ_DRY_RUN === '1') {
@@ -2912,11 +2916,12 @@ export async function createDraftPr(input: DraftPrInput): Promise<DraftPrOutcome
     return { ok: false, error: nothingToPropose(branch, prBase) };
   }
 
-  let push = await execTool(['push', '-u', remotes.push, branch], worktree, 'git', PUSH_TIMEOUT_MS);
+  const refspec = input.expectedHead ? `${input.expectedHead}:refs/heads/${branch}` : branch;
+  let push = await execTool(['push', '-u', remotes.push, refspec], worktree, 'git', PUSH_TIMEOUT_MS);
   if (!push.ok && /\[rejected\]|non-fast-forward/.test(push.stderr)) {
     // A rebased branch is rejected as non-fast-forward; lease only against a tip this branch held (#1758).
     const lease = await rewriteLeaseArg(worktree, remotes.push, branch, [run.baseBranch, prBase]);
-    if (lease) push = await execTool(['push', lease, '-u', remotes.push, branch], worktree, 'git', PUSH_TIMEOUT_MS);
+    if (lease) push = await execTool(['push', lease, '-u', remotes.push, refspec], worktree, 'git', PUSH_TIMEOUT_MS);
   }
   if (!push.ok) {
     return { ok: false, error: `git push failed — ${tail(push.stderr) || 'unknown error'}` };

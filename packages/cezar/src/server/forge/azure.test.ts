@@ -107,7 +107,13 @@ describe('createAzureDriver (spec 2026-11-24-azure-repos-forge-driver)', () => {
         },
       });
       const input = { repoRoot: repo, run: { ...run, worktreePath: repo, branch: 'cez/12345678', baseBranch: 'main' }, handoffText: '' };
-      expect(await driver.createPR(input)).toEqual({ ok: true, url: `${WEB}/pullrequest/12`, dryRun: false });
+      const base = git('rev-parse', 'HEAD').toString().trim();
+      expect(await driver.createPR({ ...input, expectedHead: base })).toEqual({
+        ok: false, error: 'the checked commit changed before publication',
+      });
+      expect(api.calls).toEqual([]);
+      const validated = git('rev-parse', 'HEAD').toString().trim();
+      expect(await driver.createPR({ ...input, expectedHead: validated })).toEqual({ ok: true, url: `${WEB}/pullrequest/12`, dryRun: false });
       expect(await driver.createPR(input)).toEqual({ ok: true, url: `${WEB}/pullrequest/12`, dryRun: false, updated: true });
       const posts = api.calls.filter((call) => call.method === 'POST');
       expect(posts).toHaveLength(1);
