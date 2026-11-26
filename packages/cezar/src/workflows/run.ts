@@ -1269,6 +1269,17 @@ export const PROJECT_INSTRUCTIONS_HEADING =
 
 const MANAGER_TASK_SYSTEM_PROMPT = 'A cezar manager started this task. Do not merge pull requests or enable automations: leave that to the user.';
 
+const REPLAY_EXTERNAL_NODE_PORTS: Readonly<Partial<Record<ExecutableNode['type'], string>>> = {
+  'git.push': 'done',
+  'git.sync-base': 'done',
+  'github.draft-pr': 'nothing',
+  'github.pr-comment': 'done',
+  'github.pr-update': 'done',
+  'github.issue-comment': 'done',
+  'github.wait-ci': 'failed',
+  'notify.webhook': 'done',
+};
+
 /**
  * Joins the parts of one agent step's system prompt in fixed order — skill
  * body (most task-specific), then the run's extra prompt (user guidance, can
@@ -3775,6 +3786,7 @@ export class RunManager {
     if (!this.dispatchEnabled()) return { refused: 'dispatch is disabled on this cockpit (CEZ_DISPATCH=0) — the operator turned it off. Do not substitute sub-agents or do the delegated work yourself: stop and report that dispatch is disabled.' };
     const parent = this.store.getRun(parentId);
     if (!parent) return { refused: `no such run: ${parentId}` };
+    if (parent.replayOf) return { refused: 'Replay variants cannot spawn ordinary tasks.' };
     if (isTerminalStatus(parent.status)) return { refused: `run ${parentId} has already settled (${parent.status})` };
     const note = (message: string, tone?: 'danger') =>
       this.store.appendEvent(parentId, { type: 'note', stepId: this.active.get(parentId)?.currentStepId, message, ...(tone ? { tone } : {}) });
@@ -8395,6 +8407,11 @@ export class RunManager {
     const note = (message: string, tone?: 'danger') =>
       emit({ type: 'note', stepId: node.id, message, ...(tone ? { tone } : {}) });
     const record = () => this.store.getRun(runId);
+    const replayPort = REPLAY_EXTERNAL_NODE_PORTS[node.type];
+    if (replayPort && record()?.replayOf) {
+      note('External operation skipped during replay.');
+      return replayPort;
+    }
     const prNumber = (): number | undefined => {
       const run = record();
       const ref = run?.prRefs?.find((r) => r.origin === 'created') ?? run?.prRefs?.[0];

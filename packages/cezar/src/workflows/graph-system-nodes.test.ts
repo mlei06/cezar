@@ -82,6 +82,30 @@ describe('graph system nodes', () => {
   const parkedAt = (node: string) => (r: RunRecord) =>
     r.status === 'waiting' && r.steps.find((s) => s.id === node)?.status === 'waiting';
 
+  it('keeps external graph operations out of a replay', async () => {
+    const replay = manager.startRun(def({
+      nodes: [
+        { id: 'start', type: 'start' },
+        { id: 'push', type: 'git.push' },
+        { id: 'pr', type: 'github.draft-pr' },
+        { id: 'comment', type: 'github.issue-comment', issue: 1, body: 'fixture' },
+        { id: 'notice', type: 'notify.webhook', url: 'https://example.invalid/hook' },
+      ],
+      edges: [
+        { from: 'start.next', to: 'push' },
+        { from: 'push.done', to: 'pr' },
+        { from: 'pr.nothing', to: 'comment' },
+        { from: 'comment.done', to: 'notice' },
+      ],
+    }), { task: 'Repeat the workflow.' });
+    store.updateRun(replay.id, { replayOf: 'baseline' });
+    const settled = await until(replay.id, terminal);
+    expect(settled.status).toMatch(/review|done/);
+    expect(settled.pullRequestUrl).toBeUndefined();
+    expect(store.readEvents(replay.id).filter((event) => event.message === 'External operation skipped during replay.')
+      .map((event) => event.stepId)).toEqual(['push', 'pr', 'comment', 'notice']);
+  });
+
   const GATE: WorkflowGraph = {
     nodes: [
       { id: 'start', type: 'start' },
