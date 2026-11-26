@@ -2,7 +2,7 @@
 
 The overseer's resume point for the self-improving factory build. Updated and pushed at every milestone step and every overseer decision, so the work survives a crashed machine or a new session. Read this first, then the roadmap's Progress table and the observation log.
 
-Last updated: 2026-11-26 05:32 UTC.
+Last updated: 2026-11-26 05:41 UTC.
 
 ## Where the build stands
 
@@ -11,8 +11,8 @@ Last updated: 2026-11-26 05:32 UTC.
 - **M1 PRs:** #2 (known host test failures), #3 (secret descriptions), #4 (workflow budgets and agent-step secrets), #5 (typecheck repair), #6 (built-in `implement`, `plan`, `operate`), #7 (the capability block), #8 (manager discovery and task flags), #9 (`manage-project` update), #10 (test-resource rules in `factory-work`).
 - **M1 follow-ups** (from reviews, not blocking): generated validation checks get an explicit secrets allowlist; forge-adapter-level draft-PR assertions; check-artifact exclusions survive a cockpit restart (tracked before M1).
 - **Live delegated routing:** applied `highReasoning`, `switchAbove: 0.8` and the ordered hosted fallback list through the config merge-writer. With the VPN available, an isolated `operate` task completed on the configured OpenCode primary. With a temporary unreachable probe target, a second `operate` completed on the first hosted fallback and recorded the runner, model and fallback note. Restored the real probe URL immediately after admission.
-- **In flight:** PR publication (B16) is rebased on #17 on `impl/m1-pr-publishing` at `7a7371ff3`, with typecheck and 67 focused tests passed. Its full validation is running. Task CPU priority (B22) is on `impl/m2-task-priority` at `677719856`. The stacked M3 code on `impl/m3-score-ui` at `28dc836a2` covers catalog, judge isolation, queue and score storage, routing, cockpit score detail and optional columns, and score read commands. Those slices have focused checks and need current-base full validation.
-- **Next:** finish B16 and B22 validation and releases. M2 core acceptance passed on the live cockpit. Finish M3 validation against an isolated judge stub and prepare calibration. The machine’s protected `factory.judge` route is unset. Live scoring and calibration wait for the owner to select the judge. The concurrent real-project acceptance remains open.
+- **In flight:** PR publication (B16) is rebased on #17 on `impl/m1-pr-publishing` at `7a7371ff3`, with typecheck and 67 focused tests passed. Its full validation is running. Task CPU priority (B22) is on `impl/m2-task-priority` at `677719856`. The stacked M3 code on `impl/m3-score-ui` at `28dc836a2` covers catalog, judge isolation, queue and score storage, routing, cockpit score detail and optional columns, and score read commands. Those slices have focused checks and need current-base full validation. The scorer catalog now preserves its last valid rubric across restarts, and the judge retries a context rejection with shorter tool outputs.
+- **Next:** finish B16 and B22 validation and releases. M2 core acceptance passed on the live cockpit. Finish M3 validation against an isolated judge stub and prepare calibration. The selected self-hosted `factory.judge` route is now in workspace config. Verify it on an isolated fixture and again after the M3 release, then run the blind calibration gate. The concurrent real-project acceptance remains open.
 
 ## Standing instructions given to the harness manager
 
