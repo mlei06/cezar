@@ -103,6 +103,41 @@ it('recovers an interrupted judge queue from the persisted retry deadline', asyn
   }
 });
 
+it('scores tasks settled during startup recovery without backfilling older finished tasks', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'cez-score-startup-'));
+  const dataDir = join(root, '.ai/cezar');
+  vi.stubEnv('CEZ_HOME', join(root, 'workspace'));
+  vi.stubEnv('CEZ_DRY_RUN', '0');
+  vi.stubEnv('CEZ_SCORING', '1');
+  const store = RunStore.open(dataDir);
+  const recoveredSince = Date.now() - 500;
+  const makeFinished = (when: number) => {
+    const timestamp = new Date(when).toISOString();
+    const run = store.createRun({ title: 'Fixture', task: 'Run the check.', workflow: 'quick-task', steps: [] });
+    store.updateRun(run.id, { status: 'done', startedAt: timestamp, finishedAt: timestamp });
+    return run.id;
+  };
+  const older = makeFinished(recoveredSince - 1000);
+  const recovered = makeFinished(recoveredSince + 250);
+  const call = vi.fn<JudgeCall>(async ({ systemPrompt }) => {
+    const labels = JSON.parse(systemPrompt.match(/Allowed labels: (.*)/)?.[1] ?? '[]') as Array<{ value: string }>;
+    return { text: JSON.stringify({ label: labels[0]?.value, reasoning: 'Fixture verdict' }) };
+  });
+  const service = new ScoringService(vi.fn(), async () => ({ runner: 'codex', call }));
+  const off = service.watch({ id: 'example', root, dataDir, store }, recoveredSince);
+  try {
+    await vi.waitFor(() => expect(Object.values(readRunScores(dataDir, recovered)).filter((score) => score.status === 'scored')).toHaveLength(4));
+    expect(readRunScores(dataDir, older)).toEqual({});
+    expect(call).toHaveBeenCalledTimes(4);
+  } finally {
+    off();
+    service.dispose();
+    store.flush();
+    vi.unstubAllEnvs();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 it('redacts a preserved brief, archived credentials and the judge output before scoring or publishing', async () => {
   const root = mkdtempSync(join(tmpdir(), 'cez-score-redaction-'));
   const dataDir = join(root, '.ai/cezar');

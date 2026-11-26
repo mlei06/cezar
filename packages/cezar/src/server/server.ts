@@ -517,6 +517,7 @@ export interface ServerDeps {
   /** Register app-owned cleanup for the hosting server lifecycle. */
   onDispose?: (cleanup: () => void) => void;
   enableFactoryScoring?: boolean;
+  factoryScoringRecoveredSince?: number;
   repoRoot: string;
   store: RunStore;
   manager: RunManager;
@@ -9609,7 +9610,7 @@ export function createApp(deps: ServerDeps) {
       let stopped = false;
       let offScoring: (() => void) | undefined;
       void Promise.resolve(project === bootContext ? resolveBootProject() : project.id).then((id) => {
-        if (!stopped) offScoring = scoring.watch({ ...project, id });
+        if (!stopped) offScoring = scoring.watch({ ...project, id }, deps.factoryScoringRecoveredSince);
       }).catch(() => undefined);
       detach.push(() => { stopped = true; offScoring?.(); });
     }

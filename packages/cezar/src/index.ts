@@ -541,6 +541,7 @@ async function serveCommand(
   const recovered = store
     .listRuns()
     .filter((r) => ['queued', 'waiting', 'running'].includes(r.status) && !isIdleParked(r)).length;
+  const factoryScoringRecoveredSince = Date.now();
   await recoverWithProviderRuntimeAuthObservation(
     store,
     () => manager.recover(),
@@ -625,6 +626,7 @@ async function serveCommand(
     manager,
     version,
     runtimeId,
+    factoryScoringRecoveredSince,
     runtimeHandoffToken: cockpitLease?.ownership.identity.token,
     update,
     bootProjectId,

@@ -42,7 +42,7 @@ export class ScoringService {
     private readonly judgeFor: (repoRoot: string) => Promise<JudgeRoute | { error: string }> = resolveJudgeRoute,
     private readonly secrets = new SecretStore()) {}
 
-  watch(project: ScoringProject): () => void {
+  watch(project: ScoringProject, recoveredSince?: number): () => void {
     if (!scoringEnabled()) return () => undefined;
     const runs = project.store.listRuns();
     const observed = new Map(runs.map((run) => [run.id, settledAt(run)]));
@@ -51,6 +51,12 @@ export class ScoringService {
         try {
           if (Object.values(readRunScores(project.dataDir, run.id)).some((score) => score.status === 'pending')) {
             void this.queueRun(project, run, 'resume').catch(() => undefined);
+          } else {
+            const at = settledAt(run);
+            // Recovery can settle a task before the server attaches its watcher.
+            if (at && recoveredSince !== undefined && Date.parse(at) >= recoveredSince) {
+              void this.queueRun(project, run, 'new').catch(() => undefined);
+            }
           }
         } catch {
           // A damaged score file does not prevent opening the project or other tasks.
