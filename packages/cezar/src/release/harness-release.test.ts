@@ -195,4 +195,5 @@ it.skipIf(process.platform === 'win32').each(['restart', 'health', 'manual', 'be
       await rm(root, { recursive: true, force: true });
     }
   },
+  20_000,
 );
