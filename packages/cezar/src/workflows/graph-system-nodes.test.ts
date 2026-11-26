@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { childSettleReport } from '../dispatch/engine.ts';
 import { taskAttention } from '../managers/snapshot.ts';
 import { RunStore, type RunRecord } from '../runs/store.ts';
+import { runHarnessVersion } from '../self-update/run-version.ts';
 import { graphIssues, graphRailSteps, graphToSteps, type WorkflowGraph } from './graph.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { RunManager } from './run.ts';
@@ -82,8 +83,8 @@ describe('graph system nodes', () => {
   const parkedAt = (node: string) => (r: RunRecord) =>
     r.status === 'waiting' && r.steps.find((s) => s.id === node)?.status === 'waiting';
 
-  it('keeps external graph operations out of a replay', async () => {
-    const replay = manager.startRun(def({
+  it.skipIf(process.platform !== 'linux')('keeps external graph operations out of a replay', async () => {
+    const workflow = def({
       nodes: [
         { id: 'start', type: 'start' },
         { id: 'push', type: 'git.push' },
@@ -97,8 +98,16 @@ describe('graph system nodes', () => {
         { from: 'pr.nothing', to: 'comment' },
         { from: 'comment.done', to: 'notice' },
       ],
-    }), { task: 'Repeat the workflow.' });
-    store.updateRun(replay.id, { replayOf: 'baseline' });
+    });
+    const baseline = store.createRun({ title: 'Baseline', task: 'Repeat the workflow.', workflow: workflow.name, steps: [] });
+    store.updateRun(baseline.id, {
+      status: 'done', finishedAt: new Date().toISOString(), workflowDef: workflow,
+      startCommit: (await run('git', ['rev-parse', 'HEAD'], { cwd: repoRoot })).stdout.trim(),
+      harnessVersion: await runHarnessVersion(),
+    });
+    const result = await manager.startReplay(baseline.id, { times: 1 });
+    if ('error' in result) throw new Error(result.error);
+    const replay = result.runs[0]!;
     const settled = await until(replay.id, terminal);
     expect(settled.status).toMatch(/review|done/);
     expect(settled.pullRequestUrl).toBeUndefined();
