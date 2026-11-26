@@ -1,7 +1,7 @@
 import { access, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { smokeStagedHarness, withStagingCockpit } from './staging.ts';
 
 const fixture = [
@@ -12,7 +12,7 @@ const fixture = [
   "createServer((req, res) => {",
   "  const payload = req.url === '/api/v1/health' ? { instanceId: process.env.CEZ_INSTANCE_ID }",
   "    : req.url === '/api/v1/isolated' ? { workspace: process.env.CEZ_HOME, cwd: process.cwd(),",
-  "         dry: process.env.CEZ_DRY_RUN, managers: process.env.CEZ_MANAGERS, automations: process.env.CEZ_AUTOMATIONS }",
+  "         runnerOverride: process.env.CEZ_OPENCODE_BIN, dry: process.env.CEZ_DRY_RUN, managers: process.env.CEZ_MANAGERS, automations: process.env.CEZ_AUTOMATIONS }",
   "    : { ...run, status: req.method === 'POST' ? 'queued' : 'done' };",
   "  res.setHeader('content-type', 'application/json');",
   "  res.end(JSON.stringify(payload));",
@@ -21,6 +21,7 @@ const fixture = [
 
 it('starts an independent cockpit and removes its workspace after a failed check', async () => {
   const root = await mkdtemp(join(tmpdir(), 'cez-staging-test-'));
+  vi.stubEnv('CEZ_OPENCODE_BIN', 'example-runner-override');
   try {
     const entry = join(root, 'fixture.mjs');
     await writeFile(entry, fixture);
@@ -48,6 +49,7 @@ it('starts an independent cockpit and removes its workspace after a failed check
     await expect(access(scratch!)).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(fetch(api + '/health')).rejects.toThrow();
   } finally {
+    vi.unstubAllEnvs();
     await rm(root, { recursive: true, force: true });
   }
 }, 10_000);
