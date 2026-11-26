@@ -7,6 +7,7 @@ import { resolveDeferredReset, deferredHoldUntil } from '../automations/deferred
 import { deferredStartOptions, previewDeferredStart, digest, validateDeferredBinding } from '../automations/deferred-start.ts';
 import { saveWorkflowInputSchema, saveWorkflowGraphInputSchema } from '@open-mercato/cezar-contract';
 import { deferredOptionsInputSchema, deferredPreviewInputSchema, deferredCreateInputSchema, deferredMutationQuerySchema } from '@open-mercato/cezar-contract';
+import { automationRunQuerySchema } from '@open-mercato/cezar-contract';
 import { answerQuestionInputSchema, messageInputSchema, questionKeyParamSchema } from '@open-mercato/cezar-contract';
 import { DEFAULT_PHONE_PUSH_PREFS, attentionOverrideClearInputSchema, attentionOverrideInputSchema, phonePushPrefsSchema, phonePushSettingsSchema, type AttentionResponse, type GitStatusResponse } from '@open-mercato/cezar-contract';
 import { buildAttentionList, currentTaskPr, managerNeedsYou, phoneBadgeCount } from '../attention/list.ts';
@@ -465,6 +466,8 @@ import { isGithubHost } from '../github-hosts.ts';
 import { createGithubDriver } from './forge/github.ts';
 import { onPrClosed, reportPrClosed } from './forge/pr-closed.ts';
 import { hasOpenImprovementPr, settleImprovementPr, watchImprovementRuns } from '../improvement/lifecycle.ts';
+import { ensureFactoryAutomation, FACTORY_AUTOMATION, runFactoryAutomation } from '../automations/factory-source.ts';
+import { ensureDataGitignore } from '../data-gitignore.ts';
 import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, fetchGithubRefStatus, forgetRefStatus, readCachedPrEnds, readCachedRefStatuses, refNumberFromUrl, searchGithubItems, GithubPrNotFoundError, GH_CHECKS_MAX, GH_SEARCH_MAX, GH_REF_STATUS_MAX, forgetGithubListCache } from './github.ts';
 import { ensureLaunchKey } from './launch-key.ts';
 import { openInTerminal } from './open-in-terminal.ts';
@@ -5042,6 +5045,7 @@ export function createApp(deps: ServerDeps) {
       const parsed = { data: c.req.valid('json') };
       const current = automationStore.get(c.req.param('id'));
       if (!current) return c.json({ error: 'not found' }, 404);
+      if (current.kind === 'factory') return c.json({ error: 'Use pause or enable to control the built-in factory automation.' }, 409);
       // The stored kind unless the body names one; a switch is refused — receipts and cursors
       // are kind-specific, and a silent swap would orphan them (spec 2026-09-14 § Edge cases).
       if (current.deferredStart) {
@@ -5157,6 +5161,7 @@ export function createApp(deps: ServerDeps) {
       const id = c.req.param('id');
       const store = c.get('project').automationStore;
       const current = store.get(id);
+      if (current?.kind === 'factory') return conflict('Pause this built-in factory automation to stop it.');
       if (current?.deferredStart) {
         const lease = store.acquireLease();
         if (!lease) return conflict('Launch is in progress. Refresh before cancelling.');
@@ -5300,11 +5305,19 @@ export function createApp(deps: ServerDeps) {
 
     // A scheduled automation fired NOW, by hand (spec 2026-09-14 Q10): paused or not, the
     // definition's `enabled` and `nextRunAt` are untouched — this is a launch, not an arm.
-    .post('/automations/:id/run', queryZodValidator(deferredMutationQuerySchema), async (c) => {
+    .post('/automations/:id/run', queryZodValidator(automationRunQuerySchema), async (c) => {
       const project = c.get('project');
       const store = project.automationStore;
       const automation = store.get(c.req.param('id'));
       if (!automation) return c.json({ error: 'not found' }, 404);
+      if (automation.kind === 'factory') {
+        const id = project === bootContext ? await resolveBootProject() : project.id;
+        const outcome = await runFactoryAutomation({
+          project: { ...project, id }, store, definition: automation, startedBy: c.req.valid('query').fromManager ? 'manager' : 'owner',
+        });
+        emitAutomationChange(project, automation.id, automation.revision);
+        return 'reason' in outcome ? c.json({ error: outcome.reason }, 409) : c.json(outcome, 202);
+      }
       if (automation.deferredStart && automation.revision !== c.req.valid('query').expectedRevision) return c.json({ error: 'The task changed. Refresh before running it.' }, 409);
       if (!isScheduleAutomation(automation)) return c.json({ error: 'a GitHub automation is run through check with mode execute' }, 409);
       const runner = new ScheduleRunner(scheduleHandle(project));
@@ -9736,6 +9749,8 @@ export function createApp(deps: ServerDeps) {
     dataDir: project.dataDir,
     store: project.store,
     automation: (id) => project.automationStore.get(id),
+    factoryManager: (projectId) => managerStore.list().find(({ projects }) =>
+      projects !== 'all' && projects.length === 1 && projects[0] === projectId)?.id,
     report: (input) => managerEngine.reportAutomationRun(input),
     unlink: (automationId) => {
       try {
@@ -9939,6 +9954,10 @@ export function createApp(deps: ServerDeps) {
     )> => {
       const result = await managerEngine.scores(c.req.valid('param').id, c.req.valid('query'));
       return 'error' in result ? c.json({ error: result.error }, result.status) : c.json(result, 200);
+    })
+    .post('/workspace/managers/:id/improve', paramZodValidator(managerIdParamSchema), jsonZodValidator(managerAgentsQuerySchema), async (c) => {
+      const result = await managerEngine.improve(c.req.valid('param').id, c.req.valid('json').projectId);
+      return 'error' in result ? c.json({ error: result.error }, result.status) : c.json(result, 202);
     })
     .post('/workspace/managers/:id/tasks', paramZodValidator(managerIdParamSchema), jsonZodValidator(managerCreateTaskInputSchema), async (c) => {
       const created = await managerEngine.createTask(c.req.valid('param').id, c.req.valid('json'));
@@ -10323,7 +10342,14 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
   // scheduled while the cockpit kept showing them enabled. Registered or not,
   // pinning is the same statement: this process is serving that project.
   const warnAutomations = (message: string) => console.warn(`[cezar] ${message}`);
-  const automationCoordinator = new AutomationCoordinator({ listProjects, pinned: bootProjectId, warn: warnAutomations });
+  const automationCoordinator = new AutomationCoordinator({
+    listProjects, pinned: bootProjectId, warn: warnAutomations,
+    configureStore: (store, project) => {
+      if (process.env.CEZ_SELF_IMPROVEMENT === '0' || store.get(FACTORY_AUTOMATION)) return;
+      ensureDataGitignore(project.root);
+      ensureFactoryAutomation(store);
+    },
+  });
   const bootAutomationStore = automationCoordinator.store(bootProjectId, deps.repoRoot)!;
   const sharedContexts = deps.contexts ?? new ProjectContexts({
     listProjects,
@@ -10401,7 +10427,7 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
       const contextOf = async () => {
         const bootId = deps.bootProjectId ?? 'default';
         return projectId === bootId
-          ? { root: deps.repoRoot, manager: deps.manager, store: deps.store }
+          ? { id: projectId, root: deps.repoRoot, dataDir: join(deps.repoRoot, '.ai/cezar'), manager: deps.manager, store: deps.store }
           : await sharedContexts.context(projectId);
       };
       const dispatchEnabled = resolveCapabilities(process.env, deps.bindHost).dispatch;
@@ -10409,6 +10435,17 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
         projectId,
         store,
         timeZone: localTimeZone(),
+        ...(process.env.CEZ_SELF_IMPROVEMENT === '0' ? {} : {
+          checkFactory: async (definition: AutomationDefinition) => {
+            const context = await contextOf();
+            const id = projectId === bootProjectId
+              ? (await listProjects()).find(({ root }) => root === context.root)?.id ?? context.id
+              : context.id;
+            const result = await runFactoryAutomation({ project: { ...context, id }, store, definition, startedBy: 'automation' });
+            workspaceEvents.emit('automation-change', { project: projectId, automationId: definition.id, revision: definition.revision });
+            return result;
+          },
+        }),
         ...(project.github ? { github: { ...project.github, poller: new GithubPoller({ host: project.github.host }), onPullRequestClosed: (number, state) => reportPrClosed(project.root, number, state, { verify: true }) } } : {}),
         // Present unconditionally (unlike `github`, precomputed above from a sync remote parse):
         // whether the project actually has a tracker connection is resolved lazily, at poll time,

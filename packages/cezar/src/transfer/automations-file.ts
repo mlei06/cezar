@@ -54,7 +54,7 @@ export function exportAutomations(
     exportedAt: (options.now ?? new Date()).toISOString(),
     ...(options.cezarVersion ? { cezarVersion: options.cezarVersion } : {}),
     automations: definitions
-      .filter((definition) => !definition.deferredStart && (!wanted || wanted.has(definition.id)))
+      .filter((definition) => definition.kind !== 'factory' && !definition.deferredStart && (!wanted || wanted.has(definition.id)))
       .map(portable),
   };
 }
@@ -145,6 +145,7 @@ export async function planAutomationImport(
     } else if (resolution?.action === 'replace') {
       action = 'replace';
       if (!existingMatch) issues.push('there is no automation with this name to replace');
+      else if (existingMatch.kind === 'factory') issues.push('the built-in factory automation cannot be replaced');
       else if (replacedTargets.has(existingMatch.id)) issues.push(`another row already replaces "${existingMatch.name}"`);
       else target = existingMatch;
     }

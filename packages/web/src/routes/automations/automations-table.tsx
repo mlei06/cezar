@@ -154,7 +154,7 @@ function AutomationRow({
       data-automation={automation.id}
       data-enabled={automation.enabled ? 'true' : 'false'}
       className={cn('group/row cursor-pointer hover:bg-muted', !automation.enabled && 'opacity-60')}
-      onClick={() => navigate(`/automations/${encodeURIComponent(automation.id)}`)}
+      onClick={() => navigate(`/automations/${encodeURIComponent(automation.id)}${automation.kind === 'factory' ? '/log' : ''}`)}
     >
       {reorder ? (
         <td className={cn(TD, 'w-px')} onClick={stop}>

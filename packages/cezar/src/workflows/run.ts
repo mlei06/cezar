@@ -1156,6 +1156,7 @@ function formatWakeInstant(at: Date): string {
 export interface StartRunInput {
   /** Set only by the factory source after it claims an improvement batch. */
   improvementId?: string;
+  improvementAutomation?: RunRecord['automationTrigger'];
   /** The immutable fork and prompt for an admitted replay, persisted before it enters the queue. */
   replay?: { sourceId: string; startCommit: string; change: string; harness: HarnessVersion; systemPrompt?: string };
   secrets?: RunRecord['secretNames'];
@@ -2425,6 +2426,7 @@ export class RunManager {
     this.store.updateRun(run.id, {
       workflowDef: workflow,
       ...(input.improvementId ? { improvementId: input.improvementId } : {}),
+      ...(input.improvementAutomation ? { automationTrigger: input.improvementAutomation } : {}),
       ...(input.secrets !== undefined ? { secretNames: input.secrets } : {}),
       ...(budget !== undefined ? { budget: { ...budget, ...input.budget } } : {}),
       ...(input.onBudget !== undefined ? { onBudget: input.onBudget } : {}),

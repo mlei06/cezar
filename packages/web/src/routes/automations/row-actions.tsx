@@ -73,10 +73,11 @@ export function RowActions({ automation, actions }: { automation: AutomationList
   const stop = (event: SyntheticEvent) => event.stopPropagation()
   const editorPath = `/automations/${encodeURIComponent(automation.id)}`
   const pauseLabel = automation.enabled ? 'Pause' : 'Enable'
+  const factory = automation.kind === 'factory'
 
   return (
     <span data-slot="row-actions" className="inline-flex gap-0.5" onClick={stop}>
-      {automation.kind !== 'schedule' ? (
+      {automation.kind !== 'schedule' && !factory ? (
         <IconTooltip label="Preview matches">
           <Button variant="ghost" size="icon-sm" aria-label="Preview matches" disabled={actions.busy} onClick={() => void actions.preview(automation)}>
             <EyeIcon className="size-[13px]" />
@@ -112,18 +113,18 @@ export function RowActions({ automation, actions }: { automation: AutomationList
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-[200px]" onClick={stop}>
-          <DropdownMenuItem onSelect={() => navigate(editorPath)}>
+          {!factory && <DropdownMenuItem onSelect={() => navigate(editorPath)}>
             <PencilIcon />
             Edit
-          </DropdownMenuItem>
+          </DropdownMenuItem>}
           <DropdownMenuItem onSelect={() => navigate(`${editorPath}/log`)}>
             <ScrollTextIcon />
             View log
           </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => void actions.duplicate(automation)}>
+          {!factory && <DropdownMenuItem onSelect={() => void actions.duplicate(automation)}>
             <CopyIcon />
             Duplicate
-          </DropdownMenuItem>
+          </DropdownMenuItem>}
           <DropdownMenuItem onSelect={() => void actions.copyCli(automation)}>
             <TerminalIcon />
             Copy as CLI
@@ -134,11 +135,11 @@ export function RowActions({ automation, actions }: { automation: AutomationList
               Pending tasks…
             </DropdownMenuItem>
           ) : null}
-          <DropdownMenuSeparator />
+          {!factory && <><DropdownMenuSeparator />
           <DropdownMenuItem variant="destructive" onSelect={() => setConfirming(true)}>
             <Trash2Icon />
             Delete
-          </DropdownMenuItem>
+          </DropdownMenuItem></>}
         </DropdownMenuContent>
       </DropdownMenu>
       <PendingWorkDialog

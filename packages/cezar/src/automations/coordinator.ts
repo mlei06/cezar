@@ -29,6 +29,7 @@ export interface AutomationProjectSource {
 export interface AutomationCoordinatorOptions {
   listProjects: () => Promise<readonly AutomationProjectSource[]>;
   warn?: (message: string) => void;
+  configureStore?: (store: AutomationStore, project: AutomationProjectSource) => void;
   /**
    * The boot project's id, which `refresh()` must never evict even though
    * `listProjects()` (the REGISTRY) does not name it. The server serves the
@@ -89,7 +90,14 @@ export class AutomationCoordinator {
       }
       this.roots.set(project.id, project.root);
       const definitions = join(project.root, '.ai/cezar/automations.json');
-      if (existsSync(definitions)) this.store(project.id, project.root);
+      const configure = project.status === 'ok' ? this.options.configureStore : undefined;
+      if (existsSync(definitions) || configure) {
+        const store = this.store(project.id, project.root);
+        if (store && configure) {
+          try { configure(store, project); }
+          catch { this.options.warn?.('Factory automation initialization deferred.'); }
+        }
+      }
     }
   }
 
