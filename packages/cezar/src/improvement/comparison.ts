@@ -63,7 +63,7 @@ export function compareImprovement(input: {
   const boundary = Date.parse(record.mergedAt);
   const samples = scoredRuns(input.history).sort((a, b) => a.at - b.at);
   const before = samples.filter(({ at }) => at < boundary);
-  const after = samples.filter(({ at, harnessVersion }) => at >= boundary && at <= now.getTime() &&
+  const after = samples.filter(({ at, harnessVersion }) => at > boundary && at <= now.getTime() &&
     (!afterRelease || (harnessVersion?.id === afterRelease.id && harnessVersion?.commit === afterRelease.commit)));
   const daysElapsed = cooldown.cooldownDays !== undefined && now.getTime() - boundary >= cooldown.cooldownDays * DAY;
   if (!before.length || !after.length || (after.length < cooldown.cooldownRuns && !daysElapsed)) return;

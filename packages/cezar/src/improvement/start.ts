@@ -12,7 +12,8 @@ import { resolveForge } from '../server/forge/index.ts';
 import { getRepoInfo } from '../server/git.ts';
 import { loadWorkspaceConfig } from '../workspace/config.ts';
 import { loadWorkflows } from '../workflows/load.ts';
-import { failImprovement, readImprovementRecords, startImprovement } from './bookkeeping.ts';
+import { failImprovement, readImprovementRecords, recordImprovementComparison, startImprovement } from './bookkeeping.ts';
+import { compareImprovement, harnessCauseDigest, type ImprovementRunHistory } from './comparison.ts';
 import { improvementPaths, settleImprovementPr } from './lifecycle.ts';
 import { resolveImprovementSettings } from './settings.ts';
 import { evaluateImprovementTrigger } from './trigger.ts';
@@ -26,19 +27,23 @@ function latestMerge(records: readonly ImprovementRecord[]): ImprovementRecord |
     .sort((a, b) => b.mergedAt!.localeCompare(a.mergedAt!))[0];
 }
 
-async function countScoredRuns(project: ImprovementProject, roots: readonly { root: string }[], harness: boolean, last?: ImprovementRecord): Promise<number> {
-  if (!last?.mergedAt) return 0;
-  const qualifies = (run: RunRecord) => !run.replayOf && run.scoreSummary && run.finishedAt && run.finishedAt > last.mergedAt!;
-  if (!harness) return project.store.listRuns().filter(qualifies).length;
+async function currentReleaseWithMerge(project: ImprovementProject, last: ImprovementRecord) {
   const version = await runHarnessVersion();
   const sha = /^(?:[a-f\d]{40}|[a-f\d]{64})$/;
-  if (!version.commit || !last.mergeCommit || !sha.test(version.commit) || !sha.test(last.mergeCommit)) return 0;
+  if (!version.commit || !last.mergeCommit || !sha.test(version.commit) || !sha.test(last.mergeCommit)) return undefined;
   const includesMerge = await exec('git', ['merge-base', '--is-ancestor', last.mergeCommit, version.commit], {
     cwd: project.root, timeout: 5_000, env: { ...process.env, GIT_NO_LAZY_FETCH: '1', GIT_NO_REPLACE_OBJECTS: '1' },
   }).then(() => true, () => false);
-  if (!includesMerge) return 0;
-  return roots.flatMap(({ root }) => root === project.root ? project.store.listRuns() : readRunIndexFromDisk(join(root, '.ai/cezar')))
-    .filter((run) => qualifies(run) && run.harnessVersion?.id === version.id && run.harnessVersion.commit === version.commit).length;
+  return includesMerge ? version : undefined;
+}
+
+function collectHistory(project: ImprovementProject, roots: readonly { root: string }[], harness: boolean): ImprovementRunHistory[] {
+  const own = { dataDir: project.dataDir, runs: project.store.listRuns() };
+  if (!harness) return [own];
+  return [own, ...roots.filter(({ root }) => root !== project.root).map(({ root }) => {
+    const dataDir = join(root, '.ai/cezar');
+    return { dataDir, runs: readRunIndexFromDisk(dataDir) };
+  })];
 }
 
 async function refreshOpenPr(project: ImprovementProject, records: readonly ImprovementRecord[]): Promise<void> {
@@ -72,10 +77,21 @@ export async function startFactoryImprovement(
   const paths = improvementPaths(project.dataDir, harness);
   await refreshOpenPr(project, readImprovementRecords(paths.records));
   const priorMerge = latestMerge(readImprovementRecords(paths.records));
-  const scoredRunsSinceMerge = await countScoredRuns(project, workspace.projects, harness, priorMerge);
+  const afterRelease = harness && priorMerge ? await currentReleaseWithMerge(project, priorMerge) : undefined;
+  const history = priorMerge && (!harness || afterRelease) ? collectHistory(project, workspace.projects, harness) : [];
+  const scoredRunsSinceMerge = history.flatMap(({ runs }) => runs).filter((run) =>
+    !run.replayOf && run.scoreSummary && run.finishedAt && run.finishedAt > priorMerge!.mergedAt! &&
+    (!afterRelease || (run.harnessVersion?.id === afterRelease.id && run.harnessVersion?.commit === afterRelease.commit))).length;
   const records = readImprovementRecords(paths.records);
   if (latestMerge(records)?.id !== priorMerge?.id) return { reason: 'the improvement cooldown changed during this check' };
   const now = new Date();
+  if (priorMerge && history.length) {
+    const comparison = compareImprovement({ record: priorMerge, history, cooldown: settings, now, afterRelease });
+    if (comparison) {
+      const index = records.findIndex(({ id }) => id === priorMerge.id);
+      records[index] = recordImprovementComparison(paths, priorMerge.id, comparison);
+    }
+  }
   const result = evaluateImprovementTrigger({
     queue: readCauseQueue(paths.queue), records, settings, scoredRunsSinceMerge, now, manual: startedBy !== 'automation',
   });
@@ -84,7 +100,10 @@ export async function startFactoryImprovement(
   const id = randomUUID();
   startImprovement(paths, { id, projectId: project.id, runId: id, startedBy, startedAt: now.toISOString(), batch: result.batch });
   try {
-    const task = improvementBrief({ batch: result.batch, previous: records, scope: settings.scope });
+    const task = improvementBrief({
+      batch: result.batch, previous: records, scope: settings.scope,
+      ...(harness ? { crossProjectDigest: harnessCauseDigest(workspace.projects, project.id, now) } : {}),
+    });
     const run = project.manager.startRun(workflow, {
       task, improvementId: id,
       ...(provenance ? { improvementAutomation: { ...provenance, trigger: 'factory', receiptId: id } } : {}),
