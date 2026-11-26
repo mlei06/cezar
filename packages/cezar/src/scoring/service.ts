@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import type { RecordedScore, RunScoreSummary, ScoreRecordedEvent, TaskScoreEntry } from '@open-mercato/cezar-contract';
+import { isDeepStrictEqual } from 'node:util';
+import type { RecordedScore, RunScoreSummary, ScoreChangedEvent, ScoreRecordedEvent, TaskScoreEntry } from '@open-mercato/cezar-contract';
 import { loadConfig } from '../config.ts';
 import { ScorerCatalog } from '../factory/scorers.ts';
 import type { RunRecord, RunStore } from '../runs/store.ts';
@@ -63,7 +64,8 @@ export class ScoringService {
   constructor(private readonly onScore: (event: ScoreRecordedEvent, project: ScoringProject, run: RunRecord) => void,
     private readonly judgeFor: (repoRoot: string) => Promise<JudgeRoute | { error: string }> = resolveJudgeRoute,
     private readonly secrets = new SecretStore(),
-    private readonly reconcileScores?: (project: ScoringProject, scores: readonly SettledScore[]) => void) {}
+    private readonly reconcileScores?: (project: ScoringProject, scores: readonly SettledScore[]) => void,
+    private readonly onChanged?: (event: ScoreChangedEvent) => void) {}
 
   watch(project: ScoringProject, recoveredSince?: number): () => void {
     if (!scoringEnabled()) return () => undefined;
@@ -157,7 +159,13 @@ export class ScoringService {
       let route: JudgeRoute | undefined;
       const stillCurrent = () => project.store.getRun(run.id) === run && settledAt(run) === finishedAt;
       const save = (value: TaskScoreEntry) => {
-        if (stillCurrent()) writeRunScore(project.dataDir, run.id, scorer.name, value);
+        if (!stillCurrent()) return;
+        writeRunScore(project.dataDir, run.id, scorer.name, value);
+        if (value.status === 'scored' || run.scoreSummary) {
+          const scoreSummary = summarizeScores(readRunScores(project.dataDir, run.id), finishedAt);
+          if (!isDeepStrictEqual(scoreSummary, run.scoreSummary)) project.store.updateRun(run.id, { scoreSummary });
+        }
+        if (value.status !== 'scored') this.onChanged?.({ projectId: project.id, runId: run.id });
       };
       const accepted = this.queue.enqueue({
         id: JSON.stringify([project.id, run.id, finishedAt, scorer.name]),
@@ -211,7 +219,6 @@ export class ScoringService {
                 at: new Date().toISOString(),
               };
               save({ status: 'scored', finishedAt, score });
-              project.store.updateRun(run.id, { scoreSummary: summarizeScores(readRunScores(project.dataDir, run.id), finishedAt) });
               this.onScore({ projectId: project.id, runId: run.id, score }, project, run);
               break;
           }

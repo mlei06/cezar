@@ -173,6 +173,39 @@ it('reconciles saved verdicts for the current settlement without calling the jud
   }
 });
 
+it('publishes pending and error invalidations and removes an older outcome summary on re-score', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'cez-score-state-'));
+  const dataDir = join(root, '.ai/cezar');
+  vi.stubEnv('CEZ_HOME', join(root, 'workspace'));
+  vi.stubEnv('CEZ_DRY_RUN', '0');
+  vi.stubEnv('CEZ_SCORING', '1');
+  const store = RunStore.open(dataDir);
+  const project = { id: 'example', root, dataDir, store };
+  const at = new Date().toISOString();
+  const run = store.createRun({ title: 'Fixture', task: 'Run the check.', workflow: 'quick-task', steps: [] });
+  store.updateRun(run.id, {
+    status: 'done', startedAt: at, finishedAt: at, scoreSummary: { finishedAt: at, outcome: { label: 'delivered', pass: true } },
+  });
+  const observed: string[] = [];
+  const onChanged = vi.fn(() => {
+    const entry = readRunScores(dataDir, run.id).outcome;
+    if (entry) observed.push(entry.status);
+  });
+  const service = new ScoringService(vi.fn(), async () => ({ error: 'The judge needs configuration.' }), undefined, undefined, onChanged);
+  try {
+    expect(await service.rescore(project, run, 'outcome')).toEqual({ queued: ['outcome'] });
+    await vi.waitFor(() => expect(readRunScores(dataDir, run.id).outcome).toMatchObject({ status: 'error' }));
+    expect(observed).toEqual(['pending', 'error']);
+    expect(onChanged.mock.calls).toEqual(Array.from({ length: 2 }, () => [{ projectId: project.id, runId: run.id }]));
+    expect(store.getRun(run.id)?.scoreSummary?.outcome).toBeUndefined();
+  } finally {
+    service.dispose();
+    store.flush();
+    vi.unstubAllEnvs();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 it('redacts a preserved brief, archived credentials and the judge output before scoring or publishing', async () => {
   const root = mkdtempSync(join(tmpdir(), 'cez-score-redaction-'));
   const dataDir = join(root, '.ai/cezar');

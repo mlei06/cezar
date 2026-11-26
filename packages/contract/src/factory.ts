@@ -70,9 +70,12 @@ export type RunScoresResponse = z.infer<typeof runScoresResponseSchema>;
 export const scoreRunInputSchema = z.object({ scorer: scorerNameSchema.optional() }).strict();
 export const scoreRunResponseSchema = z.object({ queued: z.array(scorerNameSchema) });
 export type ScoreRunResponse = z.infer<typeof scoreRunResponseSchema>;
-export const scoreRecordedEventSchema = z.object({
+export const scoreChangedEventSchema = z.object({
   projectId: z.string(),
   runId: z.string(),
+});
+export type ScoreChangedEvent = z.infer<typeof scoreChangedEventSchema>;
+export const scoreRecordedEventSchema = scoreChangedEventSchema.extend({
   score: recordedScoreSchema,
 });
 export type ScoreRecordedEvent = z.infer<typeof scoreRecordedEventSchema>;

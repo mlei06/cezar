@@ -943,6 +943,7 @@ export type WorkspaceEventName =
   | 'manager-delta'
   | 'budget.exceeded'
   | 'score.recorded'
+  | 'score.changed'
   | 'phone-pairing'
   /** The attention list may have changed (spec 2026-11-23-needs-you-triage): payload `{}`, re-read it. */
   | 'attention-change';
@@ -1866,7 +1867,7 @@ export function createApp(deps: ServerDeps) {
   const scoring = new ScoringService((event, project, run) => {
     workspaceEvents.emit('score.recorded', event);
     routeSavedScores(project, [{ run, score: event.score }]);
-  }, undefined, secretStore, routeSavedScores);
+  }, undefined, secretStore, routeSavedScores, (event) => workspaceEvents.emit('score.changed', event));
   deps.onDispose?.(() => scoring.dispose());
   const emitAutomationChange = (
     project: ProjectContext,
