@@ -125,6 +125,13 @@ export function EditorGithubFields({
               onChange={(value) => setFilter('changedLabels', value)}
             />
             <FilterField id="filter-reviewers" label="Reviewers" value={filters.reviewers} onChange={(value) => setFilter('reviewers', value)} />
+            {events.includes('workflow_run.failed') && (
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="filter-ci-branch" className="text-label text-muted-foreground">CI branch</Label>
+                <Input id="filter-ci-branch" placeholder="main" value={filters.ciBranch ?? ''}
+                  maxLength={200} onChange={(event) => setFilter('ciBranch', event.target.value)} />
+              </div>
+            )}
             <NumberField id="filter-lookback" label="Lookback days (1–90)" value={filters.lookbackDays} min={1} max={90} onChange={(value) => setFilter('lookbackDays', value)} />
             <NumberField id="filter-max-records" label="Max records (1–100)" value={filters.maxRecords} min={1} max={100} onChange={(value) => setFilter('maxRecords', value)} />
           </div>
