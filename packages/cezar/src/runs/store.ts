@@ -2360,6 +2360,12 @@ export class RunStore extends EventEmitter {
   /** Capture safe text before asynchronous derived work can outlive this run's registry. */
   redactRunText(runId: string, text: string): string { return this.redactText(text, runId); }
 
+  /** A derived export can run after teardown clears the task's live secret registry. */
+  captureRunRedaction(runId: string): <T>(value: T, additional?: readonly string[]) => T {
+    const secrets = this.secretsForRun(runId);
+    return (value, additional = []) => redactDeep(value, [...secrets, ...additional]);
+  }
+
   private readonly runSecrets = new Map<string, readonly string[]>();
 
   /** Memory only: register before spawn; retain through the final event drain. */
@@ -2651,7 +2657,10 @@ export class RunStore extends EventEmitter {
         rmSync(join(this.dataDir, 'dispatch', tree), { recursive: true, force: true });
       }
       rmSync(this.eventsPath(id), { force: true });
-      if (runIdParamSchema.safeParse({ id }).success) rmSync(this.metricsPath(id), { force: true });
+      if (runIdParamSchema.safeParse({ id }).success) {
+        rmSync(this.metricsPath(id), { force: true });
+        rmSync(join(this.dataDir, 'runs', `${id}.scores.json`), { force: true });
+      }
       rmSync(this.handoffPath(id), { force: true }); // spec 007: the journal goes with the task
       rmSync(this.imagesDir(id), { recursive: true, force: true }); // agent screenshots
       rmSync(artifactsDir(this.dataDir, id), { recursive: true, force: true });
