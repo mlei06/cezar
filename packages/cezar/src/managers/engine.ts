@@ -177,6 +177,7 @@ export interface ManagerEngineDeps {
   costVisible: () => boolean;
   /** Settings → Resources' auto-resume switch; off keeps a usage limit a plain failure. Absent = on. */
   autoResume?: () => boolean;
+  releaseHoldActive?: () => boolean;
   /** Raises the OS notification; absent where there is nobody at the machine. */
   notifySystem?: (title: string, body: string) => void;
   /** Wakes a sleeping phone (spec relay R5). The manager's id and the kind, which each phone's
@@ -1450,9 +1451,21 @@ export class ManagerEngine {
     return runtime.queue.shift();
   }
 
+  activeTurnCount(): number {
+    let count = 0;
+    for (const runtime of this.runtimes.values()) if (runtime.active) count++;
+    return count;
+  }
+
+  resumeAfterReleaseHold(): void {
+    outsideRelayScope(() => {
+      for (const id of this.runtimes.keys()) this.pump(id);
+    });
+  }
+
   private pump(id: string): void {
     const runtime = this.runtime(id);
-    if (this.disposed || runtime.deleted || runtime.active || runtime.queue.length === 0) return;
+    if (this.disposed || runtime.deleted || runtime.active || runtime.queue.length === 0 || this.deps.releaseHoldActive?.()) return;
     // Queued before it was deactivated, by a path that skipped the gate's sweep (a lease retry).
     if (this.inactive(id)) {
       runtime.queue = [];

@@ -428,7 +428,7 @@ async function serveCommand(
   // the boot manager and every lazily-built project context count their runs
   // against the same `resources.maxParallel`. The boot refresh() below is the
   // cache hook's first call; PUT /api/workspace/config (step 2.7) re-fires it.
-  const semaphore = new WorkspaceSemaphore();
+  const semaphore = new WorkspaceSemaphore({ releaseHold: true });
   await semaphore.refresh();
   // keepLive + recover() (#367): runs that were queued/running/waiting when
   // the previous process exited are re-queued or resumed instead of failed.
