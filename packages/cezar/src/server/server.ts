@@ -1010,6 +1010,7 @@ interface WorkspaceScoresBody extends WorkspaceScoresResponse {}
 interface CauseQueueBody extends CauseQueueResponse {}
 interface RunScoresBody extends RunScoresResponse {}
 interface ScoreRunBody extends ScoreRunResponse {}
+interface ReleaseHoldBody extends ReleaseHoldStatus {}
 interface RunWithUsageBody extends RunRecord {
   usage?: ReturnType<typeof currentUsage>;
 }
@@ -4021,7 +4022,9 @@ export function createApp(deps: ServerDeps) {
   });
 
   const factoryReleaseRoutes = new Hono()
-    .post('/workspace/factory/release-hold', jsonZodValidator(releaseHoldInputSchema), (c) => {
+    .post('/workspace/factory/release-hold', jsonZodValidator(releaseHoldInputSchema), (c): Response & (
+      TypedResponse<ReleaseHoldBody, 201, 'json'> | TypedResponse<{ error: string }, 409, 'json'>
+    ) => {
       const hold = factoryReleaseHold();
       if (!hold) return c.json({ error: 'Release holds require a local cockpit.' }, 409);
       try {
@@ -4032,12 +4035,14 @@ export function createApp(deps: ServerDeps) {
         return c.json({ error: 'Could not save the release hold.' }, 409);
       }
     })
-    .get('/workspace/factory/release-hold/:id', paramZodValidator(releaseHoldParamSchema), (c) => {
+    .get('/workspace/factory/release-hold/:id', paramZodValidator(releaseHoldParamSchema), (c): Response & (
+      TypedResponse<ReleaseHoldBody, 200, 'json'> | TypedResponse<{ error: string }, 404 | 409, 'json'>
+    ) => {
       const hold = factoryReleaseHold();
       if (!hold) return c.json({ error: 'Release holds require a local cockpit.' }, 409);
       const lease = hold.current();
       if (!lease || lease.id !== c.req.valid('param').id) return c.json({ error: 'The release hold has ended.' }, 404);
-      return c.json(releaseHoldStatus(lease));
+      return c.json(releaseHoldStatus(lease), 200);
     })
     .delete('/workspace/factory/release-hold/:id', paramZodValidator(releaseHoldParamSchema), (c) => {
       const hold = factoryReleaseHold();
@@ -4120,65 +4125,10 @@ export function createApp(deps: ServerDeps) {
   // `~/.cezar/config.json` — global knobs only; the registry stays on
   // /api/projects above, and schemaVersion (a migration cursor, not a
   // setting) is deliberately omitted.
-  // Deliberately UNannotated: contract-parity compares the schema to this inferred shape (#1234).
-  const workspaceConfigBody = (config: WorkspaceConfig) => ({
-    branding: {
-      name: config.branding.name ?? 'cezar',
-      logoUrl: logoAssetUrl(),
-    },
-    computerName: phonePairing.computerName(),
-    browseRoot: config.browseRoot,
-    projectsDir: config.projectsDir,
-    skillsAutoUpdate: config.skillsAutoUpdate ?? null,
-    effectiveSkillsAutoUpdate: effectiveSkillsAutoUpdate(config),
-    orgSkillsRepos: config.orgSkillsRepos ?? [],
-    systemPrompt: config.systemPrompt ?? null,
-    composerDefaults: {
-      autonomous: config.composerDefaults.autonomous ?? null,
-      worktree: config.composerDefaults.worktree ?? null,
-      inheritedAutonomous:
-        process.env.CEZ_AUTONOMOUS_DEFAULT === '0'
-          ? false
-          : process.env.CEZ_AUTONOMOUS_DEFAULT === '1'
-            ? true
-            : ('source-dependent' as const),
-      inheritedWorktree: effectiveComposerDefault(
-        undefined,
-        process.env.CEZ_WORKTREE_DEFAULT,
-        true,
-      ),
-    },
-    resources: {
-      maxParallel: config.resources.maxParallel,
-      maxMonitoringSessions: config.resources.maxMonitoringSessions,
-      idleTimeoutMinutes: config.resources.idleTimeoutMinutes,
-      monitoringWakeIntervalMinutes: config.resources.monitoringWakeIntervalMinutes,
-      autoResumeOnUsageLimit: config.resources.autoResumeOnUsageLimit,
-      memoryLimitMb: config.resources.memoryLimitMb,
-      worktreeRetentionDefault: config.resources.worktreeRetentionDefault,
-      worktreeIdleDaysDefault: config.resources.worktreeIdleDaysDefault,
-      archivedTaskDeleteDaysDefault: config.resources.archivedTaskDeleteDaysDefault,
-      diskGuard: {
-        minFreePercent: config.resources.diskGuard.minFreePercent,
-        minFreeGb: config.resources.diskGuard.minFreeGb,
-        maxWorktreesGb: config.resources.diskGuard.maxWorktreesGb,
-      },
-    },
-    // SPREAD, never `runner: maybeUndefined`: hono would type the key as always-present while
-    // `JSON.stringify` drops it, which is the exact drift `contract-parity` catches. And absent has
-    // to keep meaning "no opinion" here, or the fallback collapses into "always claude".
-    agentDefaults: {
-      ...(config.agentDefaults.runner !== undefined ? { runner: config.agentDefaults.runner } : {}),
-      // The stored bag is passthrough (index signature); the wire still carries it whole, the
-      // cast only names the keys the contract promises (#1234).
-      ...(config.agentDefaults.models !== undefined
-        ? { models: config.agentDefaults.models as NonNullable<WorkspaceConfigResponse['agentDefaults']['models']> }
-        : {}),
-    },
-  });
   // ---- chained family: workspace settings + GUI prefs (workspace-level) ----
   const workspaceConfigRoutes = new Hono<ProjectApiEnv>()
-    .get('/workspace/config', async (c) => c.json(workspaceConfigBody(await loadWorkspaceConfig())))
+    .get('/workspace/config', async (c): Promise<Response & TypedResponse<WorkspaceConfigBody, 200, 'json'>> =>
+      c.json(workspaceConfigBody(await loadWorkspaceConfig(), phonePairing.computerName()), 200))
 
     // Live host totals for a REMOTE cockpit (spec `.ai/specs/2026-09-20-host-resource-telemetry.md`):
     // the local cockpit gets them pushed over the `host` topic, but a remote one opens no
@@ -4199,7 +4149,9 @@ export function createApp(deps: ServerDeps) {
       return c.json(diskGuardStatusBody(diskGuard.status(), { minFreePercent, minFreeGb, maxWorktreesGb }));
     })
 
-    .put('/workspace/config', jsonZodValidator(() => setWorkspaceConfigInputSchema), async (c) => {
+    .put('/workspace/config', jsonZodValidator(() => setWorkspaceConfigInputSchema), async (c): Promise<Response & (
+      TypedResponse<WorkspaceConfigBody, 200, 'json'> | TypedResponse<{ error: string }, 400 | 403 | 500, 'json'>
+    )> => {
       const parsed = { data: c.req.valid('json') };
       const { browseRoot, projectsDir, skillsAutoUpdate, orgSkillsRepos, systemPrompt, composerDefaults, resources, agentDefaults, branding } = parsed.data;
       // The browse containment reads `browseRoot`, so a phone could otherwise move its own boundary.
@@ -4318,7 +4270,7 @@ export function createApp(deps: ServerDeps) {
       // A resource change takes effect WITHOUT a restart: refresh the shared
       // semaphore's in-memory snapshot and pump every manager (step 2.5's hook).
       if (resources !== undefined) await deps.semaphore?.refresh();
-      return c.json(workspaceConfigBody(written));
+      return c.json(workspaceConfigBody(written, phonePairing.computerName()), 200);
     })
 
     .use('/workspace/branding-logo', bodyLimit({ maxSize: BRANDING_LOGO_MAX_BYTES + 64 * 1024 }))
@@ -10175,6 +10127,64 @@ export function createApp(deps: ServerDeps) {
 
   return routed;
 }
+
+// Deliberately UNannotated: contract-parity compares the schema to this inferred shape (#1234).
+const workspaceConfigBody = (config: WorkspaceConfig, computerName: string) => ({
+  branding: {
+    name: config.branding.name ?? 'cezar',
+    logoUrl: logoAssetUrl(),
+  },
+  computerName,
+  browseRoot: config.browseRoot,
+  projectsDir: config.projectsDir,
+  skillsAutoUpdate: config.skillsAutoUpdate ?? null,
+  effectiveSkillsAutoUpdate: effectiveSkillsAutoUpdate(config),
+  orgSkillsRepos: config.orgSkillsRepos ?? [],
+  systemPrompt: config.systemPrompt ?? null,
+  composerDefaults: {
+    autonomous: config.composerDefaults.autonomous ?? null,
+    worktree: config.composerDefaults.worktree ?? null,
+    inheritedAutonomous:
+      process.env.CEZ_AUTONOMOUS_DEFAULT === '0'
+        ? false
+        : process.env.CEZ_AUTONOMOUS_DEFAULT === '1'
+          ? true
+          : ('source-dependent' as const),
+    inheritedWorktree: effectiveComposerDefault(
+      undefined,
+      process.env.CEZ_WORKTREE_DEFAULT,
+      true,
+    ),
+  },
+  resources: {
+    maxParallel: config.resources.maxParallel,
+    maxMonitoringSessions: config.resources.maxMonitoringSessions,
+    idleTimeoutMinutes: config.resources.idleTimeoutMinutes,
+    monitoringWakeIntervalMinutes: config.resources.monitoringWakeIntervalMinutes,
+    autoResumeOnUsageLimit: config.resources.autoResumeOnUsageLimit,
+    memoryLimitMb: config.resources.memoryLimitMb,
+    worktreeRetentionDefault: config.resources.worktreeRetentionDefault,
+    worktreeIdleDaysDefault: config.resources.worktreeIdleDaysDefault,
+    archivedTaskDeleteDaysDefault: config.resources.archivedTaskDeleteDaysDefault,
+    diskGuard: {
+      minFreePercent: config.resources.diskGuard.minFreePercent,
+      minFreeGb: config.resources.diskGuard.minFreeGb,
+      maxWorktreesGb: config.resources.diskGuard.maxWorktreesGb,
+    },
+  },
+  // SPREAD, never `runner: maybeUndefined`: hono would type the key as always-present while
+  // `JSON.stringify` drops it, which is the exact drift `contract-parity` catches. And absent has
+  // to keep meaning "no opinion" here, or the fallback collapses into "always claude".
+  agentDefaults: {
+    ...(config.agentDefaults.runner !== undefined ? { runner: config.agentDefaults.runner } : {}),
+    // The stored bag is passthrough (index signature); the wire still carries it whole, the
+    // cast only names the keys the contract promises (#1234).
+    ...(config.agentDefaults.models !== undefined
+      ? { models: config.agentDefaults.models as NonNullable<WorkspaceConfigResponse['agentDefaults']['models']> }
+      : {}),
+  },
+});
+interface WorkspaceConfigBody extends ReturnType<typeof workspaceConfigBody> {}
 
 /** The status route's body: the configured thresholds (the guard's own copy is from its last pass). */
 function diskGuardStatusBody(status: DiskGuardStatus, thresholds: { minFreePercent: number; minFreeGb: number; maxWorktreesGb: number }) {
