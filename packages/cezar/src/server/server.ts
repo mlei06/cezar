@@ -316,6 +316,7 @@ import { factoryReportsDir, writeFactoryReport } from '../factory/report.ts';
 import { projectCharterProgress } from '../managers/project-charter.ts';
 import { harnessImprovementRecordsPath, projectImprovementRecordsPath, readImprovementRecords } from '../improvement/bookkeeping.ts';
 import { ensureCredentialHealthAutomation, watchCredentialHealth } from '../factory/credential-health.ts';
+import { ensureFixCiAutomation } from '../factory/ci-trigger.ts';
 import { detectHarnessProject, harnessCauseQueuePath, projectCauseQueuePath, readCauseQueue, recordCauses, routeCauses } from '../factory/causes.ts';
 import { byLastActivityDesc, compareIsoDesc, lastActivityAt, readRunIndexDiagnostic, readRunIndexFromDisk } from '../runs/run-index.ts';
 import { isV2WireEventType } from '../runs/ui-event-sink.ts';
@@ -10497,6 +10498,7 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
     listProjects, pinned: bootProjectId, warn: warnAutomations,
     configureStore: (store, project) => {
       ensureCredentialHealthAutomation(store, project.root);
+      ensureFixCiAutomation(store, project.root);
       if (process.env.CEZ_SELF_IMPROVEMENT === '0' || store.get(FACTORY_AUTOMATION)) return;
       ensureDataGitignore(project.root);
       ensureFactoryAutomation(store);

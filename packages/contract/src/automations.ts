@@ -42,6 +42,7 @@ export const automationEventSchema = z.enum([
   'pull_request.rereview_requested',
   'pull_request.closed',
   'pull_request.merged',
+  'workflow_run.failed',
 ]);
 export type AutomationEvent = z.infer<typeof automationEventSchema>;
 
@@ -84,6 +85,7 @@ export const automationFiltersSchema = z.object({
    *  requested reviewer for the two `review_requested` events. Optional: an empty filter means
    *  "any reviewer". */
   reviewers: z.array(z.string()).optional(),
+  ciBranch: z.string().trim().min(1).max(200).optional(),
   status: z.string().optional(),
   lookbackDays: z.number(),
   maxRecords: z.number(),

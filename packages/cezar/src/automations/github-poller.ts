@@ -34,6 +34,15 @@ const githubItemSchema = z.object({
 /** `merged_at` on a search hit's `pull_request` stub — the only place `/search/issues` says "merged". */
 const pullRequestStubSchema = z.object({ merged_at: z.string().datetime().nullable().optional() }).passthrough();
 
+const workflowRunsSchema = z.object({
+  workflow_runs: z.array(z.object({
+    id: z.number().int().positive(), node_id: z.string().min(1), name: z.string(),
+    head_branch: z.string(), head_sha: z.string().regex(/^[a-f0-9]{40}$/), updated_at: z.iso.datetime(),
+    event: z.string(), status: z.string(), conclusion: z.string().nullable(),
+    actor: z.object({ login: z.string() }).nullable().optional(),
+    head_repository: z.object({ full_name: z.string() }).nullable().optional(),
+  })),
+});
 const searchResponseSchema = z.object({ items: z.array(githubItemSchema) });
 const labelTimelineEventSchema = z.object({
   id: z.number().int().positive().optional(),
@@ -184,6 +193,36 @@ export class GithubPoller {
       candidate?: GithubCandidate;
     }> = [];
     let truncated = false;
+    let workflowPages = 0;
+    if (definition.events.includes('workflow_run.failed')) {
+      const branch = definition.filters.ciBranch ?? 'main';
+      const lookback = definition.filters.lookbackDays * 86_400_000;
+      const since = options.since ?? new Date(Date.now() - lookback).toISOString();
+      const floor = Date.parse(since) - lookback;
+      const endpoint = '/repos/' + encodeURIComponent(owner) + '/' + encodeURIComponent(repo) + '/actions/runs';
+      const args = ['api', '--method', 'GET', endpoint, '-f', 'event=push', '-f', 'branch=' + branch,
+        '-f', 'status=failure', '-f', 'per_page=100', '-f', 'created=>=' + new Date(floor).toISOString()];
+      for (let page = 1; page <= CLOSED_SEARCH_MAX_PAGES; page++) {
+        const { workflow_runs: rows } = workflowRunsSchema.parse(JSON.parse(await this.run('gh', [...args, '-f', 'page=' + page])));
+        workflowPages++;
+        for (const row of rows) {
+          if (row.head_branch !== branch || row.event !== 'push' || row.status !== 'completed' || row.conclusion !== 'failure' ||
+            row.head_repository?.full_name.toLowerCase() !== (owner + '/' + repo).toLowerCase() ||
+            !atOrAfter(row.updated_at, since)) continue;
+          const eventId = owner + '/' + repo + ':workflow_run.failed:' + row.head_sha;
+          const candidate: GithubCandidate = {
+            eventId, event: 'workflow_run.failed', timestamp: row.updated_at, tieBreaker: eventId,
+            repo: owner + '/' + repo, nodeId: row.node_id, number: row.id, title: row.name,
+            url: 'https://' + (this.host ?? 'github.com') + '/' + encodeURIComponent(owner) + '/' + encodeURIComponent(repo) + '/actions/runs/' + row.id,
+            author: row.actor?.login ?? '', assignees: [], labels: [],
+          };
+          observations.push({ timestamp: candidate.timestamp, tieBreaker: eventId,
+            candidate: matchesFilters(candidate, definition) ? candidate : undefined });
+        }
+        if (rows.length < 100) break;
+        truncated ||= page === CLOSED_SEARCH_MAX_PAGES;
+      }
+    }
     for (const source of sources) {
       const query = buildSearchQuery(
         owner,
@@ -326,10 +365,18 @@ export class GithubPoller {
     observations.sort(compareObservation);
     const evaluated = observations.slice(0, maxRecords);
     const cursor = evaluated.at(-1);
+    const seenCi = new Set<string>();
+    const candidates = onePerPullRequest(evaluated.flatMap(({ candidate }) => {
+      if (!candidate) return [];
+      if (candidate.event !== 'workflow_run.failed') return [candidate];
+      if (seenCi.has(candidate.eventId)) return [];
+      seenCi.add(candidate.eventId);
+      return [candidate];
+    }));
     return {
-      candidates: onePerPullRequest(evaluated.flatMap((observation) => observation.candidate ? [observation.candidate] : [])),
+      candidates,
       truncated: truncated || observations.length > maxRecords,
-      pages: sources.length,
+      pages: sources.length + workflowPages,
       cursor: cursor ? { timestamp: cursor.timestamp, tieBreaker: cursor.tieBreaker } : undefined,
     };
   }
