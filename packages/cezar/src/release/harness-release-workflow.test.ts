@@ -36,8 +36,8 @@ it.skipIf(process.platform === 'win32')('schedules only the merged, benchmarked 
     await launch();
     const args = (await readFile(shim + '.argv', 'utf8')).trim().split('\n');
     expect(args).toContain('--unit=harness-release-' + sha.slice(0, 7));
-    expect(args.slice(-7)).toEqual([
-      process.execPath, release, sha, '--benchmark', '--hold-new-tasks',
+    expect(args.slice(-8)).toEqual([
+      process.execPath, release, sha, '--benchmark', '--hold-new-tasks', '--require-real-replays',
       '--health-url', 'http://127.0.0.1:4999/api/v1/health',
     ]);
 

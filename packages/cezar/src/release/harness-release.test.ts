@@ -9,7 +9,7 @@ import { expect, it } from 'vitest';
 
 const exec = promisify(execFile);
 
-it.skipIf(process.platform === 'win32').each(['restart', 'health', 'manual', 'benchmark', 'post-switch', 'revert', 'unmerged', 'validation'] as const)(
+it.skipIf(process.platform === 'win32').each(['restart', 'health', 'manual', 'benchmark', 'post-switch', 'revert', 'unmerged', 'validation', 'real-regression'] as const)(
   'keeps a healthy release in the %s case',
   async (failure) => {
     const root = await mkdtemp(join(tmpdir(), 'cez-release-rollback-'));
@@ -133,7 +133,7 @@ it.skipIf(process.platform === 'win32').each(['restart', 'health', 'manual', 'be
         }
         return;
       }
-      if (failure === 'benchmark' || failure === 'post-switch' || failure === 'validation') {
+      if (failure === 'benchmark' || failure === 'post-switch' || failure === 'validation' || failure === 'real-regression') {
         const benchmarks = join(candidate, 'dist', 'benchmarks');
         const settings = join(candidate, 'dist', 'workspace');
         await Promise.all([mkdir(benchmarks), mkdir(settings)]);
@@ -143,6 +143,7 @@ it.skipIf(process.platform === 'win32').each(['restart', 'health', 'manual', 'be
             'export const HARNESS_SMOKE_SUITE = "fixture";',
             'export const runHarnessSmokeSuite = async entry => ({ passRate: entry === "/previous-entry" ? 100 : ' +
               (failure === 'benchmark' ? 60 : 100) + ', samples: [] });',
+            'export const runHarnessRealReplaySuite = async () => [{ name: "fixture real replay", passed: false }];',
           ].join('\n')),
           writeFile(join(settings, 'config.js'), 'export const loadWorkspaceConfig = async () => ({});'),
         ]);
@@ -150,6 +151,7 @@ it.skipIf(process.platform === 'win32').each(['restart', 'health', 'manual', 'be
           await writeFile(join(selfUpdate, 'staging.js'), 'export const smokeStagedHarness = async () => { throw new Error("fixture failed"); };');
         }
         args.push('--benchmark');
+        if (failure === 'real-regression') args.push('--require-real-replays');
       }
       await expect(execute()).rejects.toMatchObject({ code: 1 });
       expect(await readFile(stateFile, 'utf8')).toBe('previous');
@@ -158,10 +160,15 @@ it.skipIf(process.platform === 'win32').each(['restart', 'health', 'manual', 'be
         expect(log).toEqual([expect.objectContaining({ action: 'switch', result: 'failed', reason: 'The candidate is not merged into origin/factory.' })]);
         return;
       }
-      if (failure === 'benchmark' || failure === 'post-switch' || failure === 'validation') {
+      if (failure === 'benchmark' || failure === 'post-switch' || failure === 'validation' || failure === 'real-regression') {
         const report = JSON.parse(await readFile(join(workspace, 'factory', 'last-release-report.json'), 'utf8'));
         expect(report).toMatchObject({ commit: sha, result: failure === 'post-switch' ? 'rolled-back' : 'blocked' });
         if (failure === 'benchmark') expect(report.benchmark).toEqual({ passRate: 60, baseline: 100, tolerance: 10 });
+      }
+      if (failure === 'real-regression') {
+        expect(log).toContainEqual(expect.objectContaining({ action: 'real-benchmark', sha, result: 'failed' }));
+        expect(log.some(entry => entry.action === 'switch')).toBe(false);
+        return;
       }
       if (failure === 'validation') {
         expect((await readFile(checksLog, 'utf8')).trim().split('\n')).toEqual(['run typecheck', 'test', 'run test:unit']);

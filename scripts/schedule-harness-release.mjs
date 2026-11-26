@@ -39,7 +39,7 @@ function main() {
     '--user', '--collect', '--unit=' + unit, '--working-directory=' + checkout,
     '--setenv=PATH=' + (process.env.PATH ?? ''),
     ...(workspace ? ['--setenv=CEZ_HOME=' + workspace] : []),
-    process.execPath, script, sha, '--benchmark', '--hold-new-tasks',
+    process.execPath, script, sha, '--benchmark', '--hold-new-tasks', '--require-real-replays',
     '--health-url', new URL('/api/v1/health', url).href,
   ], { cwd: checkout, stdio: ['ignore', 'pipe', 'pipe'], env: hostEnv, timeout: 15_000 });
   console.log('Scheduled ' + unit + '. Its journal and the release log record the result.');
