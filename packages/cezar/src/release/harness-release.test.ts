@@ -9,7 +9,7 @@ import { expect, it } from 'vitest';
 
 const exec = promisify(execFile);
 
-it.skipIf(process.platform === 'win32').each(['restart', 'health', 'manual', 'benchmark', 'post-switch', 'revert'] as const)(
+it.skipIf(process.platform === 'win32').each(['restart', 'health', 'manual', 'benchmark', 'post-switch', 'revert', 'unmerged'] as const)(
   'keeps a healthy release in the %s case',
   async (failure) => {
     const root = await mkdtemp(join(tmpdir(), 'cez-release-rollback-'));
@@ -37,6 +37,13 @@ it.skipIf(process.platform === 'win32').each(['restart', 'health', 'manual', 'be
       if (failure === 'revert') {
         await writeFile(payload, 'changed\n');
         commit('-qam', 'release change');
+      }
+      if (failure !== 'manual' && failure !== 'revert') {
+        const remote = join(root, 'remote.git');
+        git('init', '-q', '--bare', remote);
+        git('remote', 'add', 'origin', remote);
+        git('push', 'origin', 'HEAD:refs/heads/factory');
+        if (failure === 'unmerged') commit('-qm', 'unmerged candidate', '--allow-empty');
       }
       const sha = git('rev-parse', 'HEAD');
       const candidate = join(workspace, 'factory', 'builds', sha.slice(0, 7), 'packages', 'cezar');
@@ -137,6 +144,10 @@ it.skipIf(process.platform === 'win32').each(['restart', 'health', 'manual', 'be
       await expect(execute()).rejects.toMatchObject({ code: 1 });
       expect(await readFile(stateFile, 'utf8')).toBe('previous');
       const log = (await readFile(releaseLog, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+      if (failure === 'unmerged') {
+        expect(log).toEqual([expect.objectContaining({ action: 'switch', result: 'failed', reason: 'The candidate is not merged into origin/factory.' })]);
+        return;
+      }
       if (failure === 'benchmark') {
         expect(log.at(-1)).toMatchObject({ action: 'benchmark', baseline: 100, passRate: 60, result: 'failed' });
         expect(log.some((entry) => entry.action === 'switch')).toBe(false);

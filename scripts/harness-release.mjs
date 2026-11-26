@@ -25,6 +25,7 @@ const HOME = process.env.CEZ_HOME || join(homedir(), '.cezar');
 const FACTORY = join(HOME, 'factory');
 const BUILDS = join(FACTORY, 'builds');
 const LOG = join(FACTORY, 'release-log.ndjson');
+const FACTORY_REF = 'refs/remotes/origin/factory';
 
 const args = process.argv.slice(2);
 const flag = (name) => args.includes(`--${name}`);
@@ -246,9 +247,20 @@ async function candidateSmoke(packageRoot, entry) {
 }
 
 async function release() {
-  const spec = positional[0] ?? 'origin/factory';
-  spawnSync('git', ['fetch', '--quiet', 'origin', 'factory'], { cwd: REPO });
-  const sha = run('git', ['rev-parse', `${spec}^{commit}`]);
+  const stageOnly = flag('stage-only');
+  const spec = positional[0] ?? FACTORY_REF;
+  if (!stageOnly || !positional[0]) {
+    const fetched = spawnSync('git', ['fetch', '--quiet', '--no-tags', 'origin', '+refs/heads/factory:' + FACTORY_REF], {
+      cwd: REPO, timeout: 30_000, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+    });
+    if (fetched.status !== 0) throw new Error('Could not verify the current origin/factory branch.');
+  }
+  const sha = run('git', ['rev-parse', '--verify', '--end-of-options', `${spec}^{commit}`]);
+  if (!stageOnly) {
+    const ancestor = spawnSync('git', ['merge-base', '--is-ancestor', sha, FACTORY_REF], { cwd: REPO });
+    if (ancestor.status === 1) throw new Error('The candidate is not merged into origin/factory.');
+    if (ancestor.status !== 0) throw new Error('Could not verify the candidate against origin/factory.');
+  }
   const sha7 = sha.slice(0, 7);
   const dir = join(BUILDS, sha7);
   const branch = `release/${sha7}`;
@@ -269,7 +281,7 @@ async function release() {
   }
   log({ action: 'build', sha, result: 'ok' });
 
-  if (flag('stage-only')) {
+  if (stageOnly) {
     await candidateSmoke(packageRoot, join(packageRoot, 'dist', 'index.js'));
     log({ action: 'stage', sha, result: 'ok' });
     say('candidate completed its isolated smoke task');
