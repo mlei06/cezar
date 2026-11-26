@@ -74,6 +74,7 @@ describe('a read-only workflow', { timeout: 30_000 }, () => {
     vi.waitFor(() => expect(['done', 'review', 'failed', 'cancelled']).toContain(store.getRun(id)?.status), { timeout: 20_000 });
 
   it('enforces plan policy at launch and Continue', async () => {
+    writeFileSync(join(repoRoot, '.ai/cezar/config.json'), JSON.stringify({ defaultRunner: 'codex' }));
     const id = manager!.startRun(PLAN, { task: 'inspect the repo' }).id;
     await terminal(id);
     expect(store.getRun(id)?.status, store.getRun(id)?.error).not.toBe('failed');
