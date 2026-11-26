@@ -1,9 +1,12 @@
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parse } from 'yaml';
 import { scorerMetadataSchema, scorerNameSchema, type ScorerMetadata } from '@open-mercato/cezar-contract';
 import { splitMarkdownFrontmatter } from '../markdown-frontmatter.ts';
+import { cezarHomeDir } from '../paths.ts';
+import { atomicWriteJson, serializedByPath } from '../workspace/config.ts';
 
 export const SCORERS_DIR = '.ai/cezar/scorers';
 const bundled = join(import.meta.dirname, 'scorers');
@@ -37,21 +40,58 @@ export function parseScorer(name: string, markdown: string, source: Scorer['sour
 
 /** Keep the most recently valid definition for an invalid file until it is repaired or removed. */
 export class ScorerCatalog {
-  private readonly lastValid = new Map<string, Map<string, Scorer>>();
+  private readonly lastValid = new Map<string, Map<string, string>>();
+
+  constructor(private readonly persist = false) {}
 
   async load(repoRoot: string, workflowNames: ReadonlySet<string>): Promise<{ scorers: Scorer[]; issues: ScorerIssue[] }> {
+    const projectKey = createHash('sha256').update(repoRoot).digest('hex');
+    const path = join(cezarHomeDir(), 'factory', 'scorer-cache', projectKey + '.json');
+    return serializedByPath(path, async () => {
+      const projectScorers = this.lastValid.get(repoRoot) ?? (this.persist ? await this.readCache(path) : new Map());
+      const existing = JSON.stringify([...projectScorers]);
+      const result = await this.loadDefinitions(repoRoot, workflowNames, projectScorers);
+      this.lastValid.set(repoRoot, projectScorers);
+      if (this.persist && existing !== JSON.stringify([...projectScorers])) {
+        await atomicWriteJson(path, [...projectScorers]).catch(() => undefined);
+      }
+      return result;
+    });
+  }
+
+  private async readCache(path: string): Promise<Map<string, string>> {
+    try {
+      const content: unknown = JSON.parse(await readFile(path, 'utf8'));
+      if (!Array.isArray(content)) return new Map();
+      const defs = new Map<string, string>();
+      for (const entry of content) {
+        if (!Array.isArray(entry) || entry.length !== 2) continue;
+        const [name, markdown] = entry as [unknown, unknown];
+        if (typeof name !== 'string' || typeof markdown !== 'string') continue;
+        try {
+          parseScorer(name, markdown, 'project');
+          defs.set(name, markdown);
+        } catch {
+          // Invalid cache entries cannot supply a rubric.
+        }
+      }
+      return defs;
+    } catch {
+      return new Map();
+    }
+  }
+
+  private async loadDefinitions(repoRoot: string, workflowNames: ReadonlySet<string>, projectScorers: Map<string, string>) {
     const scorers = new Map<string, Scorer>();
     const issues: ScorerIssue[] = [];
-    const projectScorers = this.lastValid.get(repoRoot) ?? new Map<string, Scorer>();
-    this.lastValid.set(repoRoot, projectScorers);
     const loadRoot = async (dir: string, source: Scorer['source']) => {
       const found = new Set<string>();
       const entries = await readdir(dir, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
         if (error.code === 'ENOENT' && source === 'project') return [];
         issues.push({ path: dir, message: 'Cannot read scorer directory.' });
         if (source === 'project') {
-          for (const [name, scorer] of projectScorers) {
-            scorers.set(name, scorer);
+          for (const [name, markdown] of projectScorers) {
+            scorers.set(name, parseScorer(name, markdown, source));
             found.add(name);
           }
         }
@@ -61,18 +101,19 @@ export class ScorerCatalog {
         if (!entry.isDirectory()) continue;
         const path = join(dir, entry.name, 'scorer.md');
         try {
-          const scorer = parseScorer(entry.name, await readFile(path, 'utf8'), source);
+          const markdown = await readFile(path, 'utf8');
+          const scorer = parseScorer(entry.name, markdown, source);
           const missing = scorer.workflows?.filter((name) => !workflowNames.has(name));
           if (missing?.length) throw new Error(`Unknown workflows: ${missing.join(', ')}.`);
           scorers.set(entry.name, scorer);
           found.add(entry.name);
-          if (source === 'project') projectScorers.set(entry.name, scorer);
+          if (source === 'project') projectScorers.set(entry.name, markdown);
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
           issues.push({ path, message: error instanceof Error ? error.message : String(error) });
           found.add(entry.name);
           const previous = projectScorers.get(entry.name);
-          if (source === 'project' && previous) scorers.set(entry.name, previous);
+          if (source === 'project' && previous) scorers.set(entry.name, parseScorer(entry.name, previous, source));
         }
       }
       return found;

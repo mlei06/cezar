@@ -1,7 +1,7 @@
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { checkFactory } from './check.ts';
 import { parseScorer, ScorerCatalog, SCORERS_DIR } from './scorers.ts';
 
@@ -47,6 +47,34 @@ it('loads the bundled rubrics and retains a valid project override while an edit
     expect(removed.issues).toEqual([]);
     expect(removed.scorers.find((scorer) => scorer.name === 'outcome')?.source).toBe('builtin');
   } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it('keeps the last valid rubric across a restart until the override is removed', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'cez-scorer-cache-'));
+  vi.stubEnv('CEZ_HOME', join(root, 'workspace'));
+  try {
+    const dir = join(root, SCORERS_DIR, 'example');
+    const file = join(dir, 'scorer.md');
+    const names = new Set(['quick-task']);
+    await mkdir(dir, { recursive: true });
+    await writeFile(file, rubric());
+    const first = await new ScorerCatalog(true).load(root, names);
+
+    await writeFile(file, rubric(0));
+    const restarted = await new ScorerCatalog(true).load(root, names);
+    expect(restarted.issues).toHaveLength(1);
+    expect(restarted.scorers).toEqual(first.scorers);
+
+    await rm(file);
+    await new ScorerCatalog(true).load(root, names);
+    await writeFile(file, rubric(0));
+    const afterRemoval = await new ScorerCatalog(true).load(root, names);
+    expect(afterRemoval.issues).toHaveLength(1);
+    expect(afterRemoval.scorers.some((item) => item.name === 'example')).toBe(false);
+  } finally {
+    vi.unstubAllEnvs();
     await rm(root, { recursive: true, force: true });
   }
 });
