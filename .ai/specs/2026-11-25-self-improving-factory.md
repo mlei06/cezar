@@ -1,6 +1,6 @@
 # The self-improving factory
 
-Status: draft v5.26, 2026-11-26. Fork: `mlei06/cezar`, trunk `factory`. Spec owner: the overseer (see the roadmap). Implementation plan: `2026-11-25-self-improving-factory-roadmap.md`. Findings during the build: `2026-11-25-self-improving-factory-observations.md`.
+Status: draft v5.27, 2026-11-26. Fork: `mlei06/cezar`, trunk `factory`. Spec owner: the overseer (see the roadmap). Implementation plan: `2026-11-25-self-improving-factory-roadmap.md`. Findings during the build: `2026-11-25-self-improving-factory-observations.md`.
 
 ## TLDR
 
@@ -446,7 +446,8 @@ Two extensions to variants make this work:
 - **Outside systems:** replays never push, merge or deploy, and they skip check steps marked `sideEffects: true`.
 - **Local check execution:** replay checks run in a dedicated worktree and scratch space under a filesystem allowlist. The sandbox exposes a minimal runtime, hides Git administrative data and the rest of the host, and disables network access. Checks receive no service credentials or task capability. Checks fail if the sandbox is unavailable. The Linux Codex named permission profile is the first verified implementation.
 - **Worktree hooks:** a replay uses the recorded Git commit and bypasses Git checkout hooks, personal configuration seeding and Cezar's worktree lifecycle scripts. Checkout bypasses external Git filters. Replay checks leave residues in the worktree and bypass autosave so Git filters and hooks cannot run afterwards. Preparation or cleanup with external dependencies needs an isolated replay workflow.
-- **Harness version:** a replay on another harness version runs on a staging cockpit started from that installed version (D9), with its own `CEZ_HOME`.
+- **Agent isolation:** Codex runs replay agents through its verified read-only broker. If the saved workflow grants Bash, the broker runs that Bash command through the same local sandbox as replay checks. Native execution, Git administration, private MCP and service credentials are unavailable. Other runners need a verified boundary before they can replay.
+- **Harness version:** a replay on another harness version runs on a staging cockpit started from that installed version (D9), with its own `CEZ_HOME`. The first implementation supports check workflows on alternate versions. It retains the comparison diff and check output after closing the staging cockpit. Alternate-version agent workflows require isolated runner authentication before they can replay.
 - **Mid-task messages:** the original's owner and manager messages are appended to the replay's brief as context, not resent mid-run.
 - **Queues:** replays never feed improvement queues. They're experiments, and a deliberately weak variant would otherwise flood the queues.
 - **Noise:** models vary between runs, so a comparison means 3–5 replays per variant.
@@ -833,6 +834,7 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
 
 ## Changelog
 
+- **v5.27:** D8 reuses the Codex broker and the replay check sandbox for isolated agent edits. Alternate harness checks retain their diff after the scratch cockpit closes.
 - **v5.26:** D8 restricts replay check reads to the worktree and minimal runtime, blocks Git administration and skips autosave and external checkout filters.
 - **v5.25:** D8 keeps replay worktree creation and cleanup clear of Git checkout hooks and Cezar lifecycle scripts.
 - **v5.24:** D8 specifies the execution boundary for local replay checks, including network isolation and failure when the sandbox is unavailable.
