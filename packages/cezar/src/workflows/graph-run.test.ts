@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -106,8 +106,13 @@ describe('graph workflows run through RunManager', () => {
   it.skipIf(process.platform !== 'linux')('replays a saved check workflow in a group from its original commit', async () => {
     stubReplaySandbox();
     const cwd = { cwd: repoRoot };
+    writeFileSync(join(repoRoot, '.gitattributes'), 'a.txt filter=replay-fixture\n');
+    await run('git', ['add', '.gitattributes'], cwd);
+    await run('git', [...GIT_ID, 'commit', '-qm', 'fixture attributes'], cwd);
     const oldCommit = (await run('git', ['rev-parse', 'HEAD'], cwd)).stdout.trim();
-    const workflow: WorkflowDef = { name: 'repeat', source: 'file', steps: [{ id: 'check', command: 'cat a.txt' }] };
+    const workflow: WorkflowDef = {
+      name: 'repeat', source: 'file', steps: [{ id: 'check', command: 'cat a.txt && printf "changed\\n" >>a.txt' }],
+    };
     const original = store.createRun({ title: 'Baseline', task: 'Check the file.', workflow: workflow.name, steps: [] });
     store.updateRun(original.id, {
       status: 'done', startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(),
@@ -117,6 +122,10 @@ describe('graph workflows run through RunManager', () => {
     writeFileSync(join(repoRoot, 'a.txt'), 'new\n');
     await run('git', ['add', 'a.txt'], cwd);
     await run('git', [...GIT_ID, 'commit', '-qm', 'new checkout'], cwd);
+    const filterMarker = join(repoRoot, '.git', 'filter-ran');
+    const filter = `printf invoked > ${JSON.stringify(filterMarker)}; cat`;
+    await run('git', ['config', 'filter.replay-fixture.smudge', filter], cwd);
+    await run('git', ['config', 'filter.replay-fixture.clean', filter], cwd);
     const app = createApp({ repoRoot, store, manager, version: 'test' });
     const replayRequest = (input: object) => apiRequest(app, `/api/v1/runs/${original.id}/replay`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input),
@@ -139,12 +148,42 @@ describe('graph workflows run through RunManager', () => {
       expect(manager.switchAgent(id, { runner: 'codex', agentProfile: 'default', changedBy: 'user' }))
         .toHaveProperty('error', expect.stringContaining('Replay'));
       expect(store.readEvents(id)).toContainEqual(expect.objectContaining({ type: 'check-output', text: 'one' }));
+      expect(await (await apiRequest(app, `/api/v1/runs/${id}/diff`)).text()).toContain('+changed');
+      const changes = await apiRequest(app, `/api/v1/runs/${id}/changes`);
+      expect(changes.status).toBe(200);
+      expect((await changes.json() as { files: { path: string }[] }).files).toContainEqual(expect.objectContaining({ path: 'a.txt' }));
     }
     const compare = await apiRequest(app, `/api/v1/groups/${result.groupId}`);
     expect(compare.status).toBe(200);
     expect((await compare.json() as { runs: unknown[] }).runs).toHaveLength(4);
     expect(readFileSync(join(repoRoot, 'a.txt'), 'utf8')).toBe('new\n');
+    expect(existsSync(filterMarker)).toBe(false);
   });
+
+  it.skipIf(process.platform !== 'linux')('changes only the model when replaying a Codex Plan', async () => {
+    const runner = vi.spyOn(CodexAppServerRunner.prototype, 'startSession');
+    const original = manager.startRun(await builtin('plan'), { task: 'Inspect the fixture.', model: 'model-a', runner: 'codex' });
+    await vi.waitFor(() => expect(store.getRun(original.id)?.status).toBe('waiting'), { timeout: 15_000 });
+    expect(manager.finish(original.id)).toBe(true);
+    await settle(original.id);
+    await vi.waitFor(() => expect(manager.isActive(original.id)).toBe(false));
+    runner.mockClear();
+    const result = await manager.startReplay(original.id, { model: 'model-b', times: 3 });
+    if ('error' in result) throw new Error(result.error);
+    expect(result.runs).toHaveLength(3);
+    for (const replay of result.runs) {
+      expect(await settle(replay.id)).toMatchObject({
+        replayOf: original.id, groupId: result.groupId, replayChange: 'model model-b',
+        status: 'done', startCommit: original.startCommit, worktreePath: expect.any(String),
+      });
+    }
+    expect(runner).toHaveBeenCalledTimes(3);
+    for (const [spec] of runner.mock.calls) {
+      expect(spec).toMatchObject({ model: 'model-b', enforceReadOnly: true, allowedTools: ['Read', 'Grep', 'Glob'], mcpServers: [] });
+      expect(spec.additionalDirectories ?? []).not.toContain(join(repoRoot, '.ai', 'cezar', 'runs'));
+    }
+    runner.mockRestore();
+  }, 30_000);
 
   it.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('lowers the CPU priority of workflow checks', async () => {
     const command = `'${process.execPath}' -p 'require("node:os").getPriority()'`;

@@ -327,6 +327,25 @@ export async function createWorktree(
   return info;
 }
 
+/** Replay may inspect the worktree after a check changed its attributes. Keep the Git
+ * commands off network and prevent attributes from invoking configured external filters. */
+export async function replayGit(dir: string): Promise<(args: string[], env?: NodeJS.ProcessEnv) => Promise<GitResult>> {
+  const config = await git(dir, ['config', '--null', '--list', '--name-only']);
+  if (!config.ok) return async () => ({ ok: false, stdout: '', stderr: 'Replay could not read the repository Git configuration.' });
+  const options = ['--no-pager', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false',
+    '-c', 'diff.external=', '-c', 'protocol.allow=never', '-c', 'submodule.recurse=false'];
+  for (const key of new Set(config.stdout.split('\0'))) {
+    if (/^filter\..+\.(clean|process|smudge)$/.test(key)) options.push('-c', `${key}=`);
+  }
+  // A required driver still fails rather than silently substituting its pointer file.
+  return (args, env) => git(dir, [
+    ...options,
+    ...(args[0] === 'diff' || args[0] === 'show'
+      ? [args[0], '--no-ext-diff', '--no-textconv', '--ignore-submodules=all', ...args.slice(1)]
+      : args),
+  ], { env: { ...process.env, ...env, GIT_NO_LAZY_FETCH: '1', GIT_NO_REPLACE_OBJECTS: '1' } });
+}
+
 export async function hasReplayCommit(repoRoot: string, commit: string): Promise<boolean> {
   if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(commit)) return false;
   const result = await git(repoRoot, ['rev-parse', '--verify', '--quiet', `${commit}^{commit}`]);
@@ -355,18 +374,7 @@ export async function createWorktreeWithOutcome(
   if (!isSafeGitRef(branch)) throw new Error(`refusing option-like branch name: ${branch}`);
   const absolutePath = join(canonicalPath(repoRoot), WORKTREES_DIR, runId);
   const branchRef = `refs/heads/${branch}`;
-  const checkoutOptions: string[] = [];
-  if (opts.isolatedReplay) {
-    const config = await git(repoRoot, ['config', '--null', '--list', '--name-only']);
-    if (!config.ok) throw new Error('Replay could not read the repository checkout configuration.');
-    checkoutOptions.push('-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false');
-    for (const key of new Set(config.stdout.split('\0'))) {
-      if (/^filter\..+\.(process|smudge)$/.test(key)) checkoutOptions.push('-c', `${key}=`);
-    }
-    // An active required filter still fails the checkout instead of using its pointer file.
-  }
-  const checkout = (args: string[]) => git(repoRoot, [...checkoutOptions, ...args],
-    opts.isolatedReplay ? { env: { ...process.env, GIT_NO_LAZY_FETCH: '1', GIT_NO_REPLACE_OBJECTS: '1' } } : {});
+  const checkout = opts.isolatedReplay ? await replayGit(repoRoot) : (args: string[]) => git(repoRoot, args);
 
   // A missing directory can leave stale administrative metadata behind.
   // Prune first so the checks below describe the filesystem as it exists now.
@@ -777,12 +785,14 @@ export async function worktreeDiff(
   worktreePath: string,
   baseBranch: string,
   cap = DIFF_CAP,
+  replay = false,
 ): Promise<string> {
   if (!isSafeGitRef(baseBranch)) return '(diff failed: refusing option-like base ref)';
-  await git(worktreePath, ['add', '-N', '.']); // intent-to-add: untracked files show up
-  const mergeBase = await git(worktreePath, ['merge-base', baseBranch, 'HEAD']);
+  const invoke = replay ? await replayGit(worktreePath) : (args: string[]) => git(worktreePath, args);
+  await invoke(['add', '-N', '.']); // intent-to-add: untracked files show up
+  const mergeBase = await invoke(['merge-base', baseBranch, 'HEAD']);
   const base = mergeBase.ok && mergeBase.stdout.trim() ? mergeBase.stdout.trim() : baseBranch;
-  const res = await git(worktreePath, ['diff', base]);
+  const res = await invoke(['diff', base]);
   if (!res.ok) return `(diff failed: ${res.stderr.trim() || 'unknown git error'})`;
   if (res.stdout.length > cap) return `${res.stdout.slice(0, cap)}\n… (diff truncated)`;
   return res.stdout;
@@ -814,12 +824,14 @@ export async function branchDiff(repoRoot: string, baseBranch: string, branch: s
 export async function worktreeDiffStat(
   worktreePath: string,
   baseBranch: string,
+  replay = false,
 ): Promise<string> {
   if (!isSafeGitRef(baseBranch)) return '';
-  await git(worktreePath, ['add', '-N', '.']); // intent-to-add: untracked files show up
-  const mergeBase = await git(worktreePath, ['merge-base', baseBranch, 'HEAD']);
+  const invoke = replay ? await replayGit(worktreePath) : (args: string[]) => git(worktreePath, args);
+  await invoke(['add', '-N', '.']); // intent-to-add: untracked files show up
+  const mergeBase = await invoke(['merge-base', baseBranch, 'HEAD']);
   const base = mergeBase.ok && mergeBase.stdout.trim() ? mergeBase.stdout.trim() : baseBranch;
-  const res = await git(worktreePath, ['diff', '--stat', base]);
+  const res = await invoke(['diff', '--stat', base]);
   return res.ok ? res.stdout.trim() : '';
 }
 

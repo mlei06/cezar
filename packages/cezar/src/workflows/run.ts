@@ -1288,9 +1288,15 @@ const REPLAY_EXTERNAL_NODE_PORTS: Readonly<Partial<Record<ExecutableNode['type']
 
 const REPLAY_CHECK_NODE_TYPES = new Set(['start', 'end', 'loop', 'check', 'if', ...Object.keys(REPLAY_EXTERNAL_NODE_PORTS)]);
 
-function replayCheckWorkflow(workflow: WorkflowDef): boolean {
+function replayMode(workflow: WorkflowDef): 'checks' | 'read-only-agent' | undefined {
   const graph = workflow.graph ?? compileV1(workflow.steps);
-  return graph.nodes.every((node) => REPLAY_CHECK_NODE_TYPES.has(node.type));
+  if (graph.nodes.every((node) => REPLAY_CHECK_NODE_TYPES.has(node.type))) return 'checks';
+  if (!isBuiltInPlan(workflow)) return undefined;
+  if (graph.nodes.every((node) => node.type === 'agent'
+    ? (!node.runner || node.runner === 'codex') && node.allowedTools?.every(tool => READ_ONLY_TOOLS.includes(tool)) &&
+      !node.bashAllowlist && !node.session && !node.model
+    : REPLAY_CHECK_NODE_TYPES.has(node.type))) return 'read-only-agent';
+  return undefined;
 }
 
 
@@ -2338,7 +2344,7 @@ export class RunManager {
     if (workflow.source === 'built-in' && workflow.name === 'implement' && !input.readOnly) {
       input = { ...input, worktree: true };
     }
-    if (input.readOnly && (!group || plan)) {
+    if (input.readOnly && !input.replay && (!group || plan)) {
       input = { ...input, worktree: false, newBranch: undefined, dispatchIntent: undefined, forkRef: undefined };
     }
     // Sanitize at the manager boundary so CLI runs, workflows, variants, and
@@ -2521,10 +2527,18 @@ export class RunManager {
     }
     const workflow = input.workflow ? await this.findWorkflow(input.workflow) : source.workflowDef;
     if (!workflow) return { error: 'The requested replay workflow is unavailable.' };
-    if (!replayCheckWorkflow(workflow)) {
-      return { error: 'This workflow needs an isolated agent or system node that replay cannot yet use.' };
+    const mode = replayMode(workflow);
+    if (!mode) return { error: 'This workflow needs an isolated agent or system node that replay cannot yet use.' };
+    const changesAgent = input.model || input.runner || input.effort || input.skill;
+    if (mode === 'checks' && changesAgent) return { error: 'The replay workflow has no agent input to change.' };
+    const runner = input.runner ?? source.runner;
+    if (mode === 'read-only-agent' && runner !== 'codex') {
+      return { error: 'Read-only agent replay requires Codex.' };
     }
-    if (input.model || input.runner || input.effort || input.skill) return { error: 'The replay workflow has no agent input to change.' };
+    if (input.skill) return { error: 'Replay skill overrides are not supported yet.' };
+    const model = input.model ?? (source.runner === runner ? source.actualModel || source.model : undefined);
+    if (input.model && modelConflictsWithRunner(input.model, 'codex')) return { error: 'The replay model must belong to the Codex runner.' };
+    if ((input.model || input.effort) && agentModelsLocked(this.repoRoot)) return { error: AGENT_MODELS_LOCKED_ERROR };
     if (!await hasReplayCommit(this.repoRoot, startCommit)) return { error: 'The original project commit is unavailable.' };
     if (this.store.getRun(sourceId) !== source || source.startCommit !== startCommit ||
       source.harnessVersion !== harnessVersion || source.workflowDef !== workflowDef || source.finishedAt !== finishedAt ||
@@ -2545,9 +2559,14 @@ export class RunManager {
     if (slots.length !== input.times) return { error: 'A replay group can hold at most five variants.' };
     const groupId = foundGroup ?? randomUUID();
     if (!foundGroup) this.store.updateRun(sourceId, { groupId, variant: 'A' });
-    const change = input.brief ? 'brief' : input.workflow ? `workflow ${input.workflow}` : input.harness ? `harness ${input.harness}` : 'repeat';
+    const change = input.brief ? 'brief' : input.workflow ? `workflow ${input.workflow}` : input.harness ? `harness ${input.harness}`
+      : input.model ? `model ${input.model}` : input.runner ? `runner ${input.runner}` : input.effort ? `effort ${input.effort}` : 'repeat';
     const runs = slots.map((variant) => this.startRun(workflow, {
-      task, images, worktree: true, generateFollowups: false,
+      task, images, worktree: true, generateFollowups: false, modelRoutePinned: true,
+      ...(mode === 'read-only-agent' ? {
+        runner: 'codex', model, agentProfile: input.runner && input.runner !== source.runner ? undefined : source.agentProfile,
+        reasoningEffort: input.effort ?? source.reasoningEffort, readOnly: true, enforceReadOnly: true, secrets: [],
+      } : {}),
       replay: { sourceId, startCommit, change, harness: currentHarness, systemPrompt: source.systemPrompt },
     }, { groupId, variant }));
     this.store.flush();
@@ -7355,9 +7374,10 @@ export class RunManager {
     if (original?.replayOf) {
       const current = await runHarnessVersion();
       if (state.cancelled) return;
+      const mode = replayMode(workflow);
       if (!original.startCommit || !original.workflowDef || input.worktree !== true ||
         original.harnessVersion?.id !== current.id || !current.commit || original.harnessVersion.commit !== current.commit ||
-        !replayCheckWorkflow(workflow)) {
+        !mode || (mode === 'read-only-agent' && (input.runner !== 'codex' || !input.enforceReadOnly))) {
         const error = 'The replay needs its saved workflow, exact worktree and pinned harness.';
         this.publishRunFailure(runId, { status: 'failed', error, finishedAt: new Date().toISOString(), currentStepId: undefined });
         emit({ type: 'lifecycle', message: error });
@@ -7431,7 +7451,7 @@ export class RunManager {
       input = { ...input, worktree: false };
       this.store.updateRun(runId, { worktree: false });
     }
-    state.readOnly = input.readOnly === true && input.worktree === false;
+    state.readOnly = input.readOnly === true && (input.worktree === false || original?.replayOf !== undefined);
     state.enforceReadOnly = (state.readOnly && input.enforceReadOnly === true) ||
       isBuiltInPlan(workflow);
     state.autoLand = await this.landingPolicy(this.store.getRun(runId), config, (message) =>
@@ -7689,9 +7709,11 @@ export class RunManager {
     // Same rule, same reason, for the dispatch session snapshot (the dispatch prompt; the child
     // role's prompt a spawn will need). This is the FIRST of the two construction sites; the
     // twin is in `runContinuation`.
-    this.prepareDispatchSession(runId, state);
-    this.prepareAutomationsSession(state);
-    this.prepareArtifactsSession(runId, state);
+    if (!original?.replayOf) {
+      this.prepareDispatchSession(runId, state);
+      this.prepareAutomationsSession(state);
+      this.prepareArtifactsSession(runId, state);
+    }
     let runError: string | null = null;
     // `startRun` already persisted the task's attachments so a queued bubble can render them
     // (#612). Reuse those files for the agent-facing path note instead of minting
@@ -9472,11 +9494,12 @@ export class RunManager {
     const sessionId = graphHooks?.resumeSessionId ?? randomUUID();
     const backend = step.runner ?? taskBackend;
     const launchRecord = this.store.getRun(runId);
+    const replay = !!launchRecord?.replayOf;
     const resumedOwnerId = resumeStep?.id ?? graphHooks?.resumeStepId;
     const resumedOwner = graphHooks?.resumeSessionId === undefined ? undefined : launchRecord?.steps.find(
       (candidate) => candidate.id === (resumedOwnerId ?? step.id) && candidate.sessionId === graphHooks.resumeSessionId,
     );
-    const secretNames = graphHooks?.resumeSessionId || graphHooks?.continuing || resumeStep || checkFailure !== null
+    const secretNames = replay ? [] : graphHooks?.resumeSessionId || graphHooks?.continuing || resumeStep || checkFailure !== null
       ? continuationSecretNames(launchRecord, resumedOwner)
       : launchRecord?.secretNames ?? step.secrets?.filter((name) => typeof name === 'string');
     const modelsLocked = agentModelsLocked(this.repoRoot);
@@ -9559,6 +9582,11 @@ export class RunManager {
         // boundary flushes again (idempotent) as a backstop.
         sink.flushAll();
         turnText = this.store.redactRunText(runId, turnText);
+        if (replay) {
+          if (graphHooks?.lastTurn) graphHooks.lastTurn.text = turnText;
+          state.session?.end();
+          return;
+        }
         void this.recordTurnEnd(runId, turnText, state); // titleSummary + diffStat (#389)
         void this.rescanArtifacts(runId, { render: true }); // the guarantee behind the watcher (spec 2026-10-22-html-artifacts Q2), plus the impact backstop
         const sessionOpen = !state.cancelled && state.session?.open;
@@ -9880,7 +9908,7 @@ export class RunManager {
           ...stepTools,
           ...(state.bypassPermissions && !stepTools.enforceReadOnly ? { bypassPermissions: true } : {}),
           // The handoff file lives outside the worktree — grant access.
-          additionalDirectories: agentDirectories(
+          additionalDirectories: replay ? [this.attachmentsDir(runId)] : agentDirectories(
             join(this.dataDir, 'runs'),
             state.grantedAttachmentLibrary,
             profile.env,
@@ -10233,7 +10261,7 @@ export class RunManager {
     turnText = this.store.redactRunText(runId, turnText);
     try {
       const run = this.store.getRun(runId);
-      if (!run) return;
+      if (!run || run.replayOf) return;
       if (owner && this.active.get(runId) !== owner) return;
       this.applyTurnMarkers(runId, run, turnText);
       // Titles are the namer's job (task auto-naming spec) — turn text is

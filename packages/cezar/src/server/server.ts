@@ -6198,6 +6198,7 @@ export function createApp(deps: ServerDeps) {
       const id = c.req.param('id');
       const run = store.getRun(id);
       if (!run) return c.json({ error: 'not found' }, 404);
+      if (run.replayOf) return c.json({ error: 'Replay variants cannot open an ordinary agent.' }, 409);
       if (c.get('project').manager.lifecycle?.isBlocked(id)) return c.json({ error: 'Resolve the pending worktree lifecycle operation before opening its environment' }, 409);
       // Hosted mode: there is no "my machine" to open a terminal on. The UI
       // hides the button when localHandoff is false — this is defense in depth.
@@ -6398,7 +6399,7 @@ export function createApp(deps: ServerDeps) {
       if (!run.worktreePath || !existsSync(run.worktreePath)) {
         return c.text(run.worktreeReclaimedAt ? `(${RECLAIMED_WORKTREE})` : '(no worktree — this task ran directly in the repo working tree)');
       }
-      return c.text(await worktreeDiff(run.worktreePath, run.baseBranch ?? 'HEAD'));
+      return c.text(await worktreeDiff(run.worktreePath, run.baseBranch ?? 'HEAD', undefined, !!run.replayOf));
     })
 
     .get('/runs/:id/changes', async (c) => {
@@ -6412,7 +6413,8 @@ export function createApp(deps: ServerDeps) {
         // Anchors a repointed worktree at the branch as this run found it (#751).
         runStartedAt: run.startedAt,
         // A read-only GET against the user's real checkout must never modify its index.
-        intentToAdd: run.worktreePath ? undefined : false,
+        intentToAdd: run.worktreePath && !run.replayOf ? undefined : false,
+        replay: !!run.replayOf,
         excludeCezarData: !run.worktreePath,
       });
       if (!result.ok) return c.json({ error: result.error }, 409);
@@ -6666,6 +6668,7 @@ export function createApp(deps: ServerDeps) {
       const { store } = c.get('project');
       const run = store.getRun(c.req.param('id'));
       if (!run) return c.json({ error: 'not found' }, 404);
+      if (run.replayOf) return c.json({ error: 'Replay variants cannot commit changes.' }, 409);
       const worktree = worktreeOf(run);
       if (!worktree) return c.json({ error: NO_WORKTREE }, 409);
       const parsed = { data: c.req.valid('json') };
@@ -6707,6 +6710,7 @@ export function createApp(deps: ServerDeps) {
       const { store } = c.get('project');
       const run = store.getRun(c.req.param('id'));
       if (!run) return c.json({ error: 'not found' }, 404);
+      if (run.replayOf) return c.json({ error: 'Replay variants use the read-only Changes view.' }, 409);
       const worktree = worktreeOf(run);
       // An in-place write task answers for the checkout itself, against its upstream (spec
       // 2026-10-20-trunk-based-projects) — its git step is Commit to the base branch.
@@ -6819,6 +6823,7 @@ export function createApp(deps: ServerDeps) {
       const id = c.req.param('id');
       const run = store.getRun(id);
       if (!run) return c.json({ error: 'not found' }, 404);
+      if (run.replayOf) return c.json({ error: 'Replay variants cannot adopt pull requests.' }, 409);
       if (run.pullRequestUrl) return c.json({ found: true as const, url: run.pullRequestUrl });
       // A reclaimed task's branch is still in the repo: its remotes and `gh` answer from the root.
       const worktree = worktreeOf(run) ?? (await reclaimedBranchOf(run, repoRoot) ? repoRoot : null);
@@ -7064,7 +7069,7 @@ export function createApp(deps: ServerDeps) {
             ...(r.replayChange ? { replayChange: r.replayChange } : {}),
             diffStat:
               r.worktreePath && existsSync(r.worktreePath)
-                ? await worktreeDiffStat(r.worktreePath, r.baseBranch ?? 'HEAD')
+                ? await worktreeDiffStat(r.worktreePath, r.baseBranch ?? 'HEAD', !!r.replayOf)
                 : '',
             handoffExcerpt: handoffProgressExcerpt(readHandoff(dataDir, r.id)),
           };
