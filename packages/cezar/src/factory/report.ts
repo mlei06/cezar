@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { lstat, mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { ScoreGroup } from '@open-mercato/cezar-contract';
+import { factoryWeeklyMetricsSchema, type ScoreGroup } from '@open-mercato/cezar-contract';
 import { harnessImprovementRecordsPath, projectImprovementRecordsPath, readImprovementRecords } from '../improvement/bookkeeping.ts';
 import type { RunRecord } from '../runs/store.ts';
 import { aggregateScores } from '../scoring/summary.ts';
+import { atomicWriteJson } from '../workspace/config.ts';
 import { prNumberOfUrl } from '../server/forge/pr-url.ts';
 import { mapWithConcurrency } from '../server/concurrency.ts';
 import { harnessCauseQueuePath, projectCauseQueuePath, readCauseQueue } from './causes.ts';
@@ -62,13 +63,14 @@ export async function writeFactoryReport(input: {
     run, merged: await input.isMerged(number).catch(() => undefined),
   }));
   const merged = results.filter((entry) => entry.merged === true);
-  const costs = merged.flatMap(({ run }) => run.costUsd === undefined ? [] : [run.costUsd]);
+  const costs = merged.flatMap(({ run }) => run.costUsd === undefined || run.costUsd < 0 ? [] : [run.costUsd]);
   const touches = merged.flatMap(({ run }) => {
     const count = input.humanTouchpoints(run.id);
     return count === undefined ? [] : [count];
   });
+  const average = (values: number[]) => values.reduce((sum, value) => sum + value, 0) / values.length;
   const mean = (values: number[], format: (value: number) => string) => values.length
-    ? format(values.reduce((sum, value) => sum + value, 0) / values.length) + ' across ' + values.length
+    ? format(average(values)) + ' across ' + values.length
     : 'No measurements';
   const paths = harness ? { queue: harnessCauseQueuePath(), records: harnessImprovementRecordsPath() }
     : { queue: projectCauseQueuePath(dataDir), records: projectImprovementRecordsPath(dataDir) };
@@ -109,6 +111,11 @@ export async function writeFactoryReport(input: {
   } finally {
     await rm(temp, { force: true });
   }
+  await atomicWriteJson(join(dir, artifactName + '.json'), factoryWeeklyMetricsSchema.parse({
+    at: now.toISOString(), merged: merged.length, costSamples: costs.length, humanSamples: touches.length,
+    ...(costs.length ? { meanCostUsd: average(costs) } : {}),
+    ...(touches.length ? { meanHumanTouchpoints: average(touches) } : {}),
+  }));
   return {
     name: artifactName,
     text: recent.length + ' tasks finished, ' + merged.length + ' PRs confirmed merged, and ' + open.length + ' causes are open.',

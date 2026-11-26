@@ -243,3 +243,12 @@ export const improvementRecordSchema = z.object({
 }).passthrough();
 export type ImprovementRecord = z.infer<typeof improvementRecordSchema>;
 export const improvementRecordsSchema = z.array(improvementRecordSchema);
+
+export const factoryWeeklyMetricsSchema = z.object({
+  at: z.iso.datetime(),
+  merged: z.number().int().nonnegative(),
+  costSamples: z.number().int().nonnegative(),
+  humanSamples: z.number().int().nonnegative(),
+  meanCostUsd: z.number().nonnegative().optional(),
+  meanHumanTouchpoints: z.number().nonnegative().optional(),
+});

@@ -39,6 +39,9 @@ it('reports stored scores, counts verified unique merges and escapes project tex
     expect(markup).toContain('&lt;script&gt;unsafe()&lt;/script&gt;');
     expect(markup).toContain('&lt;img src=x&gt;');
     expect(markup).not.toContain('<script>');
+    const metrics = JSON.parse(await readFile(join(factoryReportsDir(dataDir), report.name + '.json'), 'utf8'));
+    expect(metrics).toMatchObject({ merged: 1, costSamples: 1, humanSamples: 1, meanCostUsd: 2, meanHumanTouchpoints: 2 });
+
   } finally {
     store.flush();
     await rm(dataDir, { recursive: true, force: true });
