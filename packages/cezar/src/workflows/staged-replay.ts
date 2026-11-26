@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
+import { constants, existsSync } from 'node:fs';
+import { mkdir, open, readFile, symlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { setTimeout as wait } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
@@ -12,6 +12,7 @@ import { artifactsDir, readRunEvents, RunStore, type RunRecord } from '../runs/s
 import { findInstalled, listInstalled, versionDir, versionEntry } from '../self-update/layout.ts';
 import { withStagingCockpit } from '../self-update/staging.ts';
 import { getHeadCommit } from '../server/git.ts';
+import { atomicWriteJsonSync } from '../workspace/config.ts';
 
 const SHA = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
 const exec = promisify(execFile);
@@ -74,16 +75,22 @@ interface ReplayDiff {
 
 const diffFile = (dataDir: string, id: string) => join(artifactsDir(dataDir, id), 'staged-replay-diff.json');
 
-export async function saveStagedReplayDiff(dataDir: string, id: string, diff: ReplayDiff): Promise<void> {
-  await mkdir(artifactsDir(dataDir, id), { recursive: true });
-  await writeFile(diffFile(dataDir, id), JSON.stringify(diff), { mode: 0o600 });
+export function saveStagedReplayDiff(dataDir: string, id: string, diff: ReplayDiff): void {
+  atomicWriteJsonSync(diffFile(dataDir, id), diff);
 }
 
 export async function readStagedReplayDiff(dataDir: string, id: string): Promise<ReplayDiff | undefined> {
   try {
-    const raw = JSON.parse(await readFile(diffFile(dataDir, id), 'utf8')) as { patch?: unknown; changes?: unknown };
-    const changes = changesPayloadSchema.safeParse(raw.changes);
-    if (typeof raw.patch === 'string' && changes.success) return { patch: raw.patch, changes: changes.data };
+    const file = await open(diffFile(dataDir, id), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    try {
+      const stat = await file.stat();
+      if (!stat.isFile() || stat.size > 32_000_000) return undefined;
+      const raw = JSON.parse(await file.readFile('utf8')) as { patch?: unknown; changes?: unknown };
+      const changes = changesPayloadSchema.safeParse(raw.changes);
+      if (typeof raw.patch === 'string' && changes.success) return { patch: raw.patch, changes: changes.data };
+    } finally {
+      await file.close();
+    }
   } catch { /* Older and failed replays have no comparison snapshot. */ }
   return undefined;
 }

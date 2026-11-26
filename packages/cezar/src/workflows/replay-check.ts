@@ -3,6 +3,7 @@ import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, isAbsolute, join } from 'node:path';
 import { resolveProgram } from '../core/codex-restricted-tools.ts';
+import { lowerTaskProcessPriority } from '../core/task-processes.ts';
 
 /** A named profile bounds reads and writes as well as disabling network. A CLI that
  * cannot apply the profile exits before it runs the check. */
@@ -57,6 +58,7 @@ export async function runReplayShell(command: string, cwd: string, signal: Abort
     signal.throwIfAborted();
     return await new Promise((resolve) => {
       const child = spawn(sandbox.file, sandbox.args, { cwd, env: sandbox.env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      lowerTaskProcessPriority(child.pid);
       let text = '';
       const collect = (chunk: Buffer) => { if (text.length < 256_000) text = (text + chunk.toString('utf8')).slice(0, 256_000); };
       const stop = () => {

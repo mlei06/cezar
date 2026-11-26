@@ -7893,7 +7893,7 @@ export class RunManager {
           type: entry.type, stepId: entry.stepId, text: entry.text, command: entry.command, exitCode: entry.exitCode,
         });
       }
-      if (result.diff) await saveStagedReplayDiff(this.dataDir, run.id, result.diff);
+      if (result.diff) saveStagedReplayDiff(this.dataDir, run.id, result.diff);
       if (state.cancelled || this.active.get(run.id) !== state) return;
       this.store.updateRun(run.id, { activeMs: result.run.activeMs, diffStat: result.diff?.changes.stat });
       if (result.run.status === 'done' || result.run.status === 'review') {
