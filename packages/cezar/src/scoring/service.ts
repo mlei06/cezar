@@ -38,7 +38,7 @@ export class ScoringService {
   private readonly catalog = new ScorerCatalog(true);
   private readonly queue = new JudgeQueue();
 
-  constructor(private readonly onScore: (event: ScoreRecordedEvent) => void,
+  constructor(private readonly onScore: (event: ScoreRecordedEvent, project: ScoringProject, run: RunRecord) => void,
     private readonly judgeFor: (repoRoot: string) => Promise<JudgeRoute | { error: string }> = resolveJudgeRoute,
     private readonly secrets = new SecretStore()) {}
 
@@ -181,7 +181,7 @@ export class ScoringService {
                 at: new Date().toISOString(),
               };
               save({ status: 'scored', finishedAt, score });
-              this.onScore({ projectId: project.id, runId: run.id, score });
+              this.onScore({ projectId: project.id, runId: run.id, score }, project, run);
               break;
           }
         },

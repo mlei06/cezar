@@ -218,6 +218,7 @@ export const workspaceConfigSchema = z
   .object({
     factory: z.object({
       judge: factoryModelRouteSchema.optional().catch(undefined),
+      harnessProject: z.string().trim().min(1).max(64).optional().catch(undefined),
       scoring: factoryScoringSettingsSchema.optional().catch(undefined),
       budget: runBudgetSchema.optional().catch(undefined),
       models: z.object({

@@ -290,6 +290,7 @@ import { readRunUserMessages } from '../runs/user-messages.ts';
 import { summarizeRunMetrics } from '../runs/task-metrics.ts';
 import { ScoringService } from '../scoring/service.ts';
 import { readRunScores } from '../scoring/store.ts';
+import { detectHarnessProject, harnessCauseQueuePath, projectCauseQueuePath, recordCauses, routeCauses } from '../factory/causes.ts';
 import { byLastActivityDesc, compareIsoDesc, lastActivityAt, readRunIndexDiagnostic, readRunIndexFromDisk } from '../runs/run-index.ts';
 import { isV2WireEventType } from '../runs/ui-event-sink.ts';
 import { onRunDeleted, onRunEvent } from './sse-subscriptions.ts';
@@ -1829,7 +1830,22 @@ export function createApp(deps: ServerDeps) {
   // checkout flow (Phase 4) emit here; /api/workspace/events relays.
   const workspaceEvents = deps.workspaceEvents ?? new WorkspaceEventBus();
   const secretStore = deps.secrets ?? new SecretStore();
-  const scoring = new ScoringService((event) => workspaceEvents.emit('score.recorded', event), undefined, secretStore);
+  const scoring = new ScoringService((event, project, run) => {
+    workspaceEvents.emit('score.recorded', event);
+    void loadWorkspaceConfig().then((config) => {
+      const latest = readRunScores(project.dataDir, run.id)[event.score.scorer];
+      if (latest?.status !== 'scored' || latest.score.at !== event.score.at) return;
+      const harnessId = detectHarnessProject(config.projects, config.factory?.harnessProject);
+      const origin = {
+        projectId: project.id, runId: run.id, workflowSource: run.workflowDef?.source,
+        harness: harnessId === project.id,
+        improvement: run.workflow === 'improve-factory',
+      };
+      const queues = routeCauses(event.score, origin);
+      recordCauses(projectCauseQueuePath(project.dataDir), origin, event.score.scorer, queues.project);
+      recordCauses(harnessCauseQueuePath(), origin, event.score.scorer, queues.harness);
+    }).catch(() => console.warn('[cezar] score saved, but its cause queue could not be updated'));
+  }, undefined, secretStore);
   deps.onDispose?.(() => scoring.dispose());
   const emitAutomationChange = (
     project: ProjectContext,
