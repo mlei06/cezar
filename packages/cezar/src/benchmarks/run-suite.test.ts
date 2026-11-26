@@ -61,6 +61,10 @@ it('reserves a bounded replay matrix and measures only the declared configuratio
     ]);
     if (!summary.artifact) throw new Error('No report artifact');
     expect(JSON.parse(await readFile(join(artifactsDir(dataDir, summary.artifact.runId), summary.artifact.name), 'utf8')).rows).toEqual(summary.rows);
+    await rm(join(dataDir, 'artifacts'), { recursive: true, force: true });
+    const stored = await benchmarkResults(project, result.batch);
+    expect(stored.rows).toEqual(summary.rows);
+    expect(stored).not.toHaveProperty('artifact');
   } finally {
     store.flush();
     await rm(root, { recursive: true, force: true });

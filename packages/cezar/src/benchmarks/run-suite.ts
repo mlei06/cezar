@@ -3,8 +3,8 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
-  benchmarkMatrixRunSchema,
-  type BenchmarkConfiguration, type BenchmarkMatrixRun, type BenchmarkSuite, type BenchmarkTask,
+  benchmarkMatrixRunSchema, benchmarkResultsResponseSchema,
+  type BenchmarkConfiguration, type BenchmarkMatrixRun, type BenchmarkResultsResponse, type BenchmarkSuite, type BenchmarkTask,
 } from '@open-mercato/cezar-contract';
 import { loadConfig } from '../config.ts';
 import { modelConflictsWithRunner } from '../core/model-presets.ts';
@@ -136,7 +136,16 @@ export async function runBenchmarkSuite(project: BenchmarkProject, name: string,
   });
 }
 
-export async function benchmarkResults(project: BenchmarkProject, batch: BenchmarkMatrixRun) {
+export async function benchmarkResults(project: BenchmarkProject, batch: BenchmarkMatrixRun): Promise<BenchmarkResultsResponse> {
+  const resultPath = join(pathFor(project.dataDir, batch.suite), batch.id + '.results.json');
+  try {
+    const saved = benchmarkResultsResponseSchema.parse(JSON.parse(readFileSync(resultPath, 'utf8')));
+    const archived = batch.runs.some((entry) => entry.state === 'started' && !project.store.getRun(entry.runId));
+    if (saved.batch.id === batch.id && (archived || saved.rows.every(({ missing }) => missing === 0))) {
+      const { artifact, ...result } = saved;
+      return artifact && existsSync(join(artifactsDir(project.dataDir, artifact.runId), artifact.name)) ? saved : result;
+    }
+  } catch { /* Older matrices and interrupted reports can still be reconstructed from runs. */ }
   const rows = [...new Set(batch.runs.map(({ config }) => config))].map((name) => {
     const entries = batch.runs.filter(({ config }) => config === name);
     let started = 0, unsettled = 0, unavailable = 0, passed = 0, failed = 0, pending = 0, missing = 0;
@@ -148,7 +157,8 @@ export async function benchmarkResults(project: BenchmarkProject, batch: Benchma
       started++;
       if (!run.finishedAt || !isTerminalStatus(run.status)) { unsettled++; continue; }
       if (run.costUsd !== undefined) costs.push(run.costUsd);
-      if (run.startedAt) times.push(Math.max(0, Date.parse(run.finishedAt) - Date.parse(run.startedAt)));
+      const wallMs = run.startedAt ? Date.parse(run.finishedAt) - Date.parse(run.startedAt) : NaN;
+      if (Number.isFinite(wallMs)) times.push(Math.max(0, wallMs));
       let scoring;
       try { scoring = readRunScores(project.dataDir, run.id); }
       catch { missing += batch.scorers.length; continue; }
@@ -169,17 +179,25 @@ export async function benchmarkResults(project: BenchmarkProject, batch: Benchma
   });
   const artifactRunId = batch.runs.find((entry) => entry.state === 'started' &&
     project.store.getRun(entry.runId)?.replayChange === 'benchmark ' + entry.config);
-  if (!artifactRunId || artifactRunId.state !== 'started' || rows.some(({ unsettled }) => unsettled)) return { batch, rows };
+  const report = { batch, rows };
+  if (rows.some(({ unsettled }) => unsettled)) return report;
+  const settled = !rows.some(({ pending }) => pending);
+  if (!artifactRunId || artifactRunId.state !== 'started') {
+    if (settled) atomicWriteJsonSync(resultPath, report);
+    return report;
+  }
   const name = 'benchmark-' + batch.suite + '.json';
   const dir = artifactsDir(project.dataDir, artifactRunId.runId);
   await assertLifecyclePath(dir, project.root);
   await mkdir(dir, { recursive: true, mode: 0o700 });
-  const report = JSON.stringify({ batch, rows }, null, 2) + '\n';
+  const contents = JSON.stringify(report, null, 2) + '\n';
   const path = join(dir, name);
-  if (!existsSync(path) || readFileSync(path, 'utf8') !== report) {
-    const prepared = await prepareText(dir, name, report);
+  if (!existsSync(path) || readFileSync(path, 'utf8') !== contents) {
+    const prepared = await prepareText(dir, name, contents);
     try { prepared.publish(); await prepared.finish(); }
     finally { await prepared.discard(); }
   }
-  return { batch, rows, artifact: { runId: artifactRunId.runId, name } };
+  const result = { ...report, artifact: { runId: artifactRunId.runId, name } };
+  if (settled) atomicWriteJsonSync(resultPath, result);
+  return result;
 }
