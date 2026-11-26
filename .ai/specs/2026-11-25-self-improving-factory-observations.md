@@ -110,11 +110,13 @@ Release `7dd520c` passed health and contained both playbooks and the charter loa
 
 | M4-9 | A replay changing harness version needs the target executable and data root, while Compare needs evidence after staging stops. The Codex write path also needs its own execution proof. | A scratch alternate version used its distinct harness commit, original project commit, original check output and retained diff. An authenticated Codex replay created one file in its own worktree, with native tools read-only and the original untouched. | harness | Keep old builds without the replay seam and unverified backends out of admission. Reuse the read broker with isolated Bash for grants that already include Bash (D8, v5.27). |
 
-| M4-10 | A benchmarked release needs evidence from the candidate's real runner or judge if their paths changed. | The protected draft ran a real authenticated Codex replay and a configured fixture judge in isolated cockpits. A failing required real check prevented activation in a local fixture. #26 passed local benchmark tolerance, rollback and passive report tests. | harness | Require real staged checks on affected paths and leave the first protected workflow launch to the owner. |
+| M4-10 | A benchmarked release needs evidence from the candidate's real runner or judge if their paths changed. | The protected draft ran a real authenticated Codex replay and a configured fixture judge in isolated cockpits. A failing required real check prevented activation in a local fixture. #26 passed local benchmark tolerance, rollback and passive report tests. The installed benchmark passed five of five cases. | harness | Require real staged checks on affected paths and leave the first protected workflow launch to the owner. |
+
+| M4-11 | An alternate-version agent replay needs the original account without inheriting the workstation config. | A distinct installed-format build replayed an authenticated Codex Plan with the original project commit and model. The scratch workspace recorded the expected read and left the active version unchanged. | harness | Pass the selected runner profile into staging and preserve the score inputs when importing the result. |
 
 ## Judge calibration
 
-A new blind sample contains 20 archived runs. The installed scoring queue admitted all 20, for 78 scorer calls. Blind labels were recorded before admission. Local evidence and run identities stay out of the fork.
+A new blind sample contains 20 archived runs. The installed scoring queue admitted all 20, for 78 scorer calls. Blind labels were recorded before admission. After 45 minutes, 16 usable verdicts were recorded, 11 errored, and 51 remained queued. Of the usable subset, 14 agreed on pass/fail and there were no joint failures with a blind target. The sample has yet to establish either acceptance threshold. Local evidence and run identities stay out of the fork.
 
 Blind comparisons: the overseer's verdict is written before the judge's is read, on every third task and every failing one (roadmap runbook). The spec's targets are 80% agreement on pass/fail and 70% on the main cause's target.
 
