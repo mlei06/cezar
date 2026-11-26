@@ -102,6 +102,8 @@ Release `7dd520c` passed health and contained both playbooks and the charter loa
 
 | M4-5 | Workspace-write can still read host files. Autosave can invoke Git filters after a replay check. | The native named-profile fixture blocked reads of synthetic files in the host home and temporary directories, blocked Git metadata and loopback, and left both host files untouched. Three replay variants checked the saved commit while the original checkout retained a later change. | harness | Apply a minimal filesystem profile with no network, suppress checkout filters and autosave, and refuse unsupported configurations (D8, v5.26). |
 
+| M4-6 | Comparing a replay can execute Git filters, and an ordinary continuation can exceed its tool grant. | A real Git fixture kept configured checkout and clean filters inert while serving text and structured diffs. Three staged Plan variants changed the requested model, used the existing Codex read broker and each received four scores. Only the original fed the cause queues. | harness | Keep Codex Plan agents on Read, Grep and Glob with no shared run-directory grant. Keep other agent workflows and alternate-harness replay open until their execution boundaries are verified. |
+
 ## Judge calibration
 
 A new blind sample contains 20 archived runs. The installed scoring queue admitted all 20, for 78 scorer calls. Blind labels were recorded before admission. Local evidence and run identities stay out of the fork.
