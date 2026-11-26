@@ -77,6 +77,7 @@ export const scoreRecordedEventSchema = z.object({
 });
 export type ScoreRecordedEvent = z.infer<typeof scoreRecordedEventSchema>;
 
+const causeStateSchema = z.enum(['open', 'processing', 'processed', 'dismissed', 'escalated', 'deferred']);
 export const queuedCauseSchema = z.object({
   id: z.string(),
   projectId: z.string(),
@@ -86,13 +87,17 @@ export const queuedCauseSchema = z.object({
   reasoning: z.string(),
   cause: scoreCauseSchema,
   at: z.string().datetime(),
-  state: z.enum(['open', 'processing', 'processed', 'dismissed', 'escalated', 'deferred']),
+  state: causeStateSchema,
 });
 export type QueuedCause = z.infer<typeof queuedCauseSchema>;
 export const causeQueueSchema = z.array(queuedCauseSchema);
+export const causeQueueResponseSchema = z.object({ causes: causeQueueSchema });
+export type CauseQueueResponse = z.infer<typeof causeQueueResponseSchema>;
+export const causeQueueCountsSchema = z.partialRecord(causeStateSchema, z.number().int().nonnegative());
+export type CauseQueueCounts = z.infer<typeof causeQueueCountsSchema>;
 
 export const scoresQuerySchema = z.object({
-  since: z.string().datetime().or(z.string().date()).optional(),
+  since: z.union([z.string().datetime(), z.string().date(), z.string().regex(/^[1-9][0-9]{0,3}d$/)]).optional(),
   groupBy: z.enum(['scorer', 'category', 'target']).default('scorer'),
 });
 export type ScoresQuery = z.infer<typeof scoresQuerySchema>;
@@ -105,7 +110,10 @@ const scoreGroupSchema = z.object({
   errors: z.number().int().nonnegative(),
 });
 export type ScoreGroup = z.infer<typeof scoreGroupSchema>;
-export const scoresResponseSchema = z.object({ groups: z.array(scoreGroupSchema) });
+export const scoresResponseSchema = z.object({
+  groups: z.array(scoreGroupSchema),
+  queue: z.object({ counts: causeQueueCountsSchema, openCauses: causeQueueSchema }).nullable(),
+});
 export type ScoresResponse = z.infer<typeof scoresResponseSchema>;
 export const workspaceScoresResponseSchema = z.object({
   projects: z.array(scoresResponseSchema.extend({ projectId: z.string() })),

@@ -162,6 +162,7 @@ import {
   managerScoresQuerySchema,
   type FactoryCheckResponse,
   type WorkspaceScoresResponse,
+  type CauseQueueResponse,
   type ScoreRunResponse,
   type ScoresResponse,
   type RunScoresResponse,
@@ -298,7 +299,7 @@ import { ScoringService, type ScoringProject, type SettledScore } from '../scori
 import { readRunScores } from '../scoring/store.ts';
 import { aggregateScores } from '../scoring/summary.ts';
 import { checkFactory } from '../factory/check.ts';
-import { detectHarnessProject, harnessCauseQueuePath, projectCauseQueuePath, recordCauses, routeCauses } from '../factory/causes.ts';
+import { detectHarnessProject, harnessCauseQueuePath, projectCauseQueuePath, readCauseQueue, recordCauses, routeCauses } from '../factory/causes.ts';
 import { byLastActivityDesc, compareIsoDesc, lastActivityAt, readRunIndexDiagnostic, readRunIndexFromDisk } from '../runs/run-index.ts';
 import { isV2WireEventType } from '../runs/ui-event-sink.ts';
 import { onRunDeleted, onRunEvent } from './sse-subscriptions.ts';
@@ -1002,6 +1003,7 @@ interface WorkflowCatalogBody extends Awaited<ReturnType<typeof workflowCatalog>
 interface FactoryCheckBody extends FactoryCheckResponse {}
 interface ScoresBody extends ScoresResponse {}
 interface WorkspaceScoresBody extends WorkspaceScoresResponse {}
+interface CauseQueueBody extends CauseQueueResponse {}
 interface RunScoresBody extends RunScoresResponse {}
 interface ScoreRunBody extends ScoreRunResponse {}
 interface RunWithUsageBody extends RunRecord {
@@ -9192,6 +9194,17 @@ export function createApp(deps: ServerDeps) {
    * search box must not resume work; see `runs/run-index.ts`.
    */
   const runsIndexRoutes = new Hono()
+    .get('/workspace/factory/harness-queue', async (c): Promise<Response & (
+      TypedResponse<CauseQueueBody, 200, 'json'> | TypedResponse<{ error: string }, 409, 'json'>
+    )> => {
+      try {
+        const causes = readCauseQueue(harnessCauseQueuePath());
+        const projectId = capabilities().singleProject ? await resolveBootProject() : undefined;
+        return c.json({ causes: projectId ? causes.filter((cause) => cause.projectId === projectId) : causes }, 200);
+      } catch {
+        return c.json({ error: 'The harness cause queue is unreadable.' }, 409);
+      }
+    })
     .get('/workspace/scores', queryZodValidator(scoresQuerySchema), async (c): Promise<Response & TypedResponse<WorkspaceScoresBody, 200, 'json'>> => {
       const selector = capabilities().singleProject ? { projectId: await resolveBootProject() } : undefined;
       const projects = await listProjects(selector).catch(() => []);
@@ -9813,9 +9826,11 @@ export function createApp(deps: ServerDeps) {
       const detail = await managerEngine.taskDetail(c.req.valid('param').id, projectId, runId);
       return 'error' in detail ? c.json({ error: detail.error }, detail.status) : c.json(detail);
     })
-    .get('/workspace/managers/:id/scores', paramZodValidator(managerIdParamSchema), queryZodValidator(managerScoresQuerySchema), async (c) => {
+    .get('/workspace/managers/:id/scores', paramZodValidator(managerIdParamSchema), queryZodValidator(managerScoresQuerySchema), async (c): Promise<Response & (
+      TypedResponse<ScoresBody, 200, 'json'> | TypedResponse<{ error: string }, 400 | 403 | 404 | 409 | 502, 'json'>
+    )> => {
       const result = await managerEngine.scores(c.req.valid('param').id, c.req.valid('query'));
-      return 'error' in result ? c.json({ error: result.error }, result.status) : c.json(result);
+      return 'error' in result ? c.json({ error: result.error }, result.status) : c.json(result, 200);
     })
     .post('/workspace/managers/:id/tasks', paramZodValidator(managerIdParamSchema), jsonZodValidator(managerCreateTaskInputSchema), async (c) => {
       const created = await managerEngine.createTask(c.req.valid('param').id, c.req.valid('json'));

@@ -143,7 +143,7 @@ Starts a task.
   --effort <e>       ${EFFORTS.join(' | ')}; refused when the runner or model has no such level
   --dispatch         start it as the root of a dispatch tree, only for work worth splitting;
                      ignored in a trunk-based project, whose tasks work in its checkout${CONTENT_HELP}`,
-  scores: 'cez manager scores [--project <id>] [--since <date>] [--group-by scorer|category|target]',
+  scores: 'cez manager scores [--project <id>] [--since <date|7d>] [--group-by scorer|category|target]',
   'task budget': 'cez manager task budget <run> [--project <id>] [--tokens N] [--minutes N] [--usd N] — raise a task budget.',
   'task say': `cez manager task say --project <id> <run> [flags] "<text>"
 

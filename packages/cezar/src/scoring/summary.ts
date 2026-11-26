@@ -1,9 +1,12 @@
-import type { ScoreGroup, ScoresQuery, ScoresResponse } from '@open-mercato/cezar-contract';
+import type { CauseQueueCounts, ScoreGroup, ScoresQuery, ScoresResponse } from '@open-mercato/cezar-contract';
+import { projectCauseQueuePath, readCauseQueue } from '../factory/causes.ts';
 import type { RunRecord } from '../runs/store.ts';
 import { readRunScores } from './store.ts';
 
 export function aggregateScores(dataDir: string, runs: readonly RunRecord[], query: ScoresQuery): ScoresResponse {
-  const since = query.since ? Date.parse(query.since) : 0;
+  const since = query.since?.endsWith('d')
+    ? Date.now() - Number(query.since.slice(0, -1)) * 86_400_000
+    : query.since ? Date.parse(query.since) : 0;
   const groups = new Map<string, ScoreGroup>();
   const get = (key: string): ScoreGroup => {
     const prior = groups.get(key);
@@ -33,5 +36,14 @@ export function aggregateScores(dataDir: string, runs: readonly RunRecord[], que
       // An unreadable score file should not hide the aggregate for every other task.
     }
   }
-  return { groups: [...groups.values()].sort((a, b) => a.key.localeCompare(b.key)) };
+  const sorted = [...groups.values()].sort((a, b) => a.key.localeCompare(b.key));
+  try {
+    const causes = readCauseQueue(projectCauseQueuePath(dataDir));
+    const counts: CauseQueueCounts = {};
+    for (const cause of causes) counts[cause.state] = (counts[cause.state] ?? 0) + 1;
+    const openCauses = causes.filter((cause) => cause.state === 'open').slice(0, 20);
+    return { groups: sorted, queue: { counts, openCauses } };
+  } catch {
+    return { groups: sorted, queue: null };
+  }
 }
