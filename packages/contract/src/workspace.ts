@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { worktreeLifecycleConfigSchema } from './worktree-lifecycle.ts';
 import { type Runner, runnerSchema, perRunner } from './runners.ts';
+import { factoryImprovementOverridesSchema, factoryImprovementPatchSchema } from './factory.ts';
 import { managerConfirmSchema } from './managers.ts';
 import { MAX_SAVED_WORKSPACE_LAYOUTS, savedWorkspaceLayoutSchema } from './workspace-layouts.ts';
 
@@ -29,6 +30,7 @@ import { MAX_SAVED_WORKSPACE_LAYOUTS, savedWorkspaceLayoutSchema } from './works
  * was wider than the server has ever been.
  */
 export const workspaceConfigResponseSchema = z.object({
+  factory: z.object({ improvement: factoryImprovementOverridesSchema }).optional(),
   branding: z.object({
     name: z.string(),
     logoUrl: z.string().nullable(),
@@ -93,6 +95,7 @@ export type WorkspaceConfigResponse = z.infer<typeof workspaceConfigResponseSche
  * the next load's `.catch`.
  */
 export const setWorkspaceConfigInputSchema = z.object({
+  factory: z.strictObject({ improvement: factoryImprovementPatchSchema }).optional(),
   branding: z.object({
     name: z.string().trim().min(1).max(80).nullable().optional(),
   }).optional(),
@@ -440,6 +443,7 @@ export type RunnerModels = z.infer<typeof runnerModelsSchema>;
 
 /** `GET /api/v1/config` — every Settings → Agents knob in one read. */
 export const configResponseSchema = z.object({
+  factory: z.object({ improvement: factoryImprovementOverridesSchema }).optional(),
   worktreeLifecycle: worktreeLifecycleConfigSchema.optional(),
   worktreeLifecycleRevision: z.string().optional(),
   baseBranch: z.string().nullable(),
@@ -504,6 +508,7 @@ export type SetConfigResponse = z.infer<typeof setConfigResponseSchema>;
  * another runner's preset.
  */
 export const setConfigInputSchema = z.object({
+  factory: z.strictObject({ improvement: factoryImprovementPatchSchema }).optional(),
   worktreeLifecycle: worktreeLifecycleConfigSchema.nullable().optional(),
   worktreeLifecycleRevision: z.string().nullable().optional(),
   baseBranch: z.string().trim().min(1).max(200).nullable().optional(),

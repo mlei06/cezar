@@ -1,3 +1,4 @@
+import { ProjectImprovementCard } from './factory-improvement-card'
 import { ListChecksIcon } from 'lucide-react'
 
 import { useConfig, useRepo } from '@/api/queries'
@@ -84,6 +85,8 @@ function TasksForm({ config }: { config: ConfigResponse }) {
           )}
         </FormRow>
       </TrunkBasedFields>
+
+      <ProjectImprovementCard stored={config.factory?.improvement} />
 
       <SettingsCard id="review" title="Review and titles">
         <FormRow

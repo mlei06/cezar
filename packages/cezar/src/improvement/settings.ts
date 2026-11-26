@@ -1,4 +1,4 @@
-import type { FactoryImprovementSettings, ImprovementScope } from '@open-mercato/cezar-contract';
+import type { FactoryImprovementPatch, FactoryImprovementSettings, ImprovementScope } from '@open-mercato/cezar-contract';
 
 /** Effective self-improvement policy for one queue (spec D6, D7 defaults for a one-person factory). */
 export interface ImprovementSettings {
@@ -39,4 +39,15 @@ export function resolveImprovementSettings(input: {
   }
   if ((input.env ?? process.env).CEZ_SELF_IMPROVEMENT === '0') resolved.enabled = false;
   return resolved;
+}
+
+/** Applies one validated API patch to raw project state or the workspace merge writer. */
+export function patchImprovementSettings(current: unknown, patch: FactoryImprovementPatch) {
+  const improvement = current && typeof current === 'object' && !Array.isArray(current)
+    ? { ...current } as Record<string, unknown> : {};
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === null) delete improvement[key];
+    else if (value !== undefined) improvement[key] = value;
+  }
+  return improvement;
 }

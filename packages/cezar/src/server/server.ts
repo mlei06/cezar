@@ -361,7 +361,8 @@ import { worktreeLifecycleRoutes, lifecycleError } from './worktree-lifecycle.ts
 import { readLifecycleConfigOrDefault, readLifecycleConfigRaw, lifecycleConfigFromRaw, withLifecycleConfigLock, applyLifecycleConfigUpdate, isLifecycleConfigTracked, LifecycleConfigError, TRACKED_CONFIG_ERROR } from '../worktree-lifecycle/config.ts';
 import { atomicLifecycleWrite, LifecycleStoreError } from '../worktree-lifecycle/store.ts';
 import { validateLifecycleCommand } from '../worktree-lifecycle/templates.ts';
-import { setConfigInputSchema, type WorktreeLifecycleInvalidation } from '@open-mercato/cezar-contract';
+import { patchImprovementSettings } from '../improvement/settings.ts';
+import { factoryImprovementOverridesSchema, setConfigInputSchema, type WorktreeLifecycleInvalidation } from '@open-mercato/cezar-contract';
 import { getBranches, getCommit, getDiff, getLog, getRepoInfo, getStatus } from './git.ts';
 import {
   collectChanges,
@@ -4183,6 +4184,7 @@ export function createApp(deps: ServerDeps) {
       const parsed = { data: c.req.valid('json') };
       const { browseRoot, projectsDir, skillsAutoUpdate, orgSkillsRepos, systemPrompt, composerDefaults, resources, agentDefaults, branding } = parsed.data;
       // The browse containment reads `browseRoot`, so a phone could otherwise move its own boundary.
+      if (parsed.data.factory && inRelayScope()) return c.json({ error: 'Factory settings are managed from the computer' }, 403);
       if (inRelayScope() && (browseRoot !== undefined || projectsDir !== undefined)) {
         return c.json({ error: 'browseRoot and projectsDir are set from the computer' }, 403);
       }
@@ -4228,6 +4230,10 @@ export function createApp(deps: ServerDeps) {
         written = await mergeWriteWorkspaceConfig((config) => {
           if (branding?.name === null) delete config.branding.name;
           else if (branding?.name !== undefined) config.branding.name = branding.name;
+          if (parsed.data.factory) {
+            const improvement = patchImprovementSettings(config.factory?.improvement, parsed.data.factory.improvement);
+            config.factory = { ...config.factory, improvement };
+          }
           // Roots are stored as written (`~` kept); only the probe expands them.
           if (browseRoot !== undefined) config.browseRoot = browseRoot;
           if (projectsDir !== undefined) config.projectsDir = projectsDir;
@@ -8522,6 +8528,7 @@ export function createApp(deps: ServerDeps) {
     const nativeModels = await readAgentModelDefaults(repoRoot);
     const modelsLocked = agentModelsLocked(repoRoot);
     return {
+      ...(config.factory?.improvement ? { factory: { improvement: factoryImprovementOverridesSchema.parse(config.factory.improvement) } } : {}),
       baseBranch: config.baseBranch ?? null,
       defaultRunner: config.defaultRunner,
       systemPrompt: config.systemPrompt ?? null,
@@ -8582,6 +8589,7 @@ export function createApp(deps: ServerDeps) {
     .put('/config', jsonZodValidator(setConfigInputSchema), async (c) => {
       const { root: repoRoot, dataDir } = c.get('project');
       const parsed = { data: c.req.valid('json') };
+      if (parsed.data.factory && inRelayScope()) return c.json({ error: 'Factory settings are managed from the computer' }, 403);
       // The auto override is a model choice too (#906), so the fixed-model
       // policy refuses it on exactly the same terms as a preset.
       if (
@@ -8619,6 +8627,12 @@ export function createApp(deps: ServerDeps) {
               if (scripts > 0 && await isLifecycleConfigTracked(repoRoot)) throw new LifecycleConfigError(TRACKED_CONFIG_ERROR);
             }
             raw = applyLifecycleConfigUpdate(raw, parsed.data.worktreeLifecycle, parsed.data.worktreeLifecycleRevision);
+          }
+          if (parsed.data.factory) {
+            const factory = raw.factory && typeof raw.factory === 'object' && !Array.isArray(raw.factory)
+              ? { ...raw.factory } as Record<string, unknown> : {};
+            factory.improvement = patchImprovementSettings(factory.improvement, parsed.data.factory.improvement);
+            raw.factory = factory;
           }
           if (parsed.data.baseBranch !== undefined) {
             if (parsed.data.baseBranch === null) delete raw.baseBranch;
@@ -10207,6 +10221,7 @@ export function createApp(deps: ServerDeps) {
 
 // Deliberately UNannotated: contract-parity compares the schema to this inferred shape (#1234).
 const workspaceConfigBody = (config: WorkspaceConfig, computerName: string) => ({
+  ...(config.factory?.improvement ? { factory: { improvement: factoryImprovementOverridesSchema.parse(config.factory.improvement) } } : {}),
   branding: {
     name: config.branding.name ?? 'cezar',
     logoUrl: logoAssetUrl(),
