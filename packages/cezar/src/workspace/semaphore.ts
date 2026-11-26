@@ -1,5 +1,6 @@
 import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { ReleaseHold } from './release-hold.ts';
 import { DEFAULT_IDLE_TIMEOUT_MINUTES, DEFAULT_MONITORING_WAKE_MINUTES, loadWorkspaceConfig } from './config.ts';
 
 /**
@@ -156,6 +157,8 @@ async function loadResourceLimits(): Promise<WorkspaceResourceLimits> {
 }
 
 export interface WorkspaceSemaphoreOptions {
+  /** Only the serving cockpit holds its workload during a harness release. */
+  releaseHold?: boolean;
   /** Snapshot source for `refresh()` — tests inject a stub; production keeps
    *  the `~/.cezar/config.json` reader. */
   load?: () => Promise<WorkspaceResourceLimits>;
@@ -169,6 +172,8 @@ export class WorkspaceSemaphore {
   private readonly participants = new Set<SemaphoreParticipant>();
   private readonly load: () => Promise<WorkspaceResourceLimits>;
   private limits: WorkspaceResourceLimits;
+  readonly releaseHold?: ReleaseHold;
+  private readonly releaseListeners = new Set<() => void>();
   /** A `release()` sweep is in flight — see `pendingRelease`. */
   private broadcasting = false;
   /** A slot freed DURING a sweep. The in-flight sweep may already have pumped
@@ -178,6 +183,17 @@ export class WorkspaceSemaphore {
   constructor(options: WorkspaceSemaphoreOptions = {}) {
     this.load = options.load ?? loadResourceLimits;
     this.limits = { ...DEFAULT_LIMITS, ...options.initial };
+    if (options.releaseHold) {
+      this.releaseHold = new ReleaseHold(() => {
+        for (const listener of this.releaseListeners) listener();
+        void this.release().catch(() => undefined);
+      });
+    }
+  }
+
+  onReleaseHoldEnded(listener: () => void): () => void {
+    this.releaseListeners.add(listener);
+    return () => this.releaseListeners.delete(listener);
   }
 
   /** Join the shared counter. Returns the unregister handle — the manager's

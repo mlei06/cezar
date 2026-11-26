@@ -9,8 +9,8 @@ import { expect, it } from 'vitest';
 
 const exec = promisify(execFile);
 
-it.skipIf(process.platform === 'win32').each(['restart', 'health'] as const)(
-  'restores the previous release when candidate %s fails',
+it.skipIf(process.platform === 'win32').each(['restart', 'health', 'manual'] as const)(
+  'selects a healthy release in the %s rollback case',
   async (failure) => {
     const root = await mkdtemp(join(tmpdir(), 'cez-release-rollback-'));
     const workspace = join(root, 'workspace');
@@ -53,13 +53,29 @@ it.skipIf(process.platform === 'win32').each(['restart', 'health'] as const)(
       await chmod(service, 0o755);
       const args = [release, sha, '--force', '--health-url', `http://127.0.0.1:${address.port}/api/v1/health`];
       if (failure === 'health') args.push('--simulate-unhealthy');
-      await expect(exec(process.execPath, args, {
+      const releaseLog = join(workspace, 'factory', 'release-log.ndjson');
+      const execute = () => exec(process.execPath, args, {
         timeout: 10_000,
         env: { ...process.env, CEZ_HOME: workspace, RELEASE_TEST_STATE: stateFile, PATH: `${shimDir}:${process.env.PATH}` },
-      })).rejects.toMatchObject({ code: 1 });
+      });
+      if (failure === 'manual') {
+        const activePackage = join(workspace, 'versions', 'current', 'node_modules', '@open-mercato', 'cezar', 'dist', 'self-update');
+        await mkdir(activePackage, { recursive: true });
+        for (const file of ['layout.js', 'launcher.js']) await copyFile(join(selfUpdate, file), join(activePackage, file));
+        const past = [
+          { action: 'switch', id: 'previous', previous: 'stable', result: 'ok' },
+          { action: 'switch', id: 'candidate', previous: 'previous', result: 'failed' },
+          { action: 'rollback', id: 'previous', from: 'candidate', result: 'ok', automatic: true },
+        ];
+        await writeFile(releaseLog, past.map((entry) => JSON.stringify(entry)).join('\n') + '\n');
+        args.push('--rollback');
+        await execute();
+        expect(await readFile(stateFile, 'utf8')).toBe('stable');
+        return;
+      }
+      await expect(execute()).rejects.toMatchObject({ code: 1 });
       expect(await readFile(stateFile, 'utf8')).toBe('previous');
-      const log = (await readFile(join(workspace, 'factory', 'release-log.ndjson'), 'utf8')).trim().split('\n')
-        .map((line) => JSON.parse(line));
+      const log = (await readFile(releaseLog, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
       expect(log.slice(-2)).toMatchObject([
         { action: 'switch', sha, id: 'candidate', previous: 'previous', result: 'failed' },
         { action: 'rollback', from: 'candidate', id: 'previous', result: 'ok', automatic: true },

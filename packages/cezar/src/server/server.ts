@@ -259,7 +259,10 @@ import {
 import { planChain, slugify } from '../planner.ts';
 import { discoverSkills } from '../skills.ts';
 import { SkillsUpdateConflictError, SkillsUpdateCoordinator, SkillsUpdateService, type SkillsUpdateState } from '../skills-update.ts';
-import { selfUpdateApplyRequestSchema, selfUpdateChannelRequestSchema, selfUpdateDevelopmentQuerySchema } from '@open-mercato/cezar-contract';
+import {
+  releaseHoldInputSchema, releaseHoldParamSchema, type ReleaseHoldStatus,
+  selfUpdateApplyRequestSchema, selfUpdateChannelRequestSchema, selfUpdateDevelopmentQuerySchema,
+} from '@open-mercato/cezar-contract';
 import { SelfUpdateBusyError, SelfUpdateService } from '../self-update/service.ts';
 import { BUILD_HEADER, readWebBuildId } from './build-identity.ts';
 import { StarCountReader } from './star-count.ts';
@@ -4010,6 +4013,43 @@ export function createApp(deps: ServerDeps) {
     return c.json({ origin: opened.origin });
   });
 
+  const factoryReleaseHold = () => capabilities().localHandoff && !inRelayScope() ? deps.semaphore?.releaseHold : undefined;
+  const releaseHoldStatus = (lease: Pick<ReleaseHoldStatus, 'id' | 'expiresAt'>): ReleaseHoldStatus => ({
+    ...lease,
+    activeTasks: deps.semaphore?.busy() ?? 0,
+    activeManagers: managerEngine.activeTurnCount(),
+  });
+
+  const factoryReleaseRoutes = new Hono()
+    .post('/workspace/factory/release-hold', jsonZodValidator(releaseHoldInputSchema), (c) => {
+      const hold = factoryReleaseHold();
+      if (!hold) return c.json({ error: 'Release holds require a local cockpit.' }, 409);
+      try {
+        const lease = hold.acquire(c.req.valid('json').seconds);
+        if (!lease) return c.json({ error: 'Another harness release holds admission.' }, 409);
+        return c.json(releaseHoldStatus(lease), 201);
+      } catch {
+        return c.json({ error: 'Could not save the release hold.' }, 409);
+      }
+    })
+    .get('/workspace/factory/release-hold/:id', paramZodValidator(releaseHoldParamSchema), (c) => {
+      const hold = factoryReleaseHold();
+      if (!hold) return c.json({ error: 'Release holds require a local cockpit.' }, 409);
+      const lease = hold.current();
+      if (!lease || lease.id !== c.req.valid('param').id) return c.json({ error: 'The release hold has ended.' }, 404);
+      return c.json(releaseHoldStatus(lease));
+    })
+    .delete('/workspace/factory/release-hold/:id', paramZodValidator(releaseHoldParamSchema), (c) => {
+      const hold = factoryReleaseHold();
+      if (!hold) return c.json({ error: 'Release holds require a local cockpit.' }, 409);
+      try {
+        if (!hold.release(c.req.valid('param').id)) return c.json({ error: 'The release hold has ended.' }, 404);
+        return c.json({ ok: true as const });
+      } catch {
+        return c.json({ error: 'Could not end the release hold.' }, 409);
+      }
+    });
+
   const selfUpdateRoutes = new Hono()
     .get('/workspace/self-update', async (c) => c.json(await selfUpdate.status()))
 
@@ -5965,6 +6005,9 @@ export function createApp(deps: ServerDeps) {
         //   starting up or between sessions → buffered (1408d7cb) · anything else → 409
         // Sent from an ask card it answers that card; typed, it flags open cards (Questions inbox spec).
         const reply = parsed.data.askRequestId ? { askRequestId: parsed.data.askRequestId } : {};
+        if (run.status === 'waiting' && deps.semaphore?.releaseHold?.current()) {
+          return c.json({ error: 'Wait for the harness release before waking this task.' }, 409);
+        }
         if (manager.sendMessage(id, content, reply)) return c.json((answered = { delivered: true as const }));
 
         const currentRun = store.getRun(id);
@@ -9460,6 +9503,7 @@ export function createApp(deps: ServerDeps) {
     },
     costVisible: () => capabilities().costMetrics,
     autoResume: () => deps.semaphore?.autoResumeOnUsageLimit() ?? true,
+    releaseHoldActive: () => deps.semaphore?.releaseHold?.current() !== undefined,
     notifySystem: (title, body) => {
       if (capabilities().managerSystemNotifications) sendSystemNotification(title, body);
     },
@@ -9475,6 +9519,8 @@ export function createApp(deps: ServerDeps) {
     ...(deps.managerRunnerFor ? { runnerFor: deps.managerRunnerFor } : {}),
   });
   deps.onManagerEngine?.(managerEngine);
+  const offReleaseHold = deps.semaphore?.onReleaseHoldEnded(() => managerEngine.resumeAfterReleaseHold());
+  if (offReleaseHold) deps.onDispose?.(offReleaseHold);
   // A signed-in-again account resumes what was blocked on it (spec 2026-11-18-inline-account-reconnect).
   deps.onDispose?.(registerAuthResume({
     contexts,
@@ -9756,6 +9802,7 @@ export function createApp(deps: ServerDeps) {
           if (card && !openAsk(card)) return c.json({ error: 'question already closed' }, 409);
         }
         if (reactivate === true && managerStore.get(id)?.inactive) await managerEngine.update(id, { active: true });
+        if (deps.semaphore?.releaseHold?.current()) return c.json({ error: 'Wait for the harness release before sending a manager message.' }, 409);
         if (!managerEngine.send(id, text, attachments, askId)) return c.json(MANAGER_NOT_FOUND, 404);
         return c.json((answered = { ok: true as const, attachments: attachments.length }));
       } finally {
@@ -10075,6 +10122,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', agentProfilesRoutes)
     .route('/', skillsUpdateRoutes)
     .route('/', selfUpdateRoutes)
+    .route('/', factoryReleaseRoutes)
     .route('/', starCountRoutes)
     .route('/', previewRoutes)
     .route('/', workspaceConfigRoutes)
