@@ -50,6 +50,15 @@ describe('remainingBudgetUsd', () => {
     expect(remainingBudgetUsd(parent(undefined), [])).toBeUndefined();
   });
 
+  it('applies the task USD ceiling to mixed legacy and current child reservations', () => {
+    const root = record({ budget: { usd: 10 }, costUsd: 1 });
+    const children = [
+      record({ status: 'running', budget: { usd: 2 } }),
+      record({ status: 'queued', dispatch: { rootRunId: 'm', parentRunId: 'p', budgetUsd: 3 } }),
+    ];
+    expect(remainingBudgetUsd(root, children)).toBe(4);
+  });
+
   it('subtracts what is spent AND what is already promised to children', () => {
     const children = [
       record({ id: 'c1', dispatch: { rootRunId: 'm', parentRunId: 'p', budgetUsd: 3 } }),

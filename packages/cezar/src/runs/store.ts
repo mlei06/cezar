@@ -1055,6 +1055,10 @@ export function authParkForAccount(run: Pick<RunRecord, 'status' | 'archived' | 
  * are marked failed so no ghost stays behind.
  */
 export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }): RunRecord {
+  const legacyUsd = run.dispatch?.budgetUsd;
+  if (run.budget?.usd === undefined && legacyUsd !== undefined && legacyUsd > 0) {
+    run.budget = { ...run.budget, usd: legacyUsd };
+  }
   // A run that was live when the previous process exited can never finish —
   // surface that instead of a forever-"running" ghost. `review` survives
   // restarts on purpose: the gate is pure data (worktree + branch + record)

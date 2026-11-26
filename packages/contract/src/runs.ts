@@ -586,6 +586,11 @@ export const runRecordSchema = z.object({
 });
 export type RunRecord = z.infer<typeof runRecordSchema>;
 
+/** USD ceiling from current run records or a legacy dispatch allocation. */
+export function runBudgetUsd(run: Pick<RunRecord, 'budget' | 'dispatch'>): number | undefined {
+  return run.budget?.usd ?? run.dispatch?.budgetUsd;
+}
+
 /**
  * What `GET /runs` and `GET /runs/:id` answer: the stored record plus the live `usage` sample the
  * server attaches on the way out (`withUsage`). Absent for finished runs and wherever `ps` yields

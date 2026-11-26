@@ -336,6 +336,12 @@ describe('RunStore — titleSummary + diffStat (#389)', () => {
     expect(run?.worktreeReclaimedAt).toBeUndefined();
   });
 
+  it('reads a legacy dispatch allocation into the effective run budget', () => {
+    const legacy = { ...LEGACY_RUN, budget: { tokens: 100 }, dispatch: { rootRunId: LEGACY_RUN.id, budgetUsd: 3 } };
+    writeFileSync(join(dataDir, 'runs.json'), JSON.stringify([legacy]), 'utf8');
+    expect(RunStore.open(dataDir).getRun(legacy.id)?.budget).toEqual({ tokens: 100, usd: 3 });
+  });
+
   it('round-trips worktreeReclaimedAt and lets updateRun clear it (retention #483)', () => {
     const store = RunStore.open(dataDir);
     const run = store.createRun({ title: 't', workflow: 'w', task: 'task', steps: [] });
