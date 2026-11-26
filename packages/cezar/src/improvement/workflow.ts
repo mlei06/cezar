@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { promisify } from 'node:util';
 import type { ImprovementRecord, ImprovementScope, QueuedCause } from '@open-mercato/cezar-contract';
+import type { harnessCauseDigest } from './comparison.ts';
 
 export const IMPROVE_FACTORY = 'improve-factory';
 export const IMPROVEMENT_CHECK = 'factory-check';
@@ -34,6 +35,7 @@ export function improvementBrief(input: {
   batch: readonly QueuedCause[];
   previous: readonly ImprovementRecord[];
   scope: readonly ImprovementScope[];
+  crossProjectDigest?: ReturnType<typeof harnessCauseDigest>;
 }): string {
   const causes = input.batch.map(({ id, projectId, runId, scorer, label, reasoning, cause, at }) => ({
     id, run: '/p/' + encodeURIComponent(projectId) + '/tasks/' + encodeURIComponent(runId),
@@ -47,5 +49,6 @@ export function improvementBrief(input: {
     'Record one decision for each cause in the batch. Leave publication to the workflow.',
     '## Batch', JSON.stringify(causes, null, 2),
     '## Previous improvements', JSON.stringify(input.previous.filter((entry) => entry.pr).slice(-10), null, 2),
+    ...(input.crossProjectDigest ? ['## Cross-project cause digest', JSON.stringify(input.crossProjectDigest, null, 2)] : []),
   ].join('\n\n');
 }
