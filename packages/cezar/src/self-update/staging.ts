@@ -44,6 +44,8 @@ export async function stagingJson(url: string, body?: unknown): Promise<unknown>
 export async function withStagingCockpit<T>(
   entry: string, use: (api: string, project: string) => Promise<T>, opts: {
     signal?: AbortSignal;
+    dryRun?: boolean;
+    codexHome?: string;
     prepare?: (project: string, workspace: string) => Promise<string | void>;
   } = {},
 ): Promise<T> {
@@ -64,7 +66,9 @@ export async function withStagingCockpit<T>(
         CEZ_HOME: workspace,
         CEZ_INSTANCE_ID: instanceId,
         CEZ_REMOTE: '0',
-        CEZ_DRY_RUN: '1',
+        CEZ_DRY_RUN: opts.dryRun === false ? '0' : '1',
+        CEZ_SCORING: '0',
+        ...(opts.dryRun === false && opts.codexHome ? { CODEX_HOME: opts.codexHome } : {}),
         CEZ_NO_BANNER: '1',
         CEZ_AUTOMATIONS: '0',
         CEZ_MANAGERS: '0',

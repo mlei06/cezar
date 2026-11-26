@@ -3,7 +3,7 @@ import { readOnlyEnv } from '../core/read-only-env.ts';
 import { AgentUsageHolds } from '../workspace/agent-usage-holds.ts';
 import { completionReason } from './completion-reason.ts';
 import { prepareReplayCheck, runReplayShell } from './replay-check.ts';
-import { resolveReplayHarness, saveStagedReplayDiff, stagedCheckReplay } from './staged-replay.ts';
+import { resolveReplayHarness, saveStagedReplayDiff, stagedReplay } from './staged-replay.ts';
 import { WorktreeLifecycleCoordinator } from '../worktree-lifecycle/coordinator.ts';
 import type { RunParked, RunSubject, WebhookAttentionRequest, TrackerAssociation, UsageWindowsObservation } from '@open-mercato/cezar-contract';
 import { saveUsageWindows } from '../workspace/usage-windows.ts';
@@ -2545,7 +2545,6 @@ export class RunManager {
     if (requested !== currentHarness.id) {
       const installed = await resolveReplayHarness(requested);
       if ('error' in installed) return installed;
-      if (mode !== 'checks') return { error: 'An alternate harness currently supports isolated check workflows.' };
       target = { id: installed.id, commit: installed.commit };
     }
     if (!target.commit || (!input.harness && harnessVersion.commit !== target.commit)) {
@@ -2586,7 +2585,8 @@ export class RunManager {
     const runs = slots.map((variant) => this.startRun(replayWorkflow, {
       task, images, worktree: true, generateFollowups: false, modelRoutePinned: true,
       ...(mode === 'agent' ? {
-        runner: 'codex', model, agentProfile: input.runner && input.runner !== source.runner ? undefined : source.agentProfile,
+        runner: 'codex', model, agentProfile: input.runner && input.runner !== source.runner ? undefined
+          : source.agentProfile ?? source.steps.find((step) => step.backend === 'codex')?.profileId,
         reasoningEffort: input.effort ?? source.reasoningEffort, readOnly: true, enforceReadOnly: true, secrets: [],
       } : {}),
       replay: { sourceId, startCommit, change, harness: target, systemPrompt: source.systemPrompt },
@@ -7399,7 +7399,7 @@ export class RunManager {
       const mode = replayMode(workflow);
       const sameHarness = current.id === original.harnessVersion?.id && current.commit === original.harnessVersion.commit;
       if (!original.startCommit || !original.workflowDef || input.worktree !== true ||
-        !original.harnessVersion?.commit || !mode || (!sameHarness && mode !== 'checks') ||
+        !original.harnessVersion?.commit || !mode ||
         (mode === 'agent' && (input.runner !== 'codex' || !input.enforceReadOnly))) {
         const error = 'The replay needs its saved workflow, exact worktree and pinned harness.';
         this.publishRunFailure(runId, { status: 'failed', error, finishedAt: new Date().toISOString(), currentStepId: undefined });
@@ -7408,7 +7408,7 @@ export class RunManager {
         return;
       }
       if (!sameHarness) {
-        await this.executeStagedReplay(original, state, emit);
+        await this.executeStagedReplay(original, state, mode === 'agent', emit);
         return;
       }
     }
@@ -7876,30 +7876,42 @@ export class RunManager {
   }
 
   private async executeStagedReplay(
-    run: RunRecord, state: ActiveRun, emit: (event: { type: string; stepId?: string; [key: string]: unknown }) => void,
+    run: RunRecord, state: ActiveRun, agent: boolean, emit: (event: { type: string; stepId?: string; [key: string]: unknown }) => void,
   ): Promise<void> {
     const controller = new AbortController();
     state.interrupt = () => controller.abort();
     this.store.updateRun(run.id, { status: 'running', startedAt: new Date().toISOString() });
-    emit({ type: 'lifecycle', message: 'starting a check replay on an isolated staging cockpit' });
+    emit({ type: 'lifecycle', message: 'starting a replay on an isolated staging cockpit' });
     try {
-      const result = await stagedCheckReplay(this.repoRoot, run, controller.signal);
+      const result = await stagedReplay(this.repoRoot, this.dataDir, run, agent, controller.signal);
       if (state.cancelled || this.active.get(run.id) !== state) return;
       for (const step of result.run.steps) {
-        this.store.updateStep(run.id, step.id, { status: step.status, startedAt: step.startedAt, finishedAt: step.finishedAt, error: step.error });
+        this.store.updateStep(run.id, step.id, {
+          status: step.status, startedAt: step.startedAt, finishedAt: step.finishedAt, error: step.error,
+          backend: step.backend, modelIdentity: step.modelIdentity, actualModel: step.actualModel, toolPolicy: step.toolPolicy,
+          tokensUsed: step.tokensUsed, inputTokens: step.inputTokens, outputTokens: step.outputTokens, costUsd: step.costUsd,
+          iterations: step.iterations, taskStats: step.taskStats,
+          usageInvocationsStarted: step.usageInvocationsStarted, usageInvocationsObserved: step.usageInvocationsObserved,
+          usageTurnsStarted: step.usageTurnsStarted, usageTurnsRecorded: step.usageTurnsRecorded,
+        });
       }
       for (const entry of result.events) {
-        if (entry.type === 'check-output') emit({
-          type: entry.type, stepId: entry.stepId, text: entry.text, command: entry.command, exitCode: entry.exitCode,
-        });
+        const { type, stepId } = entry;
+        if (type === 'check-output') emit({ type, stepId, text: entry.text, command: entry.command, exitCode: entry.exitCode });
+        if (type === 'text') emit({ type, stepId, text: entry.text });
+        if (type === 'tool-call') emit({ type, stepId, tool: entry.tool, id: entry.id, input: entry.input });
+        if (type === 'tool-result') emit({ type, stepId, toolCallId: entry.toolCallId, result: entry.result });
       }
       if (result.diff) saveStagedReplayDiff(this.dataDir, run.id, result.diff);
       if (state.cancelled || this.active.get(run.id) !== state) return;
-      this.store.updateRun(run.id, { activeMs: result.run.activeMs, diffStat: result.diff?.changes.stat });
+      this.store.updateRun(run.id, {
+        activeMs: result.run.activeMs, diffStat: result.diff?.changes.stat,
+        modelIdentity: result.run.modelIdentity, actualModel: result.run.actualModel,
+      });
       if (result.run.status === 'done' || result.run.status === 'review') {
         await this.settleSuccess(run.id, state);
       } else {
-        throw new Error(result.run.error ?? 'The staged check workflow did not complete successfully.');
+        throw new Error(result.run.error ?? 'The staged workflow did not complete successfully.');
       }
     } catch (error) {
       if (state.cancelled || this.active.get(run.id) !== state) return;
