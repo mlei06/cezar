@@ -96,6 +96,7 @@ describe('NAV_ITEMS', () => {
       'Automations',
       'Skills',
       'Workflows',
+      'Factory',
       'Settings',
     ])
   })
@@ -103,7 +104,7 @@ describe('NAV_ITEMS', () => {
   it('files Inbox and Settings under Workspace, every other item under the project', () => {
     expect(NAV_ITEMS.filter((item) => item.group === 'workspace').map((item) => item.label)).toEqual(['Inbox', 'Settings'])
     expect(NAV_ITEMS.filter((item) => !item.group).map((item) => item.label)).toEqual([
-      'Now', 'Tasks', 'Git', 'GitHub', 'Tracker', 'Assets', 'Terminal', 'Automations', 'Skills', 'Workflows',
+      'Now', 'Tasks', 'Git', 'GitHub', 'Tracker', 'Assets', 'Terminal', 'Automations', 'Skills', 'Workflows', 'Factory',
     ])
   })
 
@@ -126,7 +127,7 @@ describe('visibleNavItems', () => {
 
   it('with everything available, the full nav renders', () => {
     expect(labelsOf({ forge: true, inbox: true, automations: true, terminal: true, tracker: 'jira' })).toEqual([
-      'Now', 'Tasks', 'Inbox', 'Git', 'GitHub', 'Jira', 'Assets', 'Terminal', 'Automations', 'Skills', 'Workflows', 'Settings',
+      'Now', 'Tasks', 'Inbox', 'Git', 'GitHub', 'Jira', 'Assets', 'Terminal', 'Automations', 'Skills', 'Workflows', 'Factory', 'Settings',
     ])
   })
 
@@ -144,19 +145,19 @@ describe('visibleNavItems', () => {
 
   it('without a forge, only the GitHub item drops out — a schedule needs no remote', () => {
     expect(labelsOf({ forge: false, inbox: true, automations: true })).toEqual([
-      'Now', 'Tasks', 'Inbox', 'Git', 'Assets', 'Automations', 'Skills', 'Workflows', 'Settings',
+      'Now', 'Tasks', 'Inbox', 'Git', 'Assets', 'Automations', 'Skills', 'Workflows', 'Factory', 'Settings',
     ])
   })
 
   it('without the inbox, exactly the Inbox item drops out (#471)', () => {
     expect(labelsOf({ forge: true, inbox: false, automations: true })).toEqual([
-      'Now', 'Tasks', 'Git', 'GitHub', 'Assets', 'Automations', 'Skills', 'Workflows', 'Settings',
+      'Now', 'Tasks', 'Git', 'GitHub', 'Assets', 'Automations', 'Skills', 'Workflows', 'Factory', 'Settings',
     ])
   })
 
   it('opted out of automations, exactly the Automations item drops out', () => {
     expect(labelsOf({ forge: true, inbox: true, automations: false })).toEqual([
-      'Now', 'Tasks', 'Inbox', 'Git', 'GitHub', 'Assets', 'Skills', 'Workflows', 'Settings',
+      'Now', 'Tasks', 'Inbox', 'Git', 'GitHub', 'Assets', 'Skills', 'Workflows', 'Factory', 'Settings',
     ])
   })
 
@@ -168,7 +169,7 @@ describe('visibleNavItems', () => {
 
   it('drops all three when nothing is available', () => {
     expect(labelsOf({ forge: false, inbox: false, automations: false })).toEqual([
-      'Now', 'Tasks', 'Git', 'Assets', 'Skills', 'Workflows', 'Settings',
+      'Now', 'Tasks', 'Git', 'Assets', 'Skills', 'Workflows', 'Factory', 'Settings',
     ])
   })
 
