@@ -170,6 +170,8 @@ export interface ForgePrMergeState {
   headRef: string;
   baseRef: string;
   headSha: string;
+  mergeCommitSha?: string;
+  mergedAt?: string;
   mergeable: 'mergeable' | 'conflicting' | 'unknown';
   reviewDecision: 'approved' | 'changes-requested' | 'review-required' | 'not-required' | 'unknown';
   checks: ForgePrCheck[];

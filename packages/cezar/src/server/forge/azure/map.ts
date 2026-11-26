@@ -30,6 +30,7 @@ export const azurePrSchema = z
     mergeFailureMessage: z.string().optional().catch(undefined),
     lastMergeSourceCommit: z.object({ commitId: z.string() }).optional().catch(undefined),
     lastMergeCommit: z.object({ commitId: z.string() }).optional().catch(undefined),
+    closedDate: z.string().optional().catch(undefined),
     reviewers: z
       .array(z.object({ vote: z.number().catch(0), isRequired: z.boolean().optional().catch(undefined) }).passthrough())
       .catch([]),
@@ -217,6 +218,8 @@ export function toMergeState(
     headRef: branchOf(pr.sourceRefName),
     baseRef: branchOf(pr.targetRefName),
     headSha: pr.lastMergeSourceCommit?.commitId ?? '',
+    ...(state === 'merged' && pr.lastMergeCommit?.commitId ? { mergeCommitSha: pr.lastMergeCommit.commitId } : {}),
+    ...(state === 'merged' && pr.closedDate ? { mergedAt: pr.closedDate } : {}),
     mergeable,
     reviewDecision,
     checks,

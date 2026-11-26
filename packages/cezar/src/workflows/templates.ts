@@ -1,5 +1,6 @@
 import { READ_ONLY_BASH_PREFIXES } from './capabilities.ts';
 import { graphIssues, graphToSteps, type GraphNode, type WorkflowGraph } from './graph.ts';
+import { hasImprovementSkill, IMPROVE_FACTORY, IMPROVEMENT_CHECK } from '../improvement/workflow.ts';
 import type { WorkflowDef } from './types.ts';
 
 /**
@@ -305,6 +306,28 @@ export function implementWorkflow(commands: readonly string[]): WorkflowDef {
   return {
     ...builtIn('implement', 'Implement a change, run project validation, and open a PR when validation passes.', { nodes, edges }),
     budget: { tokens: 3_000_000, minutes: 30 },
+  };
+}
+
+export function improveFactoryWorkflow(commands: readonly string[]): WorkflowDef {
+  const workflow = implementWorkflow(['node "$CEZ_BIN" factory check', ...commands]);
+  const graph = workflow.graph!;
+  const builtin = hasImprovementSkill();
+  const rename = (edge: string) => edge.replace(/^check-1(?=\.|$)/, IMPROVEMENT_CHECK);
+  return {
+    ...builtIn(IMPROVE_FACTORY, 'Fix recurring task failures from a scored batch.', {
+      nodes: graph.nodes.map((node) => {
+        if (node.id === 'check-1') return { ...node, id: IMPROVEMENT_CHECK, name: 'Validate improvement' };
+        if (node.type !== 'agent') return node;
+        if (node.id === 'work') return {
+          ...node, ...(builtin ? { skill: IMPROVE_FACTORY } : {}),
+          prompt: '{{task}}\n\nLeave proposed changes in the worktree. The workflow owns validation and PR publication.',
+        };
+        return { ...node, prompt: node.prompt?.replaceAll('nodes.check-1.', 'nodes.' + IMPROVEMENT_CHECK + '.') };
+      }),
+      edges: graph.edges.map((edge) => ({ from: rename(edge.from), to: rename(edge.to) })),
+    }),
+    budget: { tokens: 4_000_000, minutes: 45 },
   };
 }
 

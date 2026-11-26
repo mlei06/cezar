@@ -344,6 +344,8 @@ export const githubPrMergeStateSchema = z.object({
   headRef: z.string(),
   baseRef: z.string(),
   headSha: z.string(),
+  mergeCommitSha: z.string().optional(),
+  mergedAt: z.string().optional(),
   mergeable: z.enum(['mergeable', 'conflicting', 'unknown']),
   reviewDecision: z.enum(['approved', 'changes-requested', 'review-required', 'not-required', 'unknown']),
   checks: z.array(githubPrCheckSchema),
