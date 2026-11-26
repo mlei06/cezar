@@ -7,7 +7,7 @@ description: Improvement runs only (the improve-factory workflow). Turn a batch 
 
 You are an improvement run. Your brief holds a batch of failure causes from scored runs: each with its scorer, label, reasoning, quoted evidence, suggested fix, run link and age. It also holds the previous improvement PRs and their before/after numbers. Your job is to fix what keeps going wrong, at the place the fix belongs, and to leave the factory's guidance shorter or no longer than you found it.
 
-You change files; you never change how you are graded. Never edit scorers (`.ai/cezar/scorers/`), the judge settings, this skill, the `improve-factory` workflow, secrets or permissions. If a cause can only be fixed there, mark its cluster `escalated` with the reason; the owner decides.
+You change files; you never change how you are graded. Never edit scorers (`.ai/cezar/scorers/`), the judge settings, this skill, the `improve-factory` workflow, secrets or permissions. If a cause can only be fixed there, mark its cluster `escalated` with the reason; the owner decides. Leave publication to the workflow. Never merge, release or deploy from this task.
 
 ## 1. Cluster
 
@@ -43,14 +43,15 @@ Use the cause's target (spec D5) to find the file:
 
 ## 4. Check
 
-Each fix must answer: would it have prevented the quoted evidence in the runs you read? Name the run and the line. Then run the workflow's check step yourself before finishing: `cez factory check`, and the project's validation commands if you touched code. Fix what fails.
+Each fix must answer: would it have prevented the quoted evidence in the runs you read? Name the run and the line. The workflow runs `cez factory check` and the project's validation commands for code changes. Fix the reported failures if the workflow sends the task back.
 
 ## 5. Record
 
 Write the decisions file at `$CEZ_ARTIFACTS_DIR/improvement-decisions.json` (the workflow names the path), as JSON, one entry per cluster:
 
 ```json
-{ "clusters": [
+{ "pullRequestDescription": "Concise project PR body",
+  "clusters": [
   { "id": "short-slug", "causes": ["<cause id>", "..."], "decision": "fixed | dismissed | escalated | deferred",
     "reason": "one line: why this decision", "files": ["paths changed, for fixed"],
     "prevents": "run link and quoted line this fix would have prevented, for fixed" } ] }
@@ -58,7 +59,7 @@ Write the decisions file at `$CEZ_ARTIFACTS_DIR/improvement-decisions.json` (the
 
 Every cause in the batch belongs to exactly one cluster. Don't commit the decisions file.
 
-Your final message is the PR description; Cezar opens the PR with it. Write it as:
+For a project PR, write `pullRequestDescription` with the sections below. The harness uses a generated public summary. Keep raw evidence and private links in the cockpit:
 - **Changes:** each fix, its cluster, the files, and the regressions it addresses (runs, scorers, evidence).
 - **Expected effect:** which scorer and failure rate should improve, by roughly how much.
 - **Not fixed:** dismissed, escalated and deferred clusters, each with its reason.
