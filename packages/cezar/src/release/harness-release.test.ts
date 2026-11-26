@@ -9,8 +9,8 @@ import { expect, it } from 'vitest';
 
 const exec = promisify(execFile);
 
-it.skipIf(process.platform === 'win32').each(['restart', 'health', 'manual'] as const)(
-  'selects a healthy release in the %s rollback case',
+it.skipIf(process.platform === 'win32').each(['restart', 'health', 'manual', 'benchmark'] as const)(
+  'keeps a healthy release in the %s case',
   async (failure) => {
     const root = await mkdtemp(join(tmpdir(), 'cez-release-rollback-'));
     const workspace = join(root, 'workspace');
@@ -47,6 +47,8 @@ it.skipIf(process.platform === 'win32').each(['restart', 'health', 'manual'] as 
           export const activate = id => writeFileSync(process.env.RELEASE_TEST_STATE, id);
           export const linkCheckout = () => ({ id: 'candidate' });
           export const listLinks = () => [];
+          export const versionEntry = id => '/' + id + '-entry';
+          export const linkId = () => 'candidate';
         `),
         writeFile(service, failure === 'restart' ? '#!/bin/sh\ntest "$(cat "$RELEASE_TEST_STATE")" = previous\n' : '#!/bin/sh\nexit 0\n'),
       ]);
@@ -73,9 +75,28 @@ it.skipIf(process.platform === 'win32').each(['restart', 'health', 'manual'] as 
         expect(await readFile(stateFile, 'utf8')).toBe('stable');
         return;
       }
+      if (failure === 'benchmark') {
+        const benchmarks = join(candidate, 'dist', 'benchmarks');
+        const settings = join(candidate, 'dist', 'workspace');
+        await Promise.all([mkdir(benchmarks), mkdir(settings)]);
+        await Promise.all([
+          writeFile(join(candidate, 'package.json'), '{"version":"0.1.0","type":"module"}'),
+          writeFile(join(benchmarks, 'harness-smoke.js'), [
+            'export const HARNESS_SMOKE_SUITE = "fixture";',
+            'export const runHarnessSmokeSuite = async entry => ({ passRate: entry === "/previous-entry" ? 100 : 60, samples: [] });',
+          ].join('\n')),
+          writeFile(join(settings, 'config.js'), 'export const loadWorkspaceConfig = async () => ({});'),
+        ]);
+        args.push('--benchmark');
+      }
       await expect(execute()).rejects.toMatchObject({ code: 1 });
       expect(await readFile(stateFile, 'utf8')).toBe('previous');
       const log = (await readFile(releaseLog, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+      if (failure === 'benchmark') {
+        expect(log.at(-1)).toMatchObject({ action: 'benchmark', baseline: 100, passRate: 60, result: 'failed' });
+        expect(log.some((entry) => entry.action === 'switch')).toBe(false);
+        return;
+      }
       expect(log.slice(-2)).toMatchObject([
         { action: 'switch', sha, id: 'candidate', previous: 'previous', result: 'failed' },
         { action: 'rollback', from: 'candidate', id: 'previous', result: 'ok', automatic: true },

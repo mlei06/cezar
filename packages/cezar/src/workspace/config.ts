@@ -220,6 +220,7 @@ export const workspaceConfigSchema = z
       judge: factoryModelRouteSchema.optional().catch(undefined),
       harnessProject: z.string().trim().min(1).max(64).optional().catch(undefined),
       scoring: factoryScoringSettingsSchema.optional().catch(undefined),
+      release: z.object({ benchmarkTolerance: z.number().min(0).max(100).optional() }).optional().catch(undefined),
       budget: runBudgetSchema.optional().catch(undefined),
       models: z.object({
         lowReasoning: factoryModelRouteSchema.extend({
