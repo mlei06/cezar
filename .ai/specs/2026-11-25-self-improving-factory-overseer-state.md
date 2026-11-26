@@ -2,17 +2,17 @@
 
 The overseer's resume point for the self-improving factory build. Updated and pushed at every milestone step and every overseer decision, so the work survives a crashed machine or a new session. Read this first, then the roadmap's Progress table and the observation log.
 
-Last updated: 2026-11-26 05:10 UTC.
+Last updated: 2026-11-26 05:12 UTC.
 
 ## Where the build stands
 
 - **Milestone:** M0 done. M1 is done: live New task acceptance passed, and the low-reasoning check passed on 2026-11-26 02:15 UTC (`operate` ran on OpenCode with the machine's low-reasoning model, capability block present in its prompt; `factory.models.lowReasoning` is now set in the workspace config, written through the config merge-writer). M1.5 is released and waiting on the two-project live acceptance.
-- **Live harness:** `0.21.0+release-6466703`. PR #15 is installed and healthy. An isolated check workflow dispatched a child whose run recorded its USD ceiling in the shared run budget. Run identity (#13) and model routing (#14) were verified on earlier releases. The harness manager remains inactive.
+- **Live harness:** `0.21.0+release-f053f7e`. PR #16 is installed and healthy. An isolated Codex task recorded model requests, context, tool calls, and output ranking through the live metrics route. Previous releases verified run identity, both model routing cases, and shared USD budget storage. The harness manager remains inactive.
 - **M1 PRs:** #2 (known host test failures), #3 (secret descriptions), #4 (workflow budgets and agent-step secrets), #5 (typecheck repair), #6 (built-in `implement`, `plan`, `operate`), #7 (the capability block), #8 (manager discovery and task flags), #9 (`manage-project` update), #10 (test-resource rules in `factory-work`).
 - **M1 follow-ups** (from reviews, not blocking): generated validation checks get an explicit secrets allowlist; forge-adapter-level draft-PR assertions; check-artifact exclusions survive a cockpit restart (tracked before M1).
 - **Live delegated routing:** applied `highReasoning`, `switchAbove: 0.8` and the ordered hosted fallback list through the config merge-writer. With the VPN available, an isolated `operate` task completed on the configured OpenCode primary. With a temporary unreachable probe target, a second `operate` completed on the first hosted fallback and recorded the runner, model and fallback note. Restored the real probe URL immediately after admission.
-- **In flight:** Metrics PR #16 merged at `f053f7e82`. Release `f053f7e` is running. `impl/m2-budget-enforcement` at `a86dd035d` passed typecheck and 1,010 focused tests, including saved metrics snapshots, and its full validation is running. `impl/m1-pr-publishing` at `59b13a2ff` (B16) and `impl/m2-task-priority` at `677719856` (B22) passed typecheck and focused checks. M3 scorer catalog, isolated judge, scoring service and cause routing have focused coverage on implementation branches.
-- **Next:** confirm release `f053f7e` and verify live task metrics, then release budget enforcement when validation completes. Verify manager alerts across two thresholds and finish B16 and B22. M3 still needs scores in the cockpit, manager discovery, infrastructure notices, workspace reads and live calibration. The concurrent real-project acceptance remains open.
+- **In flight:** `impl/m2-budget-enforcement` at `a86dd035d` passed typecheck and 1,010 focused tests. The full validation is running. `impl/m1-pr-publishing` at `59b13a2ff` (B16) and `impl/m2-task-priority` at `677719856` (B22) have focused coverage and still need full validation. M3 catalog, judge, scoring service, and cause routing also have focused coverage on their implementation branches.
+- **Next:** after budget validation, put its branch on the #16 squash and verify the tree is unchanged. Release budget enforcement, then verify the two live manager threshold alerts. Finish B16 and B22. M3 still needs cockpit scores, manager score discovery, infrastructure notices, workspace reads, and live calibration. The concurrent real-project acceptance remains open.
 
 ## Standing instructions given to the harness manager
 
@@ -46,5 +46,5 @@ Since 2026-11-25 17:25 the manager runs the harness project on its own (owner de
 - **M1 acceptance:** completed. New task and the configured low-reasoning alias were verified on the live cockpit.
 - Calibration so far: 4 runs, 16 scorer comparisons. Pass/fail agreement is 14/16. The two disagreements: the overseer under-called efficiency once, and the judge can't see spec drift (backlog B19).
 - **Public repository hygiene:** the fork holds nothing internal. No provider ids, hosts, paths, usernames, project names, job names or run data. Project-specific notes belong in that project's own repository; machine settings stay in `~/.config/factory-overseer.json`.
-- **Git metadata:** later local commits use the fork account’s public GitHub noreply identity. Include earlier local Git identities in the owner’s existing history-cleanup review.
+- **Git metadata:** current implementation heads are being rebased with the public GitHub noreply identity. Earlier pushed implementation heads may still be reachable by commit id. Include those with earlier local Git identities in the owner’s existing history-cleanup review.
 - **History purge, pending (owner decision, not for the implementer):** commits pushed before 2026-11-25 21:45 UTC on `factory`, `feat/manager-autonomy` and the PR branches still contain internal names in older spec text. Rewrite them once M1's PRs are merged and nothing is open: run `git filter-repo --replace-text` over all fork branches, force-push, then delete the stale branches.
