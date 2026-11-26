@@ -267,4 +267,5 @@ export const benchmarkResultsResponseSchema = z.object({
   rows: z.array(benchmarkMatrixRowSchema),
   artifact: z.object({ runId: z.uuid(), name: z.string() }).optional(),
 });
+export type BenchmarkResultsResponse = z.infer<typeof benchmarkResultsResponseSchema>;
 export const benchmarkHistoryResponseSchema = z.object({ batches: z.array(benchmarkMatrixRunSchema) });
