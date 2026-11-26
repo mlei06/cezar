@@ -1,6 +1,6 @@
 # The self-improving factory
 
-Status: draft v5.34, 2026-11-26. Fork: `mlei06/cezar`, trunk `factory`. Spec owner: the overseer (see the roadmap). Implementation plan: `2026-11-25-self-improving-factory-roadmap.md`. Findings during the build: `2026-11-25-self-improving-factory-observations.md`.
+Status: draft v5.35, 2026-11-26. Fork: `mlei06/cezar`, trunk `factory`. Spec owner: the overseer (see the roadmap). Implementation plan: `2026-11-25-self-improving-factory-roadmap.md`. Findings during the build: `2026-11-25-self-improving-factory-observations.md`.
 
 ## TLDR
 
@@ -466,7 +466,7 @@ Two extensions to variants make this work:
 - **Outside systems:** replays never push, merge or deploy, and they skip check steps marked `sideEffects: true`.
 - **Local check execution:** replay checks run in a dedicated worktree and scratch space under a filesystem allowlist. The sandbox exposes a minimal runtime, hides Git administrative data and the rest of the host, and disables network access. Checks receive no service credentials or task capability. Checks fail if the sandbox is unavailable. The Linux Codex named permission profile is the first verified implementation.
 - **Worktree hooks:** a replay uses the recorded Git commit and bypasses Git checkout hooks, personal configuration seeding and Cezar's worktree lifecycle scripts. Checkout bypasses external Git filters. Replay checks leave residues in the worktree and bypass autosave so Git filters and hooks cannot run afterwards. Preparation or cleanup with external dependencies needs an isolated replay workflow.
-- **Agent isolation:** Codex runs replay agents through its verified read-only broker. If the saved workflow grants Bash, the broker runs that Bash command through the same local sandbox as replay checks. Native execution, Git administration, private MCP and service credentials are unavailable. Other runners need a verified boundary before they can replay.
+- **Agent isolation:** Codex runs replay agents through its verified read-only broker. If the saved workflow grants Bash, the broker runs that Bash command through the same local sandbox as replay checks. Native execution, Git administration, private MCP and service credentials are unavailable. OpenCode can replay text-only workflows that explicitly declare `allowedTools: []`. It uses the tool-free stateless generation route from a temporary scratch directory on the current harness. OpenCode replays that require tools, attachments or another installed harness still require a verified boundary.
 - **Harness version:** a replay on another harness version runs on a staging cockpit started from that installed version (D9), with its own `CEZ_HOME`. It supports check workflows and can use the selected Codex profile for an authenticated isolated agent replay. Project settings, secrets and service credentials are kept out of this cockpit. The host retains the staged diff, output and usage measurements for Compare after staging closes.
 - **Mid-task messages:** the original's owner and manager messages are appended to the replay's brief as context, not resent mid-run.
 - **Queues:** replays never feed improvement queues. They're experiments, and a deliberately weak variant would otherwise flood the queues.
@@ -854,6 +854,7 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
 
 ## Changelog
 
+- **v5.35:** D8 allows the configured OpenCode route for explicitly tool-free text benchmarks. Use the existing stateless generation mechanism and empty scratch directory. Workflows with tool grants still require the Codex replay broker.
 - **v5.34:** D6 records the checked commit and the decisions before submitting a PR. Final autosave must retain the same commit. Recovery tracks an already-open PR even if the decisions artifact has been removed. The checkpoint preserves recorded outcomes.
 - **v5.33:** D6 workflow hardening. The host claims and records a batch before admission. The built-in workflow is available only to that admission path, with the owner-approved bundled skill. A project validates the exact batch decisions and configured change scope before publication. The harness keeps the agent's task evidence out of the public PR. The ordinary project body comes from the optional `pullRequestDescription` in the decisions file. Use the built-in automation for all user and manager starts. Record a merge only with the forge's exact commit and timestamp.
 - **v5.32:** D6 improvement run as built:

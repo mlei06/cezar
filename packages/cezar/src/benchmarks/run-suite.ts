@@ -19,7 +19,7 @@ import { assertLifecyclePath, withLifecycleFileLock } from '../worktree-lifecycl
 import { hasReplayCommit } from '../git-worktree.ts';
 import { loadWorkflows } from '../workflows/load.ts';
 import { agentModelsLocked } from '../core/agent-model-policy.ts';
-import { replayMode, resolveTaskModelAliases, type StartRunInput } from '../workflows/run.ts';
+import { replayMode, resolveTaskModelAliases, supportsReplayAgent, type StartRunInput } from '../workflows/run.ts';
 import type { WorkflowDef } from '../workflows/types.ts';
 
 type BenchmarkProject = Pick<ProjectContext, 'root' | 'dataDir' | 'manager' | 'store'>;
@@ -67,8 +67,8 @@ async function replayTarget(project: BenchmarkProject, task: BenchmarkTask, work
   }, () => undefined, local) : {};
   const runner = route?.runner ?? current;
   const model = route?.model ?? requestedModel;
-  if (mode === 'agent' && runner !== 'codex') return { reason: 'Agent replay currently requires the Codex sandbox for this route.' };
-  if (mode === 'agent' && model && modelConflictsWithRunner(model, 'codex')) return { reason: 'The model does not belong to the replay runner.' };
+  if (mode === 'agent' && !supportsReplayAgent(candidate, runner)) return { reason: 'The selected route cannot enforce this replay workflow\'s tools.' };
+  if (mode === 'agent' && model && modelConflictsWithRunner(model, runner)) return { reason: 'The model does not belong to the replay runner.' };
   if (mode === 'checks' && (choice.runner || choice.model || choice.effort)) return { reason: 'This workflow only has checks and has no model to compare.' };
   const prompt = task.prompt + '\n\nSuccess criteria:\n' + task.successCriteria;
   return {
@@ -76,7 +76,7 @@ async function replayTarget(project: BenchmarkProject, task: BenchmarkTask, work
     input: {
       task: prompt, worktree: true, generateFollowups: false, modelRoutePinned: true,
       ...(mode === 'agent' ? {
-        runner: 'codex', model, agentProfile: route?.agentProfile ?? (saved?.runner === 'codex' ? saved.agentProfile : undefined),
+        runner, model, agentProfile: route?.agentProfile ?? (saved?.runner === runner ? saved?.agentProfile : undefined),
         reasoningEffort: choice.effort ?? route?.reasoningEffort ?? agentSteps[0]?.reasoningEffort ?? saved?.reasoningEffort,
         readOnly: true, enforceReadOnly: true, secrets: [],
       } : {}),

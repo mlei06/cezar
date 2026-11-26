@@ -207,6 +207,36 @@ describe('graph workflows run through RunManager', () => {
     }
   }, 30_000);
 
+  it.skipIf(process.platform !== 'linux')('uses stateless OpenCode from empty scratch for a tool-free replay', async () => {
+    const shim = join(repoRoot, '.ai', 'cezar', 'stateless-opencode');
+    const mock = new URL('../core/__fixtures__/opencode/mock-opencode-v2-serve.mjs', import.meta.url);
+    writeFileSync(shim, `#!/bin/sh\nexport MOCK_STATELESS_ONLY=1 MOCK_REPLAY_PROMPT='Answer using exactly this fixture text.'\nexec "${mock.pathname}" "$@"\n`, { mode: 0o700 });
+    vi.stubEnv('CEZ_OPENCODE_BIN', shim);
+    const workflow = def({
+      nodes: [{ id: 'start', type: 'start' }, { id: 'work', type: 'agent', prompt: '{{task}}', allowedTools: [] },
+        { id: 'done', type: 'end', status: 'success' }],
+      edges: [{ from: 'start', to: 'work' }, { from: 'work.done', to: 'done' }],
+    });
+    const { stdout } = await run('git', ['rev-parse', 'HEAD'], { cwd: repoRoot });
+    const launch = vi.spyOn(OpencodeServerRunner.prototype, 'startSession');
+    try {
+      const variant = manager.startRun(workflow, {
+        task: 'Answer using exactly this fixture text.', runner: 'opencode', model: 'mock/mock-model#high',
+        worktree: true, readOnly: true, enforceReadOnly: true, secrets: [],
+        replay: { sourceId: 'fixture', startCommit: stdout.trim(), change: 'fixture', harness: await runHarnessVersion() },
+      });
+      const settled = await settle(variant.id);
+      expect(settled.status, settled.error).toMatch(/done|review/);
+      const spec = launch.mock.calls[0]?.[0];
+      expect(spec).toMatchObject({ noTools: true, allowedTools: [], additionalDirectories: [] });
+      expect(spec?.cwd).not.toBe(settled.worktreePath);
+      expect(spec?.cwd && existsSync(spec.cwd)).toBe(false);
+      expect(settled.graphState?.outputs?.work?.summary).toContain('fixture text');
+    } finally {
+      launch.mockRestore();
+    }
+  }, 30_000);
+
   it.skipIf(process.platform !== 'linux')('replays a saved check workflow in a group from its original commit', async () => {
     stubReplaySandbox();
     const cwd = { cwd: repoRoot };
