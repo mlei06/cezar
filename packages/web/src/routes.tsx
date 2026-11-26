@@ -45,6 +45,10 @@ import { NowRoute, nowScopeFromState } from './routes/now/now'
 import { GlobalTasksRoute } from './routes/global-tasks'
 
 // Dashboard charts, drag controls and exports are paid for only on this route.
+const FactoryRoute = lazyRoute('factory', () =>
+  import('./routes/factory').then((m) => ({ default: m.FactoryRoute })),
+)
+
 const DashboardRoute = lazyRoute('dashboard', () =>
   import('./routes/dashboard').then((m) => ({ default: m.DashboardRoute })),
 )
@@ -698,6 +702,7 @@ export const AppRoutes = memo(function AppRoutes() {
             </Suspense>
           }
         />
+        <Route path="factory" element={<Suspense fallback={<ScreenLoading label="Loading factory…" />}><FactoryRoute /></Suspense>} />
         <Route
           path="automations"
           element={

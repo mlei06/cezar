@@ -148,6 +148,7 @@ describe('AppShell', () => {
       'Automations',
       'Skills',
       'Workflows',
+      'Factory',
     ])
     // Deep-linkable per Step 2.1: every nav row is an <a href>, not a button with an onClick.
     expect(links.map((a) => a.getAttribute('href'))).toEqual([
@@ -159,6 +160,7 @@ describe('AppShell', () => {
       '/automations',
       '/skills',
       '/workflows',
+      '/factory',
     ])
     // Inbox and Settings moved to Workspace.
     expect(within(nav()).queryByRole('link', { name: 'Settings' })).toBeNull()

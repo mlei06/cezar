@@ -322,3 +322,24 @@ export const benchmarkResultsResponseSchema = z.object({
 });
 export type BenchmarkResultsResponse = z.infer<typeof benchmarkResultsResponseSchema>;
 export const benchmarkHistoryResponseSchema = z.object({ batches: z.array(benchmarkMatrixRunSchema) });
+
+export const factoryWeeklyMetricsSchema = z.object({
+  at: z.iso.datetime(),
+  merged: z.number().int().nonnegative(),
+  costSamples: z.number().int().nonnegative(),
+  humanSamples: z.number().int().nonnegative(),
+  meanCostUsd: z.number().nonnegative().optional(),
+  meanHumanTouchpoints: z.number().nonnegative().optional(),
+});
+
+export const factorySummaryResponseSchema = z.object({
+  current: scoresResponseSchema,
+  previous: z.array(scoreGroupSchema),
+  improvements: z.array(z.object({
+    id: z.string(), state: improvementRecordSchema.shape.state, startedAt: z.string(),
+    pr: improvementRecordSchema.shape.pr,
+  })),
+  report: z.string().optional(),
+  weekly: factoryWeeklyMetricsSchema.optional(),
+});
+export type FactorySummaryResponse = z.infer<typeof factorySummaryResponseSchema>;
