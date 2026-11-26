@@ -58,11 +58,13 @@ import type { AttentionKind, AutomationDefinition, AutomationReportMode, Manager
 import { DEFAULT_AGENT_ACCOUNT_ID } from '../workspace/agent-accounts.ts';
 import { taskAgentSelection } from '../runs/agent-selection.ts';
 import { loadConfig } from '../config.ts';
+import { loadWorkspaceConfig } from '../workspace/config.ts';
 import { agentModelsLocked } from '../core/agent-model-policy.ts';
 import { parseAskCloseMarkers, parseAskMarker, stripAskCloseMarkers, stripAskMarker, type AskCloseMarker } from '../core/ask.ts';
 import type { RunRecord } from '../runs/store.ts';
 import { isIdleParked } from '../runs/store.ts';
-import { chooseTaskAgent, type AccountOption, type TaskAgentChoice } from './task-agent-choice.ts';
+import { accountUsageAbove, chooseTaskAgent, type AccountOption, type TaskAgentChoice } from './task-agent-choice.ts';
+import { loadWorkflows, modelAlias } from '../workflows/load.ts';
 import { isRunnerId, type AgentEvent, type AgentRunner, type AgentRunSpec, type AgentSession, type ContentBlock, type RunnerId } from '../core/agent-runner.ts';
 import { supportsProfiles } from '../core/agent-profiles.ts';
 import { readOnlyEnv } from '../core/read-only-env.ts';
@@ -143,6 +145,7 @@ import type { ManagerState, ManagerStore } from './store.ts';
 import { outsideRelayScope } from '../relay/scope.ts';
 import { PlanUsageTracker, recordUsageObservation, type LedgerAccountRef } from '../usage-ledger/recorder.ts';
 import { ledgerAccountRef } from '../usage-ledger/identity.ts';
+import { readLedger } from '../usage-ledger/store.ts';
 import { managerConsumerId } from '../usage-ledger/report.ts';
 
 /**
@@ -3060,16 +3063,17 @@ export class ManagerEngine {
     if ('error' in composed) return composed;
     const { forward } = composed;
     const agents = scope.manager.taskAgents?.filter((agent): agent is ManagerTaskAgent & { runner: RunnerId } => isRunnerId(agent.runner));
-    const preferred = await this.runnerOf(scope.manager);
+    const root = scope.source?.root;
+    const preferred = root && existsSync(root) ? (await loadConfig(root)).defaultRunner : await this.runnerOf(scope.manager);
     const candidates = agents?.filter((agent) => (!input.runner || agent.runner === input.runner)
       && (input.agentProfile === undefined || agent.agentProfile === input.agentProfile));
     if (candidates?.length === 0) {
       return { error: 'Choose an agent account from the manager’s selected accounts for new tasks', status: 403 };
     }
-    const root = scope.source?.root;
     const now = this.now();
     let choice: TaskAgentChoice | undefined;
     let fallbackOptions: AccountOption[] | undefined;
+    let allowedOptions: AccountOption[] | undefined;
     /** The runner picked when every listed account has capacity: --model/--effort are refused, not dropped, there. */
     let firstRunner: string | undefined;
     if (agents && candidates) {
@@ -3077,6 +3081,7 @@ export class ManagerEngine {
       const rank = (agent: ManagerTaskAgent) => (retry?.allowed && agent.runner === retry.runner && agent.agentProfile === retry.agentProfile ? 0 : agent.runner === preferred ? 1 : 2);
       const ordered = [...candidates].sort((a, b) => rank(a) - rank(b));
       const allowed = await Promise.all([...agents].sort((a, b) => rank(a) - rank(b)).map((agent) => this.accountOption(agent.runner, agent.agentProfile, root)));
+      allowedOptions = allowed;
       const options = ordered.map((agent) => allowed.find((option) => option.runner === agent.runner && option.agentProfile === agent.agentProfile)!);
       choice = chooseTaskAgent(options, {
         explicitAccount: input.agentProfile !== undefined, fromSettings: true, allowed, now,
@@ -3091,9 +3096,37 @@ export class ManagerEngine {
       fallbackOptions = allowed.filter((option, index) => (!sameRunner || option.runner === picked.runner)
         && allowed.findIndex((other) => other.runner === option.runner && other.account === option.account) === index);
     }
-    const runner = choice?.chosen.runner ?? scope.manager.taskRunner ?? input.runner ?? preferred;
-    const agentProfile = choice ? choice.chosen.agentProfile : input.agentProfile;
-    if (!isRunnerId(runner)) return { error: `unknown runner: ${runner}`, status: 400 };
+    const candidateRunner = choice?.chosen.runner ?? scope.manager.taskRunner ?? input.runner ?? preferred;
+    if (!isRunnerId(candidateRunner)) return { error: `unknown runner: ${candidateRunner}`, status: 400 };
+    let runner = candidateRunner;
+    let agentProfile = choice ? choice.chosen.agentProfile : input.agentProfile;
+    if (root && preferred === 'codex' && !retry && !scope.manager.taskRunner &&
+      !input.runner && !input.model && !input.effort && input.agentProfile === undefined && !agentModelsLocked(root)) {
+      const models = (await loadWorkspaceConfig()).factory?.models;
+      const high = models?.highReasoning;
+      if (high && (!allowedOptions || allowedOptions.some((entry) => entry.runner === high.runner))) {
+        const codex = allowedOptions?.filter((entry) => entry.runner === 'codex') ?? [await this.accountOption('codex', undefined, root)];
+        if (codex.length) {
+          const source = chooseTaskAgent(codex, { explicitAccount: false, fromSettings: !!allowedOptions, now }).chosen;
+          const { profile } = await resolveProfileEnvForRoot(root, 'codex', source.account);
+          const account = await ledgerAccountRef('codex', profile);
+          if (accountUsageAbove(readLedger(1, now), account, now, models?.switchAbove)) {
+            const workflow = (await loadWorkflows(root)).workflows.find((entry) => entry.name === (input.workflow ?? 'quick-task'));
+            const steps = workflow?.steps.filter((step) => !step.command) ?? [];
+            if (steps.length && steps.every((step) => !step.model && !step.runner)) {
+              const highOptions = allowedOptions?.filter((entry) => entry.runner === high.runner) ?? [await this.accountOption(high.runner, undefined, root)];
+              choice = chooseTaskAgent(highOptions, { explicitAccount: false, fromSettings: !!allowedOptions, now });
+              choice.reason = `OpenAI account usage crossed the configured threshold; ${choice.reason}`;
+              runner = choice.chosen.runner;
+              agentProfile = choice.chosen.agentProfile;
+              fallbackOptions = allowedOptions ? highOptions : [];
+              input = { ...input, model: high.model };
+              firstRunner = runner;
+            }
+          }
+        }
+      }
+    }
     const accountIssue = await this.accountIssue(runner, agentProfile);
     if (accountIssue) return accountIssue;
     choice ??= chooseTaskAgent([await this.accountOption(runner, agentProfile, root)], { explicitAccount: agentProfile !== undefined, fromSettings: false, now });
@@ -3271,6 +3304,7 @@ export class ManagerEngine {
 
   /** `--model`/`--effort` against the runner and the host's model catalog; a 400 naming the valid ones. */
   private async modelIssue(runner: string, model: string | undefined, effort: string | undefined): Promise<ManagerRefusal | undefined> {
+    if (modelAlias(model)) return undefined;
     if (!isRunnerId(runner)) return undefined;
     let catalog: TaskModelCatalog | undefined;
     if ((MODEL_DISCOVERY_RUNNERS as readonly string[]).includes(runner)) {

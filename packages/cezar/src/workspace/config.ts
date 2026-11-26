@@ -209,14 +209,24 @@ const orgSkillsRepoSchema = z
   .object({ repo: z.string().min(1).max(500), ref: z.string().min(1).max(200).default('main') })
   .passthrough();
 
+const factoryModelRouteSchema = z.object({
+  runner: runnerSchema,
+  model: z.string().trim().min(1).max(200).refine((model) => model !== 'low-reasoning' && model !== 'high-reasoning'),
+}).passthrough();
+
 export const workspaceConfigSchema = z
   .object({
     factory: z.object({
       models: z.object({
-        lowReasoning: z.object({
-          runner: runnerSchema,
-          model: z.string().trim().min(1).max(200).refine((model) => model !== 'low-reasoning'),
-        }).passthrough().optional().catch(undefined),
+        lowReasoning: factoryModelRouteSchema.extend({
+          healthUrl: z.url({ protocol: /^https?$/ }).refine((value) => {
+            const url = new URL(value);
+            return !url.username && !url.password;
+          }).optional().catch(undefined),
+        }).optional().catch(undefined),
+        highReasoning: factoryModelRouteSchema.optional().catch(undefined),
+        lowReasoningFallback: z.array(factoryModelRouteSchema).max(10).optional().catch(undefined),
+        switchAbove: z.number().min(0).max(1).optional().catch(undefined),
       }).passthrough().optional().catch(undefined),
     }).passthrough().optional().catch(undefined),
     /** Optional instance name shown in the cockpit; absent keeps the product default. */

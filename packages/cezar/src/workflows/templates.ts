@@ -262,8 +262,8 @@ export const REVIEW_PR = builtIn(
   },
 );
 
-const SOL = { runner: 'codex', model: 'gpt-6.2-sol' } as const;
 export const LOW_REASONING_MODEL_ALIAS = 'low-reasoning';
+export const HIGH_REASONING_MODEL_ALIAS = 'high-reasoning';
 
 export function implementWorkflow(commands: readonly string[]): WorkflowDef {
   const checks = commands.map((command, index) => ({
@@ -271,7 +271,7 @@ export function implementWorkflow(commands: readonly string[]): WorkflowDef {
   }));
   const nodes: GraphNode[] = [
     { id: 'start', type: 'start' },
-    { id: 'work', type: 'agent', ...SOL, prompt: '{{task}}\n\nLeave your changes in the task worktree. Cezar runs validation and opens the PR itself.' },
+    { id: 'work', type: 'agent', prompt: '{{task}}\n\nLeave your changes in the task worktree. Cezar runs validation and opens the PR itself.' },
     ...checks,
     { id: 'pr', type: 'github.draft-pr' },
     { id: 'done', type: 'end', status: 'success' },
@@ -287,7 +287,7 @@ export function implementWorkflow(commands: readonly string[]): WorkflowDef {
       { id: 'retry', type: 'loop', max: 2 },
       { id: 'stopped', type: 'end', status: 'failed' },
       {
-        id: 'fix', type: 'agent', ...SOL, session: { continue: 'work' },
+        id: 'fix', type: 'agent', session: { continue: 'work' },
         prompt: 'Repair the validation failures and leave changes in the task worktree. Cezar reruns validation and handles publication.\n\n' +
           checks.map(({ id }) => `${id}: exit {{nodes.${id}.exitCode}}\n{{nodes.${id}.output}}`).join('\n\n'),
       },
@@ -313,7 +313,7 @@ export const PLAN: WorkflowDef = {
   ...builtIn('plan', 'Investigate or design a change in read-only mode.', {
     nodes: [
       { id: 'start', type: 'start' },
-      { id: 'work', type: 'agent', ...SOL, allowedTools: ['Read', 'Grep', 'Glob'], prompt: '{{task}}\n\nReport the plan or findings in your response.' },
+      { id: 'work', type: 'agent', allowedTools: ['Read', 'Grep', 'Glob'], prompt: '{{task}}\n\nReport the plan or findings in your response.' },
       { id: 'done', type: 'end', status: 'success' },
     ],
     edges: [{ from: 'start', to: 'work' }, { from: 'work.done', to: 'done' }],

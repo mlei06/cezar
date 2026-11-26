@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CodexAppServerRunner } from '../core/codex-app-server-runner.ts';
 import { mergeWriteWorkspaceConfig } from '../workspace/config.ts';
+import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { OpencodeServerRunner } from '../core/opencode-server-runner.ts';
 import { ProviderAuthService } from '../core/provider-auth.ts';
 import * as taskPr from '../server/forge/task-pr.ts';
@@ -14,7 +15,7 @@ import { createApp } from '../server/server.ts';
 import * as templates from './templates.ts';
 import { RunStore } from '../runs/store.ts';
 import { graphToSteps, type WorkflowGraph } from './graph.ts';
-import { loadWorkflows } from './load.ts';
+import { loadWorkflows, resolveWorkflowModelAlias } from './load.ts';
 import { MISSING_SESSION_NOTE } from './resume-fallback.ts';
 import { RunManager } from './run.ts';
 import type { WorkflowDef } from './types.ts';
@@ -70,6 +71,12 @@ describe('graph workflows run through RunManager', () => {
   }
 
   async function builtin(name: string): Promise<WorkflowDef> {
+    const settings = join(repoRoot, '.ai/cezar/config.json');
+    try {
+      writeFileSync(settings, JSON.stringify({ defaultRunner: 'codex' }), { flag: 'wx' });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    }
     const { workflows } = await loadWorkflows(repoRoot);
     const workflow = workflows.find((entry) => entry.name === name);
     expect(workflow).toBeDefined();
@@ -78,16 +85,17 @@ describe('graph workflows run through RunManager', () => {
 
   it('provides factory workflow defaults and lets project files override all three', async () => {
     const defaults = [
-      ['implement', 'codex', 'gpt-6.2-sol', 3_000_000, 30],
-      ['plan', 'codex', 'gpt-6.2-sol', 1_500_000, 20],
-      ['operate', undefined, 'low-reasoning', 800_000, 20],
+      ['implement', undefined, 3_000_000, 30],
+      ['plan', undefined, 1_500_000, 20],
+      ['operate', 'low-reasoning', 800_000, 20],
     ] as const;
     const dir = join(repoRoot, '.ai/cezar/workflows');
     mkdirSync(dir, { recursive: true });
-    for (const [name, runner, model, tokens, minutes] of defaults) {
+    for (const [name, model, tokens, minutes] of defaults) {
       const workflow = await builtin(name);
-      expect(workflow).toMatchObject({ budget: { tokens, minutes }, steps: [{ model }] });
-      expect(workflow.steps[0]?.runner).toBe(runner);
+      expect(workflow.budget).toEqual({ tokens, minutes });
+      expect(workflow.steps[0]?.model).toBe(model);
+      expect(workflow.steps[0]?.runner).toBeUndefined();
       writeFileSync(join(dir, `${name}.yaml`), `name: ${name}\nsteps:\n  - id: local\n    prompt: Project override\n`);
       expect(await builtin(name)).toMatchObject({ source: 'file', steps: [{ id: 'local' }] });
     }
@@ -183,7 +191,7 @@ describe('graph workflows run through RunManager', () => {
   }, 30_000);
 
   it('does not publish a branch whose only changes are check artifacts', async () => {
-    const final = await settle(manager.startRun(templates.implementWorkflow(['echo report > checks.log']), { task: 'inspect' }).id);
+    const final = await settle(manager.startRun(templates.implementWorkflow(['echo report > checks.log']), { task: 'inspect', runner: 'codex' }).id);
     expect(final.status, final.error).not.toBe('failed');
     expect(final.graphState?.taken).toContain('pr.nothing->done');
     expect(final.pullRequestUrl).toBeUndefined();
@@ -197,7 +205,7 @@ describe('graph workflows run through RunManager', () => {
         'test "$CEZ_ATTEMPT" = 1 || { echo current-first-failure; exit 1; }',
         'echo earlier-second-failure; exit 1',
       ]);
-      const final = await settle(manager.startRun(workflow, { task: 'repair validation' }).id);
+      const final = await settle(manager.startRun(workflow, { task: 'repair validation', runner: 'codex' }).id);
       expect(final.status).toBe('failed');
       const prompts = launch.mock.calls.map(([spec]) => spec.userPrompt);
       expect(prompts).toHaveLength(3);
@@ -219,7 +227,7 @@ describe('graph workflows run through RunManager', () => {
     });
     try {
       const workflow = templates.implementWorkflow(['echo resolved > a.txt; echo residue > checks.log']);
-      const final = await settle(manager.startRun(workflow, { task: 'implement change' }).id);
+      const final = await settle(manager.startRun(workflow, { task: 'implement change', runner: 'codex' }).id);
       expect(final.status).toBe('failed');
       expect(final.error).toContain('unable to checkpoint changes before validation');
       expect(final.steps.find((step) => step.id === 'pr')?.status).toBe('pending');
@@ -356,6 +364,90 @@ describe('graph workflows run through RunManager', () => {
       await mergeWriteWorkspaceConfig((config) => { config.factory = prior.factory; });
     }
   }, 30_000);
+
+  it.each([
+    { label: 'reachable', primary: true, codexHeld: false, claudeHeld: false, runner: 'opencode', model: 'mock/primary' },
+    { label: 'unreachable', primary: false, codexHeld: false, claudeHeld: false, runner: 'codex', model: 'fixture-first' },
+    { label: 'first held', primary: false, codexHeld: true, claudeHeld: false, runner: 'claude', model: 'fixture-second' },
+    { label: 'all held', primary: false, codexHeld: true, claudeHeld: true, runner: 'claude', model: 'fixture-second' },
+  ] as const)('chooses a low-tier route with the $label primary or fallbacks', async (test) => {
+    const healthUrl = `http://127.0.0.1:9999/models/${encodeURIComponent(test.label)}`;
+    const prior = await mergeWriteWorkspaceConfig((config) => config);
+    await mergeWriteWorkspaceConfig((config) => {
+      config.factory = { models: {
+        lowReasoning: { runner: 'opencode', model: 'mock/primary', healthUrl },
+        lowReasoningFallback: [
+          { runner: 'codex', model: 'fixture-first' },
+          { runner: 'claude', model: 'fixture-second' },
+        ],
+      } };
+    });
+    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: test.primary ? 401 : 503 }));
+    try {
+      const workflow = await builtin('operate');
+      const now = Date.now();
+      const select = () => resolveWorkflowModelAlias(workflow, repoRoot, undefined, {
+        accountFor: async (runner) => ({
+          runner, account: 'default', label: 'fixture account',
+          ...(runner === 'codex' && test.codexHeld ? { until: now + 180_000 } : {}),
+          ...(runner === 'claude' && test.claudeHeld ? { until: now + 60_000 } : {}),
+        }),
+      });
+      for (const selection of [await select(), await select()]) {
+        expect(selection.route).toMatchObject({ runner: test.runner, model: test.model });
+        expect(selection.workflow.steps[0]).toMatchObject({ runner: test.runner, model: test.model });
+        expect(selection.notes?.some((note) => note.includes('hosted fallback'))).toBe(!test.primary);
+      }
+      const deadlines = new Map<string, number>();
+      if (test.codexHeld) deadlines.set('codex:default', now + 180_000);
+      if (test.claudeHeld) deadlines.set('claude:default', now + 60_000);
+      const semaphore = new WorkspaceSemaphore();
+      vi.spyOn(semaphore, 'accountHolds').mockReturnValue({
+        deadlines, deadline: new Set(deadlines.keys()), inFlight: new Set(),
+      });
+      manager.dispose();
+      manager = new RunManager(store, repoRoot, { semaphore });
+      const app = createApp({ repoRoot, store, manager, version: 'test', semaphore });
+      const response = await apiRequest(app, '/api/v1/runs', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workflow: 'operate', task: 'Report fixture status', worktree: false }),
+      });
+      expect(response.status).toBe(201);
+      const { id } = await response.json() as { id: string };
+      expect(store.getRun(id)).toMatchObject({ runner: test.runner, model: test.model });
+      expect(store.readEvents(id).some((event) => String(event.message).includes('hosted fallback'))).toBe(!test.primary);
+      if (test.codexHeld && test.claudeHeld) {
+        expect(store.getRun(id)?.status).toBe('queued');
+      } else {
+        await vi.waitFor(() => expect(store.getRun(id)?.status).toBe('waiting'), { timeout: 15_000 });
+        expect(manager.finish(id)).toBe(true);
+        await settle(id);
+      }
+      expect(fetch).toHaveBeenCalledExactlyOnceWith(healthUrl, expect.objectContaining({ redirect: 'error' }));
+    } finally {
+      fetch.mockRestore();
+      await mergeWriteWorkspaceConfig((config) => { config.factory = prior.factory; });
+    }
+  });
+
+  it('resolves the high-reasoning alias through the project default or the workspace setting', async () => {
+    const prior = await mergeWriteWorkspaceConfig((config) => config);
+    try {
+      const workflow = await builtin('plan');
+      const options = { model: 'high-reasoning' };
+      await mergeWriteWorkspaceConfig((config) => { config.factory = undefined; });
+      const defaults = await resolveWorkflowModelAlias(workflow, repoRoot, undefined, options);
+      expect(defaults.route).toMatchObject({ runner: 'codex', reasoningEffort: 'high' });
+      expect(defaults.notes?.[0]).toContain('Using the project default runner');
+      await mergeWriteWorkspaceConfig((config) => {
+        config.factory = { models: { highReasoning: { runner: 'claude', model: 'fixture-high' } } };
+      });
+      const configured = await resolveWorkflowModelAlias(workflow, repoRoot, undefined, options);
+      expect(configured.route).toEqual({ runner: 'claude', model: 'fixture-high' });
+    } finally {
+      await mergeWriteWorkspaceConfig((config) => { config.factory = prior.factory; });
+    }
+  });
 
   // `tests` fails on its first run only. `log` records rendered node refs to a file — the mock
   // agent truncates prompts, so a check command is where the rendering is observable.

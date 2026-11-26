@@ -225,7 +225,7 @@ import {
   removeManagedAccountDir,
   sweepPendingAccounts,
 } from '../workspace/managed-accounts.ts';
-import { WORKFLOWS_DIR, loadWorkflows, resolveWorkflowModelAlias } from '../workflows/load.ts';
+import { WORKFLOWS_DIR, loadWorkflows, modelAlias, resolveWorkflowModelAlias } from '../workflows/load.ts';
 import { workflowCapabilities } from '../workflows/capabilities.ts';
 import {
   NODE_CATALOG,
@@ -5591,19 +5591,24 @@ export function createApp(deps: ServerDeps) {
           return c.json({ error: 'Requested secrets must be stored for this project or workspace and available to agents. See the secrets list.' }, 400);
         }
       }
-      const preflightWorkflow = (await resolveWorkflowModelAlias(workflow, repoRoot)).workflow;
-      const fallback = parsed.data.runner ?? (await loadConfig(repoRoot)).defaultRunner;
-      const blocked = await providerActionError(providersRequiredByWorkflow(preflightWorkflow, fallback), {
+      const selection = await manager.resolveModelAliases(workflow, parsed.data);
+      const modelRoutePinned = selection.workflow !== workflow;
+      workflow = selection.workflow;
+      const runner = selection.route?.runner ?? parsed.data.runner;
+      const agentProfile = selection.route?.agentProfile ??
+        (runner === parsed.data.runner ? parsed.data.agentProfile : undefined);
+      const fallback = runner ?? (await loadConfig(repoRoot)).defaultRunner;
+      const blocked = await providerActionError(providersRequiredByWorkflow(workflow, fallback), {
         repoRoot,
-        profileFor: (provider) => (provider === fallback ? parsed.data.agentProfile : undefined),
+        profileFor: (provider) => (provider === fallback ? agentProfile : undefined),
       });
       if (blocked) return c.json({ error: blocked }, 409);
       // A composer override names an account the user just picked, so a stale id (deleted since
       // the page loaded) is answered honestly instead of quietly running on the default — the
       // opposite of how RESOLUTION treats a dangling reference, and deliberately so: a run
       // replaying a stored id has no better answer than the default, a user does.
-      if (parsed.data.agentProfile !== undefined) {
-        const account = await resolveWorkspaceProfile(fallback, parsed.data.agentProfile);
+      if (agentProfile !== undefined) {
+        const account = await resolveWorkspaceProfile(fallback, agentProfile);
         if ('error' in account) return c.json({ error: account.error }, 400);
       }
       const variants = parsed.data.variants ?? 1;
@@ -5624,16 +5629,22 @@ export function createApp(deps: ServerDeps) {
       if (typeof images === 'string') return c.json({ error: images }, 400);
       const input = {
         task: parsed.data.task,
-        model: parsed.data.model,
+        model: selection.route ? selection.route.model || undefined : modelAlias(parsed.data.model) ? undefined : parsed.data.model,
         reasoningEffort: parsed.data.reasoningEffort,
-        runner: parsed.data.runner,
-        agentProfile: parsed.data.agentProfile,
+        runner,
+        agentProfile,
+        modelRouteNotes: selection.notes,
+        modelRoutePinned,
         secrets: parsed.data.secrets,
         budget: parsed.data.budget,
         images,
         systemPrompt: parsed.data.systemPrompt,
         ...(parsed.data.startedByManager ? { startedByManager: parsed.data.startedByManager } : {}),
-        ...(parsed.data.startedByManager && parsed.data.managerAgent ? { managerAgent: parsed.data.managerAgent } : {}),
+        ...(parsed.data.startedByManager && parsed.data.managerAgent ? {
+          managerAgent: selection.route
+            ? { ...parsed.data.managerAgent, note: `Workflow selected its model route on ${runner}.` }
+            : parsed.data.managerAgent,
+        } : {}),
         worktree: parsed.data.worktree,
         newBranch: parsed.data.newBranch,
         branch: parsed.data.branch,

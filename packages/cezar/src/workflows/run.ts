@@ -108,7 +108,8 @@ import { baseDivergence, createOrSwitchBranch } from '../server/git-changes.ts';
 import { isReadOnlyWorkflow, readOnlyWorkflowRefusal } from './capabilities.ts';
 import { getHeadCommit, getRepoInfo } from '../server/git.ts';
 import { runHarnessVersion } from '../self-update/run-version.ts';
-import { loadWorkflows, newerCatalogWorkflow, resolveWorkflowModelAlias } from './load.ts';
+import { loadWorkflows, modelAlias, newerCatalogWorkflow, resolveWorkflowModelAlias } from './load.ts';
+import { chooseTaskAgent } from '../managers/task-agent-choice.ts';
 import { capabilityPrompt } from './capability-prompt.ts';
 import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/store.ts';
 import { switchedWorkflowAgent, taskAgentSelection, workflowAgentSwitch } from '../runs/agent-selection.ts';
@@ -1179,6 +1180,8 @@ export interface StartRunInput {
   /** The manager's agent choice: a timeline note, and its other allowed accounts for a usage limit
    *  (absent: the project's own fallback policy). */
   managerAgent?: { note: string; fallback?: Array<{ provider: RunnerId; profileId: string; model?: string }> };
+  modelRouteNotes?: string[];
+  modelRoutePinned?: boolean;
   /** Composer opt-out (#worktree-toggle): `false` runs the task in the repo
    *  working tree instead of an isolated worktree. Undefined/`true` keeps the
    *  default per-task worktree. Ignored for variants (they always isolate). */
@@ -2266,6 +2269,27 @@ export class RunManager {
     };
   }
 
+  resolveModelAliases(workflow: WorkflowDef, input: Pick<StartRunInput, 'runner' | 'model' | 'agentProfile' | 'managerAgent'>, config?: CezConfig) {
+    return resolveWorkflowModelAlias(workflow, this.repoRoot, config, {
+      model: input.model,
+      accountFor: async (runner) => {
+        const allowed = input.managerAgent?.fallback;
+        const profiles = allowed
+          ? allowed.filter((entry) => entry.provider === runner).map((entry) => entry.profileId)
+          : [runner === input.runner ? input.agentProfile : undefined];
+        if (!profiles.length) return undefined;
+        const store = await loadAgentAccounts().catch(() => undefined);
+        const holds = this.semaphore.accountHolds();
+        const candidates = profiles.map((agentProfile) => {
+          const key = runAccountKey({ runner, agentProfile }, runner, store && { store, repoRoot: this.repoRoot });
+          const account = key.slice(runner.length + 1);
+          return { runner, agentProfile, account, label: account, until: holds.deadlines?.get(key) };
+        });
+        return chooseTaskAgent(candidates, { explicitAccount: false, fromSettings: true, now: Date.now() }).chosen;
+      },
+    });
+  }
+
   startRun(
     workflow: WorkflowDef,
     input: StartRunInput,
@@ -2308,7 +2332,8 @@ export class RunManager {
       // Snapshotted only when on: an absent snapshot already means "this task never uses fallback".
       // A manager's task falls back within the manager's own allowed accounts (spec 2026-10-31-managers).
       // An allowed-accounts list never falls back outside itself, so `[]` means no fallback at all.
-      fallbackPolicy: input.startedByManager && input.inheritedFallbackPolicy?.source === 'manager' ? input.inheritedFallbackPolicy
+      fallbackPolicy: input.modelRoutePinned ? undefined
+        : input.startedByManager && input.inheritedFallbackPolicy?.source === 'manager' ? input.inheritedFallbackPolicy
         : input.startedByManager && input.managerAgent?.fallback
         ? managerFallbackPolicy(input.managerAgent.fallback, input.startedByManager.id)
         : ((policy) => (policy.enabled ? policy : undefined))(getAgentFallbackPolicySync(this.repoRoot)),
@@ -2350,6 +2375,7 @@ export class RunManager {
     if (input.startedByManager && input.managerAgent) {
       this.store.appendEvent(run.id, { type: 'lifecycle', tone: 'info', message: input.managerAgent.note });
     }
+    for (const message of input.modelRouteNotes ?? []) this.store.appendEvent(run.id, { type: 'note', message });
     // A pull-request head run (spec 2026-10-06-agentic-e2e-checks Phase 3): the fetched sha is
     // recorded as the fork point BEFORE the run is queued, so `execute` — and a restart that
     // revives the queued run — forks from it through the "recorded fork point wins" rule rather
@@ -7170,16 +7196,20 @@ export class RunManager {
     // Resolve the agent backend for this run: the task choice (GUI) wins over
     // the config default. Per-step `runner` can still override it below.
     const config = await loadConfig(this.repoRoot);
-    const taskBackend: RunnerId = (original?.agentSwitch?.workflow ? original.runner : input.runner) ?? config.defaultRunner;
-    const selection = await resolveWorkflowModelAlias(workflow, this.repoRoot, config);
+    const selection = await this.resolveModelAliases(workflow, input, config);
     if (state.cancelled) return;
+    if (modelAlias(input.model)) input = { ...input, model: undefined };
+    if (selection.route && !original?.agentSwitch?.workflow) {
+      const { runner, model, agentProfile } = selection.route;
+      input = { ...input, runner, model: model || undefined, agentProfile: agentProfile ?? (runner === input.runner ? input.agentProfile : undefined) };
+      this.store.updateRun(runId, { runner, model: input.model, agentProfile: input.agentProfile });
+    }
+    const taskBackend: RunnerId = (original?.agentSwitch?.workflow ? original.runner : input.runner) ?? config.defaultRunner;
     if (selection.workflow !== workflow) {
       workflow = selection.workflow;
       state.workflow = workflow;
-      this.store.updateRun(runId, { workflowDef: workflow });
-      if (selection.fallback) {
-        emit({ type: 'note', message: `low-reasoning is unset in workspace settings. Using the project default runner (${selection.fallback}) with low effort where supported.` });
-      }
+      this.store.updateRun(runId, { workflowDef: workflow, fallbackPolicy: undefined });
+      for (const message of selection.notes ?? []) emit({ type: 'note', message });
     }
     if (!original?.startedAt && workflow.source === 'built-in' && workflow.name === 'implement' &&
       !workflow.graph?.nodes.some((node) => node.type === 'check')) {

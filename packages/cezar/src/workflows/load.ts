@@ -6,7 +6,8 @@ import { loadConfig, type CezConfig } from '../config.ts';
 import { runnerSupportsReasoningEffort, type RunnerId } from '../core/agent-runner.ts';
 import { loadWorkspaceConfig } from '../workspace/config.ts';
 import { graphIssues, graphToSteps, workflowGraphFileSchema } from './graph.ts';
-import { ASSESS_IMPACT_WORKFLOW, BUILT_IN_GRAPH_WORKFLOWS, implementWorkflow, LOW_REASONING_MODEL_ALIAS } from './templates.ts';
+import { ASSESS_IMPACT_WORKFLOW, BUILT_IN_GRAPH_WORKFLOWS, HIGH_REASONING_MODEL_ALIAS, implementWorkflow, LOW_REASONING_MODEL_ALIAS } from './templates.ts';
+import { chooseTaskAgent, type AccountOption } from '../managers/task-agent-choice.ts';
 import {
   QUICK_TASK_WORKFLOW,
   normalizeWorkflowDoc,
@@ -153,31 +154,91 @@ export async function loadWorkflows(
   return { workflows, issues };
 }
 
-/** Resolve the machine model alias before provider preflight or an engine launch. */
+type ModelAlias = typeof LOW_REASONING_MODEL_ALIAS | typeof HIGH_REASONING_MODEL_ALIAS;
+type ModelRoute = { runner: RunnerId; model: string; agentProfile?: string; reasoningEffort?: 'low' | 'high' };
+
+export function modelAlias(model: string | undefined): ModelAlias | undefined {
+  return model === LOW_REASONING_MODEL_ALIAS || model === HIGH_REASONING_MODEL_ALIAS ? model : undefined;
+}
+
+const modelHealth = new Map<string, { expires: number; result: Promise<boolean> }>();
+
+function modelReachable(endpoint: string): Promise<boolean> {
+  const cached = modelHealth.get(endpoint);
+  if (cached && cached.expires > Date.now()) return cached.result;
+  const result = fetch(endpoint, { redirect: 'error', signal: AbortSignal.timeout(5_000) }).then(
+    (response) => {
+      void response.body?.cancel().catch(() => undefined);
+      // The credential-free probe can receive an auth challenge from a reachable model server.
+      return response.ok || response.status === 401 || response.status === 403;
+    },
+    () => false,
+  );
+  if (modelHealth.size >= 32) modelHealth.clear();
+  modelHealth.set(endpoint, { expires: Date.now() + 60_000, result });
+  return result;
+}
+
+/** Resolve model aliases before provider preflight or an engine launch. */
 export async function resolveWorkflowModelAlias(
   workflow: WorkflowDef,
   repoRoot: string,
   projectConfig?: CezConfig,
-): Promise<{ workflow: WorkflowDef; fallback?: RunnerId }> {
-  if (!workflow.steps.some((step) => !step.command && step.model === LOW_REASONING_MODEL_ALIAS) &&
-    !workflow.graph?.nodes.some((node) => node.type === 'agent' && node.model === LOW_REASONING_MODEL_ALIAS)) {
-    return { workflow };
-  }
-
-  const configured = (await loadWorkspaceConfig()).factory?.models?.lowReasoning;
+  options: { model?: string; accountFor?: (runner: RunnerId) => Promise<AccountOption | undefined> } = {},
+): Promise<{ workflow: WorkflowDef; route?: ModelRoute; notes?: string[] }> {
+  const agents = workflow.steps.filter((step) => !step.command);
+  const requested = modelAlias(options.model);
+  const aliasFor = (step: { model?: string; runner?: RunnerId }) =>
+    modelAlias(step.model) ?? (!step.model && !step.runner ? requested : undefined);
+  const aliases = new Set(agents.flatMap((step) => aliasFor(step) ?? []));
+  if (aliases.size === 0) return { workflow };
+  const models = (await loadWorkspaceConfig()).factory?.models;
   const project = projectConfig ?? await loadConfig(repoRoot);
-  const runner = configured?.runner ?? project.defaultRunner;
-  const auto: Partial<Record<RunnerId, boolean>> | undefined = project.defaultModelsAuto;
-  const model = configured?.model ?? (auto?.[runner] ? '' : project.defaultModels?.[runner] ?? '');
-  const settings = { runner, model, ...(!configured && runnerSupportsReasoningEffort(runner) ? { reasoningEffort: 'low' } : {}) };
+  const routes = new Map<ModelAlias, ModelRoute>();
+  const notes: string[] = [];
+  for (const alias of aliases) {
+    const low = alias === LOW_REASONING_MODEL_ALIAS;
+    const configured = low ? models?.lowReasoning : models?.highReasoning;
+    if (!configured) {
+      const runner = project.defaultRunner;
+      const auto: Partial<Record<RunnerId, boolean>> | undefined = project.defaultModelsAuto;
+      const model = auto?.[runner] ? '' : project.defaultModels?.[runner] ?? '';
+      const reasoningEffort = low ? 'low' : 'high';
+      routes.set(alias, { runner, model, ...(runnerSupportsReasoningEffort(runner) ? { reasoningEffort } : {}) });
+      notes.push(`${alias} is unset in workspace settings. Using the project default runner (${runner}) with ${reasoningEffort} effort where supported.`);
+      continue;
+    }
+    let route: ModelRoute = { runner: configured.runner, model: configured.model };
+    const healthUrl = low ? models?.lowReasoning?.healthUrl : undefined;
+    const fallbacks = models?.lowReasoningFallback;
+    if (healthUrl && fallbacks?.length && !(await modelReachable(healthUrl))) {
+      const candidates = (await Promise.all(fallbacks.map(async (fallback) => {
+        const account = options.accountFor ? await options.accountFor(fallback.runner) : { runner: fallback.runner, account: 'default', label: 'default account' };
+        return account && { ...account, model: fallback.model };
+      }))).filter((candidate) => candidate !== undefined);
+      if (candidates.length > 0) {
+        const { chosen } = chooseTaskAgent(candidates, { explicitAccount: false, fromSettings: true, now: Date.now() });
+        route = { runner: chosen.runner, model: chosen.model, agentProfile: chosen.agentProfile };
+        notes.push(`Low-reasoning primary is unreachable. Using the hosted fallback on ${route.runner}.`);
+      }
+    }
+    routes.set(alias, route);
+  }
+  function withModel<T extends { model?: string; runner?: RunnerId }>(step: T): T {
+    const alias = aliasFor(step);
+    const settings = alias && routes.get(alias);
+    if (!settings) return step;
+    const { runner, model, reasoningEffort } = settings;
+    return { ...step, runner, model, ...(reasoningEffort ? { reasoningEffort } : {}) };
+  }
   const graph = workflow.graph && {
     ...workflow.graph,
-    nodes: workflow.graph.nodes.map((node) =>
-      node.type === 'agent' && node.model === LOW_REASONING_MODEL_ALIAS ? { ...node, ...settings } : node),
+    nodes: workflow.graph.nodes.map((node) => node.type === 'agent' ? withModel(node) : node),
   };
-  const steps = graph ? graphToSteps(graph) : workflow.steps.map((step) =>
-    !step.command && step.model === LOW_REASONING_MODEL_ALIAS ? { ...step, ...settings } : step);
-  return { workflow: { ...workflow, steps, ...(graph ? { graph } : {}) }, ...(!configured ? { fallback: runner } : {}) };
+  const steps = graph ? graphToSteps(graph) : workflow.steps.map((step) => step.command ? step : withModel(step));
+  const first = agents[0] && aliasFor(agents[0]);
+  const route = first && agents.every((step) => aliasFor(step) === first) ? routes.get(first) : undefined;
+  return { workflow: { ...workflow, steps, ...(graph ? { graph } : {}) }, route, notes };
 }
 
 /**

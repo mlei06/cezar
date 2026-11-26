@@ -649,6 +649,7 @@ workflow implement · codex example-model · started by manager · status done �
 |---|---|---|
 | `judge.runner`, `judge.model` | unset (the project's default runner at low effort) | no |
 | `models.lowReasoning.runner`, `models.lowReasoning.model` | unset (the project's default runner at low effort) | no |
+| `models.lowReasoning.healthUrl` | unset (skip the probe). Set it to the primary's model-list endpoint through the local relay. A response that requests authentication confirms reachability without adding credentials to the probe. | no |
 | `models.highReasoning.runner`, `models.highReasoning.model` | unset (the project's default runner at high effort) | no |
 | `models.switchAbove` | `0.8` | no |
 | `models.lowReasoningFallback` | empty ordered list of runner and model pairs | no |

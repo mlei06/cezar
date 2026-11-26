@@ -34,6 +34,8 @@ Pick the workflow before writing the brief. Prefer a project workflow that cover
 
 Use `cez-manager task create --project <id> --title "<short title>" --workflow <workflow> "<brief>"`. Select a relevant task skill with `--skill`. Use `--runner`, `--account`, `--model`, `--effort`, `--secrets` and `--budget-*` for explicit task choices when needed. Step settings take precedence over task defaults. Use the workspace's actual `maxParallel` and current account capacity.
 
+Use `operate` for a known playbook or routine report. Use `--model high-reasoning` when the task needs heavy reasoning and its workflow leaves the model open. Leave the runner and model open for ordinary work so Cezar can use the project defaults and account readings.
+
 Every brief stands on its own. Include the objective, relevant decisions and links, named spec sections, scope and non-goals, acceptance checks, the skill, and validation commands. Name the existing helpers to reuse. Ask for a final message with what changed, what was verified and what remains. Tell the task to update the outcome's Backlog and Progress entries in its own PR. Give the task the facts it needs from earlier tasks.
 
 Include these resource rules in each brief: use the repo's concurrency defaults, with no Vitest `--maxWorkers` or `--pool` overrides. Run focused tests first and the full suite once before opening the PR. Wait inside one command, with one full suite per task at a time. Stop an abandoned run before starting another and rerun timing failures alone. Keep the workspace at the single-machine default of two concurrent tasks unless the owner configures it differently. Cezar lowers task CPU priority when the mechanism is available.

@@ -386,7 +386,7 @@ describe('project and workspace secrets in check steps', () => {
     const launch = vi.spyOn(CodexAppServerRunner.prototype, 'startSession');
     try {
       const workflow = implementWorkflow(['printf "prior %s" "$PASS_VALUE"', 'printf "failed %s" "$FAIL_VALUE"; exit 1']);
-      const record = manager.startRun(workflow, { task: 'repair validation' });
+      const record = manager.startRun(workflow, { task: 'repair validation', runner: 'codex' });
       await settle(record.id);
       const prompts = launch.mock.calls.map(([spec]) => spec.userPrompt);
       expect(prompts).toHaveLength(3);
