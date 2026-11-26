@@ -5689,7 +5689,10 @@ export function createApp(deps: ServerDeps) {
       const { store } = c.get('project');
       const { id } = c.req.valid('param');
       const run = store.getRun(id);
-      return run ? c.json(summarizeRunMetrics(run, store.readEvents(id))) : c.json({ error: 'not found' }, 404);
+      if (!run) return c.json({ error: 'not found' }, 404);
+      const now = Date.now();
+      const activeMs = run.activeMs === undefined ? undefined : store.activeWorkMs(id, now);
+      return c.json(summarizeRunMetrics(run, store.readEvents(id), now, activeMs));
     })
 
     .patch('/runs/:id/budget', paramZodValidator(runIdParamSchema), jsonZodValidator(runBudgetSchema), (c) => {

@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { PENDING_ASK_MAX_QUESTIONS, type DispatchInput, type RunDispatch } from '@open-mercato/cezar-contract';
 import { runRecordSchema, RunStore, type RunRecord } from '../runs/store.ts';
+import { measuredRunInputTokens } from '../runs/task-metrics.ts';
 import { WorkspaceSemaphore, type WorkspaceResourceLimits } from '../workspace/semaphore.ts';
 import { RunManager } from './run.ts';
 import type { WorkflowDef } from './types.ts';
@@ -285,7 +286,7 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
     it('carves token and active-minute ceilings without blocking the other child slots', async () => {
       reboot({ maxParallel: 1, maxMonitoringSessions: 0 });
       const parent = await parkedRoot();
-      const usage = store.getRun(parent.id)?.inputTokens ?? 0;
+      const usage = measuredRunInputTokens(store.getRun(parent.id)!) ?? 0;
       const activeMs = store.activeWorkMs(parent.id);
       store.updateRun(parent.id, {
         budget: { tokens: usage + 40000, minutes: activeMs / 60_000 + 8 },

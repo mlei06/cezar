@@ -1327,6 +1327,25 @@ function lockRunIndex(dataDir: string): () => void {
   }
 }
 
+export function readRunEvents(filePath: string): RunEvent[] {
+  try {
+    const raw = readFileSync(filePath, 'utf8');
+    return raw
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => {
+        try {
+          return JSON.parse(line) as RunEvent;
+        } catch {
+          return null;
+        }
+      })
+      .filter((e): e is RunEvent => e !== null);
+  } catch {
+    return [];
+  }
+}
+
 /**
  * File-backed run store: `runs.json` index (atomic tmp+rename writes, the
  * pattern from @cezar/core's IssueStore) plus one append-only NDJSON event
@@ -2363,22 +2382,7 @@ export class RunStore extends EventEmitter {
   }
 
   readEvents(runId: string): RunEvent[] {
-    try {
-      const raw = readFileSync(this.eventsPath(runId), 'utf8');
-      return raw
-        .split('\n')
-        .filter(Boolean)
-        .map((line) => {
-          try {
-            return JSON.parse(line) as RunEvent;
-          } catch {
-            return null;
-          }
-        })
-        .filter((e): e is RunEvent => e !== null);
-    } catch {
-      return [];
-    }
+    return readRunEvents(this.eventsPath(runId));
   }
 
   deleteRun(id: string): boolean {

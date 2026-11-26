@@ -1,5 +1,6 @@
 import { runBudgetUsd, type RunBudgetThreshold } from '@open-mercato/cezar-contract';
 import { isTerminalStatus } from '../dispatch/engine.ts';
+import { measuredRunInputTokens } from '../runs/task-metrics.ts';
 import type { RunRecord } from '../runs/store.ts';
 
 export function budgetAction(run: RunRecord): 'park' | 'notify' {
@@ -10,7 +11,7 @@ export function budgetAction(run: RunRecord): 'park' | 'notify' {
 export function checkTaskBudget(run: RunRecord, activeMs: number, at: string) {
   const park = budgetAction(run) === 'park';
   const multiples: RunBudgetThreshold['multiple'][] = park ? [1] : [1, 2, 4];
-  const inputTokens = reportedInputTokens(run) ?? 0;
+  const inputTokens = measuredRunInputTokens(run) ?? 0;
   const measurements = [
     ['usd', runBudgetUsd(run), run.costUsd ?? 0],
     ['tokens', run.budget?.tokens, inputTokens],
@@ -30,11 +31,6 @@ export function checkTaskBudget(run: RunRecord, activeMs: number, at: string) {
   return { park: park && over, crossed };
 }
 
-function reportedInputTokens(run: RunRecord): number | undefined {
-  const steps = run.steps.flatMap((step) => step.inputTokens === undefined ? [] : [step.inputTokens]);
-  return run.inputTokens ?? (steps.length ? steps.reduce((sum, count) => sum + count, 0) : undefined);
-}
-
 /** Reserve a share of each work ceiling without consuming the other child slots. */
 export function carveChildWorkBudget(
   parent: RunRecord,
@@ -51,9 +47,9 @@ export function carveChildWorkBudget(
       if (explicit !== undefined) budget[metric] = explicit;
       continue;
     }
-    const usage = metric === 'tokens' ? reportedInputTokens(parent) ?? 0 : parentActiveMs / 60_000;
+    const usage = metric === 'tokens' ? measuredRunInputTokens(parent) ?? 0 : parentActiveMs / 60_000;
     const reserved = children.reduce((sum, child) => {
-      const actual = metric === 'tokens' ? reportedInputTokens(child) : child.activeMs === undefined ? undefined : child.activeMs / 60_000;
+      const actual = metric === 'tokens' ? measuredRunInputTokens(child) : child.activeMs === undefined ? undefined : child.activeMs / 60_000;
       const ceiling = child.budget?.[metric] ?? 0;
       const consumed = actual ?? (child.startedAt ? ceiling : 0);
       return sum + (isTerminalStatus(child.status) ? consumed : Math.max(actual ?? 0, ceiling));

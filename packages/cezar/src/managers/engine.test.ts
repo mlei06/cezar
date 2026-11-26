@@ -4483,6 +4483,13 @@ describe('ManagerEngine', () => {
       const first = { metric: 'tokens', limit: 50000, value: 55000, multiple: 1, at: later(1), stepId: 'implement' } as const;
       const working = run({ id: 'new-run', startedByManager: { id, name: 'Lead' }, budgetExceeded: [first] });
       runs = [working];
+      const eventsDir = join(dataDir(), 'runs');
+      mkdirSync(eventsDir, { recursive: true });
+      const log = [
+        { type: 'tool-call', id: 'a', tool: 'Read', ts: later(0), stepId: 'implement' },
+        { type: 'tool-result', toolCallId: 'a', result: 'local fixture data', ts: later(1), stepId: 'implement' },
+      ];
+      writeFileSync(join(eventsDir, 'new-run.ndjson'), log.map((event) => JSON.stringify(event)).join('\n'));
       backend.scripts.push(say('Reviewing the budget.'));
       engine.taskChanged('alpha', dataDir(), working, () => undefined);
       engine.taskChanged('alpha', dataDir(), working, () => undefined);
@@ -4491,6 +4498,7 @@ describe('ManagerEngine', () => {
       expect(cards(id)).toHaveLength(1);
       expect(cards(id)[0]).toMatchObject({ taskReport: { state: 'budget' } });
       expect(prompts()[0]).toContain('1× the 50000 input tokens ceiling (55000 used) in step implement');
+      expect(prompts()[0]).toContain('Read #1 (18 chars) "local fixture data"');
 
       const laterRun = { ...working, budgetExceeded: [first, { ...first, value: 102000, multiple: 2 as const, at: later(2) }] };
       runs = [laterRun];
@@ -4502,6 +4510,21 @@ describe('ManagerEngine', () => {
       expect(cards(id)).toHaveLength(2);
       expect(prompts()).toHaveLength(2);
       expect(prompts()[1]).toContain('2× the 50000 input tokens ceiling (102000 used)');
+    });
+
+    it('only forwards a budget raise for a task started by this manager', async () => {
+      const engine = followedEngine();
+      const id = await started(engine);
+      runs = [
+        run({ id: 'new-run', startedByManager: { id, name: 'Lead' } }),
+        run({ id: 'another', startedByManager: { id: 'other', name: 'Other lead' } }),
+      ];
+      const budget = { tokens: 75000, minutes: 15 };
+      expect(await engine.raiseTaskBudget(id, { projectId: 'alpha', runId: 'another', budget })).toMatchObject({ status: 403 });
+      expect(await engine.raiseTaskBudget(id, { projectId: 'alpha', runId: 'new-run', budget })).not.toHaveProperty('error');
+      expect(requests.filter(({ method }) => method === 'PATCH')).toEqual([
+        { path: '/api/v1/p/alpha/runs/new-run/budget', method: 'PATCH', body: budget },
+      ]);
     });
 
     it('hands a waiting task\'s own words to the follow-up, which asks them on a question card', async () => {

@@ -64,7 +64,8 @@ import { loadWorkspaceConfig } from '../workspace/config.ts';
 import { agentModelsLocked } from '../core/agent-model-policy.ts';
 import { parseAskCloseMarkers, parseAskMarker, stripAskCloseMarkers, stripAskMarker, type AskCloseMarker } from '../core/ask.ts';
 import type { RunRecord } from '../runs/store.ts';
-import { isIdleParked } from '../runs/store.ts';
+import { isIdleParked, readRunEvents } from '../runs/store.ts';
+import { summarizeRunMetrics } from '../runs/task-metrics.ts';
 import { accountUsageAbove, chooseTaskAgent, type AccountOption, type TaskAgentChoice } from './task-agent-choice.ts';
 import { loadWorkflows, modelAlias } from '../workflows/load.ts';
 import { isRunnerId, type AgentEvent, type AgentRunner, type AgentRunSpec, type AgentSession, type ContentBlock, type RunnerId } from '../core/agent-runner.ts';
@@ -237,7 +238,8 @@ const PENDING_FOLLOWUP_LIMIT = 20;
 /** Enough for a task's questions and its summary; the card keeps the whole message. */
 const FOLLOWUP_EXCERPT_LIMIT = 4_000;
 const FINAL_MESSAGE_MARK = '\nIts final message:\n';
-const followupHeadline = (entry: string): string => entry.split(FINAL_MESSAGE_MARK)[0] ?? entry;
+const BUDGET_REPORT_MARK = '\nIts budget metrics:\n';
+const followupHeadline = (entry: string): string => entry.split(FINAL_MESSAGE_MARK)[0]?.split(BUDGET_REPORT_MARK)[0] ?? entry;
 /** At most this many events owed a follow-up turn per followed task per window; past it, cards and notes only. */
 const FOLLOWUP_TURNS_PER_TASK = 5;
 const FOLLOWUP_TURN_WINDOW_MS = 60 * 60_000;
@@ -267,6 +269,19 @@ const TASK_STATE_LINE: Record<TaskEvent['state'], string> = {
 
 const firstLine = (text: string | undefined, limit: number): string | undefined =>
   text?.split('\n').find((line) => line.trim())?.trim().slice(0, limit);
+
+function taskBudgetExcerpt(dataDir: string, run: RunRecord): string {
+  const report = summarizeRunMetrics(run, readRunEvents(join(dataDir, 'runs', `${run.id}.ndjson`)));
+  const details = [
+    report.tokens.input === undefined ? undefined : `${report.tokens.input} input tokens`,
+    report.activeMs === undefined ? undefined : `${(report.activeMs / 60_000).toFixed(2)} active minutes`,
+    run.costUsd === undefined ? undefined : `$${run.costUsd.toFixed(2)} spent`,
+    `${report.toolCalls} tool calls`,
+  ].filter((value) => value !== undefined).join(', ');
+  const outputs = report.largestOutputs.map(({ tool, call, chars, head }) =>
+    `- ${tool} #${call} (${chars} chars) ${JSON.stringify(head)}`);
+  return [`Metrics so far: ${details}.`, ...(outputs.length ? ['Largest tool outputs:', ...outputs] : [])].join('\n');
+}
 
 type PendingFollowup = ManagerState['followups'][number];
 
@@ -2160,7 +2175,10 @@ export class ManagerEngine {
     // A wait with no question is a turn that ended: its last message is what the user answers.
     const why = detail ?? (event.state === 'needs-you' ? 'waiting for your reply' : undefined);
     const state = `${TASK_STATE_LINE[event.state]}${under}${why ? `: ${why}` : '.'}${resumes ? ` It resumes on its own at ${resumes}.` : ''}`;
-    const final = event.state === 'done' || event.state === 'review' || event.state === 'needs-you' ? finalAssistantText(dataDir, run.id) : undefined;
+    const isBudget = event.state === 'budget';
+    const final = isBudget
+      ? taskBudgetExcerpt(dataDir, run)
+      : event.state === 'done' || event.state === 'review' || event.state === 'needs-you' ? finalAssistantText(dataDir, run.id) : undefined;
     const clipped = final && final.length > TASK_REPORT_TEXT_LIMIT ? `${final.slice(0, TASK_REPORT_TEXT_LIMIT)}…` : final;
     const important = event.state === 'failed' || event.state === 'needs-you';
     const switched = run.agentSwitch?.summary;
@@ -2175,10 +2193,10 @@ export class ManagerEngine {
     const askId = event.state === 'needs-you' ? openTaskAskId(run) : undefined;
     // The id a relayed card names, so the inbox shows one question, not two (Questions inbox spec).
     const relay = askId ? ` Its open question's id is "${askId}": a card that asks it for the task declares "about":[{"task":"${projectId}/${run.id}","ask":"${askId}"}].` : '';
-    const line = `${card} "${title}": ${state}${clipped ? ' Its final message is on the card; `cez-manager task` reads the rest.' : ''}${relay}`;
+    const line = `${card} "${title}": ${state}${clipped && !isBudget ? ' Its final message is on the card; `cez-manager task` reads the rest.' : ''}${relay}`;
     // The follow-up acts on what the task said, so it gets the words, not just the state.
     const excerpt = final ? (final.length > FOLLOWUP_EXCERPT_LIMIT ? `${final.slice(0, FOLLOWUP_EXCERPT_LIMIT)}…` : final) : undefined;
-    const followup = excerpt ? `${line}${FINAL_MESSAGE_MARK}${excerpt}` : line;
+    const followup = excerpt ? `${line}${isBudget ? BUDGET_REPORT_MARK : FINAL_MESSAGE_MARK}${excerpt}` : line;
     // A cancel is the user's own doing, and an auto-resume will report again: neither needs a turn.
     // Nor does an inactive manager take one: it hears the note on its next chat (spec 2026-11-19-manager-deactivate).
     if (manager.followUp === false || event.state === 'cancelled' || resumes || this.inactive(id)) {

@@ -641,6 +641,7 @@ export const runMetricsSchema = z.object({
   startCommit: z.string().optional(),
   harnessVersion: harnessVersionSchema.optional(),
   wallMs: usageCounterSchema,
+  activeMs: usageCounterSchema.optional(),
   modelMs: usageCounterSchema,
   toolMs: usageCounterSchema,
   tokens: z.object({
@@ -656,6 +657,7 @@ export const runMetricsSchema = z.object({
   largestOutputs: z.array(measuredToolSchema.extend({ chars: usageCounterSchema })),
   longestCalls: z.array(measuredToolSchema.extend({ ms: usageCounterSchema })),
   budget: runBudgetSchema.optional(),
+  budgetExceeded: z.array(runBudgetThresholdSchema).optional(),
   outcome: z.object({
     status: runStatusSchema,
     pr: z.string().optional(),

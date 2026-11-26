@@ -216,6 +216,7 @@ function RunMetricsDetails({ runId, showTokens }: { runId: string; showTokens: b
   const { data } = useRunMetrics(runId)
   if (!data) return null
   const rows = [
+    ...(data.activeMs === undefined ? [] : [['Active time', formatDuration(data.activeMs)]]),
     ['Model time', formatDuration(data.modelMs)],
     ['Tool time', formatDuration(data.toolMs)],
     ['Tool calls', data.toolCalls.toLocaleString()],
