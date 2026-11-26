@@ -28,7 +28,7 @@ function findBatch(dataDir: string, id: string): { record: ImprovementRecord; pa
 }
 
 export function runImprovementDecisions(dataDir: string, run: RunRecord):
-  { decisions: ImprovementDecisions; harness: boolean } | { error: string } {
+  { decisions: ImprovementDecisions; harness: boolean; paths: ImprovementPaths; id: string } | { error: string } {
   const batch = run.improvementId && findBatch(dataDir, run.improvementId);
   if (!batch || batch.record.runId !== run.id) return { error: 'The improvement has no claimed batch.' };
   const result = readImprovementDecisions(join(artifactsDir(dataDir, run.id), IMPROVEMENT_DECISIONS));
@@ -43,7 +43,7 @@ export function runImprovementDecisions(dataDir: string, run: RunRecord):
     }
   }
   return remaining.size ? { error: 'The decisions file must cover the entire batch.' }
-    : { ...result, harness: batch.record.queue === 'harness' };
+    : { ...result, harness: batch.record.queue === 'harness', paths: batch.paths, id: batch.record.id };
 }
 
 export async function checkImprovementStep(dataDir: string, root: string, cwd: string, run: RunRecord, step: string):
@@ -88,16 +88,22 @@ function settleRun(dataDir: string, run: RunRecord): void {
   if (!batch || batch.record.runId !== run.id || batch.record.state !== 'running') return;
   const now = new Date(run.finishedAt);
   const pr = run.prRefs?.find(({ origin }) => origin === 'created');
-  const result = runImprovementDecisions(dataDir, run);
-  if ('error' in result || (!pr && (run.status === 'failed' || run.status === 'cancelled'
-    || result.decisions.clusters.some(({ decision }) => decision === 'fixed')))) {
-    // If publication succeeded, preserve the one-at-a-time guard until the PR closes.
-    if (!pr) failImprovement(batch.paths, batch.record.id, now);
+  if (pr) {
+    const result = batch.record.clusters ? { decisions: { clusters: batch.record.clusters } } : runImprovementDecisions(dataDir, run);
+    // An existing PR still has to settle when earlier decisions are unavailable.
+    finishImprovement(batch.paths, batch.record.id, {
+      decisions: 'decisions' in result ? result.decisions : { clusters: [] },
+      now, pr: { number: pr.number, url: pr.url },
+    });
     return;
   }
-  finishImprovement(batch.paths, batch.record.id, {
-    decisions: result.decisions, now, ...(pr ? { pr: { number: pr.number, url: pr.url } } : {}),
-  });
+  const result = runImprovementDecisions(dataDir, run);
+  if ('error' in result || run.status === 'failed' || run.status === 'cancelled'
+    || result.decisions.clusters.some(({ decision }) => decision === 'fixed')) {
+    failImprovement(batch.paths, batch.record.id, now);
+    return;
+  }
+  finishImprovement(batch.paths, batch.record.id, { decisions: result.decisions, now });
 }
 
 export function watchImprovementRuns(dataDir: string, store: RunStore, projectId: string): () => void {

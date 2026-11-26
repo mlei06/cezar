@@ -3,8 +3,9 @@ import { readOnlyEnv } from '../core/read-only-env.ts';
 import { AgentUsageHolds } from '../workspace/agent-usage-holds.ts';
 import { completionReason } from './completion-reason.ts';
 import { prepareReplayCheck, runReplayShell } from './replay-check.ts';
+import { checkpointImprovementDecisions } from '../improvement/bookkeeping.ts';
 import { checkImprovementStep, improvementPrSummary, runImprovementDecisions } from '../improvement/lifecycle.ts';
-import { hasImprovementSkill, IMPROVE_FACTORY } from '../improvement/workflow.ts';
+import { hasImprovementSkill, IMPROVE_FACTORY, IMPROVEMENT_CHECK } from '../improvement/workflow.ts';
 import { resolveReplayHarness, saveStagedReplayDiff, stagedReplay } from './staged-replay.ts';
 import { WorktreeLifecycleCoordinator } from '../worktree-lifecycle/coordinator.ts';
 import type { RunParked, RunSubject, WebhookAttentionRequest, TrackerAssociation, UsageWindowsObservation } from '@open-mercato/cezar-contract';
@@ -8395,6 +8396,8 @@ export class RunManager {
           this.finishStep(runId, node.id, 'failed', error, emit);
           return error;
         }
+        const improvementCheck = node.id === IMPROVEMENT_CHECK && Boolean(this.store.getRun(runId)?.improvementId);
+        const checkedHead = improvementCheck ? await getHeadCommit(state.cwd) : null;
         let checkResult: { ok: boolean; output: string; exitCode: number };
         state.checkInProgress = true;
         try {
@@ -8410,7 +8413,7 @@ export class RunManager {
         const { ok, output, exitCode } = checkResult;
         if (state.cancelled) return null;
         const redacted = isImplement || !ok ? this.store.redactRunText(runId, output) : output;
-        outputs.set(node.id, { exitCode, output: isImplement ? redacted : output });
+        outputs.set(node.id, { exitCode, output: isImplement ? redacted : output, ...(ok && checkedHead ? { checkedHead } : {}) });
         if (ok) {
           this.finishStep(runId, node.id, 'done', undefined, emit);
           port = 'pass';
@@ -8766,18 +8769,19 @@ export class RunManager {
         };
         // One PR per task: a PR this run already opened (a resumed walk, or a loop back through
         // this node) is reported, never opened twice.
-        if (run.pullRequestUrl && !updateExistingPr) {
-          const n = prNumberOfUrl(run.pullRequestUrl);
-          outputs.set(node.id, { url: run.pullRequestUrl, number: n ? Number(n) : '' });
-          note(`PR already open: ${run.pullRequestUrl}`);
-          return !(readyPr || improvement) || await markReady(run.pullRequestUrl) ? 'created' : 'failed';
+        const existingUrl = improvement ? run.prRefs?.find(({ origin }) => origin === 'created')?.url : run.pullRequestUrl;
+        if (existingUrl && (improvement || !updateExistingPr)) {
+          const n = prNumberOfUrl(existingUrl);
+          outputs.set(node.id, { url: existingUrl, number: n ? Number(n) : '' });
+          note(`PR already open: ${existingUrl}`);
+          return !(readyPr || improvement) || await markReady(existingUrl) ? 'created' : 'failed';
         }
         const excludedPaths = run.worktreePath
           ? new Set(await currentCheckExclusions(run.worktreePath, state.autosaveExcludedPaths))
           : new Set<string>();
         // Nothing to propose — no publishable changes or commits ahead of the base.
         if (
-          !run.pullRequestUrl &&
+          !existingUrl &&
           run.worktreePath &&
           (await worktreeChangedPaths(run.worktreePath)).every((path) => excludedPaths.has(path)) &&
           (await baseDivergence(run.worktreePath, run.baseBranch)).ahead === 0
@@ -8787,6 +8791,14 @@ export class RunManager {
           return 'nothing';
         }
         const title = node.title ? render(node.title) : undefined;
+        const checkedHead = outputs.get(IMPROVEMENT_CHECK)?.checkedHead;
+        if (improvement) {
+          if (typeof checkedHead !== 'string') {
+            note('No validated improvement commit is available.', 'danger');
+            return 'failed';
+          }
+          checkpointImprovementDecisions(improvement.paths, improvement.id, improvement.decisions.clusters);
+        }
         const outcome = await createTaskPr({
           repoRoot: this.repoRoot,
           run: improvement ? { ...run, title: 'Improve factory reliability' } : title ? { ...run, title } : run,
@@ -8795,8 +8807,9 @@ export class RunManager {
             ? this.store.redactRunText(runId, improvement.decisions.pullRequestDescription)
             : improvementPrSummary(improvement.decisions) } : {}),
           ...(excludedPaths.size ? { excludedPaths: [...excludedPaths] } : {}),
+          ...(improvement && typeof checkedHead === 'string' ? { expectedHead: checkedHead } : {}),
           ...(readyPr ? { draft: false } : {}),
-          ...(run.pullRequestUrl && updateExistingPr ? { updateExisting: true } : {}),
+          ...(existingUrl && updateExistingPr ? { updateExisting: true } : {}),
         });
         if (!outcome.ok) {
           note(`${readyPr ? 'PR' : 'draft PR'} failed — ${outcome.error}`, 'danger');
@@ -8805,6 +8818,7 @@ export class RunManager {
         this.store.updateRun(runId, { pullRequestUrl: outcome.url });
         const number = prNumberOfUrl(outcome.url);
         if (number) this.store.recordPrRef(runId, { number: Number(number), url: outcome.url, origin: 'created' });
+        if (improvement) this.store.flush();
         outputs.set(node.id, { url: outcome.url, number: number ? Number(number) : '' });
         // An adopted PR (the agent opened one already) keeps its own draft state until told.
         if ((improvement || (readyPr && outcome.updated)) && !await markReady(outcome.url, !outcome.updated)) return 'failed';

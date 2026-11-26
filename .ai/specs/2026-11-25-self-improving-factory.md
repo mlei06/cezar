@@ -1,6 +1,6 @@
 # The self-improving factory
 
-Status: draft v5.33, 2026-11-26. Fork: `mlei06/cezar`, trunk `factory`. Spec owner: the overseer (see the roadmap). Implementation plan: `2026-11-25-self-improving-factory-roadmap.md`. Findings during the build: `2026-11-25-self-improving-factory-observations.md`.
+Status: draft v5.34, 2026-11-26. Fork: `mlei06/cezar`, trunk `factory`. Spec owner: the overseer (see the roadmap). Implementation plan: `2026-11-25-self-improving-factory-roadmap.md`. Findings during the build: `2026-11-25-self-improving-factory-observations.md`.
 
 ## TLDR
 
@@ -854,6 +854,7 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
 
 ## Changelog
 
+- **v5.34:** D6 records the checked commit and the decisions before submitting a PR. Final autosave must retain the same commit. Recovery tracks an already-open PR even if the decisions artifact has been removed. The checkpoint preserves recorded outcomes.
 - **v5.33:** D6 workflow hardening. The host claims and records a batch before admission. The built-in workflow is available only to that admission path, with the owner-approved bundled skill. A project validates the exact batch decisions and configured change scope before publication. The harness keeps the agent's task evidence out of the public PR. The ordinary project body comes from the optional `pullRequestDescription` in the decisions file. Use the built-in automation for all user and manager starts. Record a merge only with the forge's exact commit and timestamp.
 - **v5.32:** D6 improvement run as built:
   - the built-in `improve-factory` workflow (the skill, `cez factory check` with two repairs, the draft PR) stays out of the workflow picker, and a project's own `improve-factory` workflow replaces it;
