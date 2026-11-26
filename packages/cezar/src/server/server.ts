@@ -1827,7 +1827,8 @@ export function createApp(deps: ServerDeps) {
   // Workspace-level SSE bus (step 2.8) — the registry mutators and the
   // checkout flow (Phase 4) emit here; /api/workspace/events relays.
   const workspaceEvents = deps.workspaceEvents ?? new WorkspaceEventBus();
-  const scoring = new ScoringService((event) => workspaceEvents.emit('score.recorded', event));
+  const secretStore = deps.secrets ?? new SecretStore();
+  const scoring = new ScoringService((event) => workspaceEvents.emit('score.recorded', event), undefined, secretStore);
   deps.onDispose?.(() => scoring.dispose());
   const emitAutomationChange = (
     project: ProjectContext,
@@ -7623,7 +7624,6 @@ export function createApp(deps: ServerDeps) {
   // unregistered boot project is refused rather than written somewhere nothing reads. The
   // workspace scope has its own single-mount family below (`workspaceSecretsRoutes`), the same
   // operations over the `workspace` scope.
-  const secretStore = deps.secrets ?? new SecretStore();
   const unregisteredSecrets = { error: 'this project is not registered; project secrets need a project id' };
   const secretsList = async (scope: SecretScopeRef): Promise<SecretsList> => {
     const [listed, keyBackend] = await Promise.all([secretStore.list(scope), secretStore.keyBackend()]);

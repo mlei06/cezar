@@ -6,6 +6,7 @@ import type { RunRecord, RunStore } from '../runs/store.ts';
 import { summarizeRunMetrics } from '../runs/task-metrics.ts';
 import { loadWorkflows } from '../workflows/load.ts';
 import { loadWorkspaceConfig } from '../workspace/config.ts';
+import { SecretStore } from '../workspace/secrets.ts';
 import { evaluateScorer } from './evaluate.ts';
 import { JudgeQueue } from './queue.ts';
 import { resolveJudgeRoute, type JudgeRoute } from './runner.ts';
@@ -38,7 +39,8 @@ export class ScoringService {
   private readonly queue = new JudgeQueue();
 
   constructor(private readonly onScore: (event: ScoreRecordedEvent) => void,
-    private readonly judgeFor: (repoRoot: string) => Promise<JudgeRoute | { error: string }> = resolveJudgeRoute) {}
+    private readonly judgeFor: (repoRoot: string) => Promise<JudgeRoute | { error: string }> = resolveJudgeRoute,
+    private readonly secrets = new SecretStore()) {}
 
   watch(project: ScoringProject): () => void {
     if (!scoringEnabled()) return () => undefined;
@@ -83,6 +85,7 @@ export class ScoringService {
   private async queueRun(project: ScoringProject, run: RunRecord, kind: 'new' | 'resume' | 'manual', selected?: string): Promise<string[]> {
     const finishedAt = settledAt(run);
     if (!finishedAt || !scoringEnabled()) return [];
+    const redactRun = project.store.captureRunRedaction(run.id);
     const [local, workspace, { workflows }] = await Promise.all([
       loadConfig(project.root), loadWorkspaceConfig(), loadWorkflows(project.root),
     ]);
@@ -95,12 +98,12 @@ export class ScoringService {
     const now = Date.now();
     const queued: string[] = [];
     let snapshot: { events: ReturnType<RunStore['readEvents']>; metrics: ReturnType<typeof summarizeRunMetrics> } | undefined;
-    const transcript = (maxChars: number, specContext?: string) => {
+    const transcriptInput = () => {
       if (!snapshot) {
         const events = project.store.readEvents(run.id);
         snapshot = { events, metrics: summarizeRunMetrics(run, events) };
       }
-      return renderJudgeTranscript(run, snapshot.metrics, snapshot.events, maxChars, specContext);
+      return snapshot;
     };
     for (const scorer of scorers) {
       if (selected ? scorer.name !== selected : scorer.workflows && !scorer.workflows.includes(run.workflow)) continue;
@@ -131,8 +134,26 @@ export class ScoringService {
           const chosen = await this.judgeFor(project.root);
           if ('error' in chosen) return { status: 'error', reason: chosen.error };
           route = chosen;
-          const spec = scorer.name === 'scope' ? await referencedSpecContext(project.root, run) : undefined;
-          return evaluateScorer(scorer, (maxChars) => transcript(maxChars, spec), route.call);
+          const [workspaceVault, projectVault, spec] = await Promise.all([
+            this.secrets.read({ kind: 'workspace' }),
+            this.secrets.read({ kind: 'project', projectId: project.id, root: project.root }),
+            scorer.name === 'scope' ? referencedSpecContext(project.root, run) : undefined,
+          ]);
+          if (workspaceVault.skipped || projectVault.skipped) {
+            return { status: 'error', reason: 'Scoring could not read the secret store for transcript redaction.' };
+          }
+          const credentials = [workspaceVault, projectVault].flatMap(vault => Object.values(vault.values).map(entry => entry.value));
+          const redact = <T>(value: T) => redactRun(value, credentials);
+          // Scrub structured text before serialization and output shortening.
+          const { metrics, events } = redact(transcriptInput());
+          const safeRun = { ...run, ...redact({
+            title: run.title, titleSummary: run.titleSummary, task: run.task, workflow: run.workflow, pullRequestUrl: run.pullRequestUrl,
+          }) };
+          const safeSpec = spec ? redact(spec) : undefined;
+          const evaluation = await evaluateScorer(scorer,
+            (maxChars) => renderJudgeTranscript(safeRun, metrics, events, maxChars, safeSpec),
+            (input) => chosen.call({ ...input, systemPrompt: redact(input.systemPrompt) }));
+          return evaluation.status === 'scored' ? { ...evaluation, verdict: redact(evaluation.verdict) } : evaluation;
         },
         update: (result) => {
           if (!stillCurrent()) return;

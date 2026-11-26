@@ -2360,6 +2360,12 @@ export class RunStore extends EventEmitter {
   /** Capture safe text before asynchronous derived work can outlive this run's registry. */
   redactRunText(runId: string, text: string): string { return this.redactText(text, runId); }
 
+  /** A derived export can run after teardown clears the task's live secret registry. */
+  captureRunRedaction(runId: string): <T>(value: T, additional?: readonly string[]) => T {
+    const secrets = this.secretsForRun(runId);
+    return (value, additional = []) => redactDeep(value, [...secrets, ...additional]);
+  }
+
   private readonly runSecrets = new Map<string, readonly string[]>();
 
   /** Memory only: register before spawn; retain through the final event drain. */

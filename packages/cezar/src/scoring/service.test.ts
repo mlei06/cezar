@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it, vi } from 'vitest';
 import { RunStore } from '../runs/store.ts';
+import { SecretStore } from '../workspace/secrets.ts';
 import { runScoreCommand } from './cli.ts';
 import { JUDGE_OUTAGE_RETRY_MS, type JudgeCall } from './evaluate.ts';
 import { ScoringService } from './service.ts';
@@ -93,6 +94,58 @@ it('recovers an interrupted judge queue from the persisted retry deadline', asyn
       detach();
       restarted.dispose();
     }
+  } finally {
+    off();
+    service.dispose();
+    store.flush();
+    vi.unstubAllEnvs();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it('redacts a preserved brief, archived credentials and the judge output before scoring or publishing', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'cez-score-redaction-'));
+  const dataDir = join(root, '.ai/cezar');
+  const hostValue = 'fixture-host-credential';
+  const runValue = 'fixture-run-credential';
+  const vaultValue = 'vault-fixture';
+  vi.stubEnv('CEZ_HOME', join(root, 'workspace'));
+  vi.stubEnv('CEZ_DRY_RUN', '0');
+  vi.stubEnv('CEZ_SCORING', '1');
+  vi.stubEnv('CEZ_REDACT_SECRETS', '0'); // Scoring crosses the runner boundary.
+  vi.stubEnv('FIXTURE_API_KEY', hostValue);
+  const store = RunStore.open(dataDir);
+  const project = { id: 'example', root, dataDir, store };
+  const vault = new SecretStore(process.env, { keychain: async () => null });
+  const onScore = vi.fn();
+  const call = vi.fn<JudgeCall>().mockResolvedValue({ text: JSON.stringify({
+    label: 'delivered', reasoning: `Passed without exposing ${vaultValue} or ${runValue}.`, evidence: ['Observed result.'],
+  }) });
+  const service = new ScoringService(onScore, async () => ({ runner: 'codex', call }));
+  const off = service.watch(project);
+  try {
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(join(dataDir, 'config.json'), JSON.stringify({
+      factory: { scoring: { sampling: { procedure: 0, efficiency: 0, scope: 0 } } },
+    }));
+    await vault.set({ kind: 'project', projectId: project.id, root }, 'FIXTURE_SECRET', vaultValue, ['checks']);
+    const rawBrief = `Verify using ${hostValue}, ${runValue} or ${vaultValue}.`;
+    const run = store.createRun({ title: 'Fixture', task: rawBrief, workflow: 'quick-task', steps: [] });
+    const at = new Date().toISOString();
+    store.registerRunSecrets(run.id, [runValue]);
+    store.updateRun(run.id, { status: 'running', startedAt: at });
+    store.appendEvent(run.id, { type: 'text', text: `Observed result. Input was ${vaultValue}` });
+    store.updateRun(run.id, { status: 'review', finishedAt: at });
+    store.clearRunSecrets(run.id);
+    await vi.waitFor(() => expect(onScore).toHaveBeenCalledTimes(1));
+    const input = call.mock.calls[0]?.[0].userPrompt ?? '';
+    const output = JSON.stringify(readRunScores(dataDir, run.id));
+    expect(input).toContain('Verify using [REDACTED], [REDACTED] or [REDACTED].');
+    expect(output).toContain('Passed without exposing [REDACTED] or [REDACTED].');
+    for (const value of [hostValue, runValue, vaultValue]) {
+      expect(input.includes(value) || output.includes(value) || JSON.stringify(onScore.mock.calls[0]?.[0]).includes(value)).toBe(false);
+    }
+    expect(store.getRun(run.id)?.task).toBe(rawBrief);
   } finally {
     off();
     service.dispose();
