@@ -2,7 +2,7 @@
 
 The overseer's resume point for the self-improving factory build. Updated and pushed at every milestone step and every overseer decision, so the work survives a crashed machine or a new session. Read this first, then the roadmap's Progress table and the observation log.
 
-Last updated: 2026-11-25 23:55 UTC.
+Last updated: 2026-11-26 00:12 UTC.
 
 ## Where the build stands
 
@@ -10,8 +10,8 @@ Last updated: 2026-11-25 23:55 UTC.
 - **Live harness:** `0.21.0+release-41a8ac9` (released by the manager itself, detached, 23:06 UTC), which has every M1 PR: #2–#9.
 - **M1 PRs:** #2 (known host test failures), #3 (secret descriptions), #4 (workflow budgets and agent-step secrets), #5 (typecheck repair), #6 (built-in `implement`, `plan`, `operate`), #7 (the capability block), #8 (manager discovery and task flags), #9 (`manage-project` update), #10 (test-resource rules in `factory-work`).
 - **M1 follow-ups** (from reviews, not blocking): generated validation checks get an explicit secrets allowlist; forge-adapter-level draft-PR assertions; check-artifact exclusions survive a cockpit restart (tracked before M1).
-- **In flight:** the outside implementer is validating `impl/m1-manual-task-skill`. A regression test showed that the runner received a slash-selected skill with a named workflow, but the capability block omitted it. The regression test and focused workflow and manager suites pass with the fix. Full validation is running. M1.5 charter and manager playbook changes are being prepared locally on `impl/m1.5-manager-playbook`.
-- **Next:** finish M1 validation, merge and release the capability fix, then finish and stage M1.5. Stop before giving managers any real project work. The owner wants to onboard a second project and then exercise two managers on separate projects.
+- **In flight:** PR #11 fixed the missing slash-selected skill in the capability block and merged as `f1747bd`. Detached release unit `harness-release-f1747bd` is running. M1 focused tests passed (1,866), along with typecheck, unit tests, build and package tests. The full suite reported 18,555 passes and three documented host failures (Explorer path translation and the plan-usage ledger). Isolated checks verified the New task form, legacy workflow compatibility and secret descriptions without disclosing values.
+- **Next:** confirm release #11 and finish M1 acceptance where possible. M1.5 charter and manager playbook are in validation on `impl/m1.5-manager-playbook`. Stop before giving managers any real project work. The owner will onboard a second project to test two managers on separate projects.
 
 ## Standing instructions given to the harness manager
 

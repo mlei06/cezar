@@ -61,6 +61,8 @@ After M3, this log is also the calibration set for the automated judge.
 | M1-9 | Confirms M1-8: under the new test rules, PR #6's full suite passed with only the three documented host failures; the five web scheduling failures were load-induced | PR #6 final run, 18,554 passes | none | keep the rules |
 | M1-10 | The review found that `implement`'s generated validation checks inherit check-only secrets while the agent can edit the test scripts; the manager held the merge as a security decision, as D11.4 asks | review f0349f8b | none (good escalation) | overseer: not a blocker, since agent secrets are ungated by owner decision; keep inheritance, explicit allowlist as a follow-up |
 
+| M1-12 | The New task composer can select a workflow and a slash skill together. The runner received the expanded skill, but the capability block omitted its name. | PR #11 regression checks the actual runner prompt. The isolated New task form submitted the workflow, model and skill together. | harness | Use the resolved slash skill in the existing capability block. Preserve workflow-step skill precedence and compatibility with native slash commands. |
+
 ## Judge calibration
 
 Blind comparisons: the overseer's verdict is written before the judge's is read, on every third task and every failing one (roadmap runbook). The spec's targets are 80% agreement on pass/fail and 70% on the main cause's target.
