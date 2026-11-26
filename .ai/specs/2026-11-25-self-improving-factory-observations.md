@@ -181,3 +181,7 @@ Rubric revisions made from disagreements are listed under the run that prompted 
 ### M5 release review
 
 The live cockpit released `a0766b2` through its named workflow. Staging, the authenticated replay, admission hold and smoke passed. The installed entry automatically admitted one synthetic batch, enforced the check and returned the open-PR refusal on a second start. Both live outcome windows await genuine improvement PRs and matched post-release scores.
+
+### Factory scoring visibility
+
+The Factory view received pending and error counts but only rendered pass rates. A regression reproduced the hidden counts. The fix reuses the existing summary and score events. In the second two-manager exercise on the prior release, both Efficiency scores arrived within 18 seconds. Outcome took 24.6 and 76.7 seconds.

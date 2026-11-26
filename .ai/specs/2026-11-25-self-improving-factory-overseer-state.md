@@ -2,7 +2,7 @@
 
 The overseer's resume point for the self-improving factory build. Updated and pushed at every milestone step and every overseer decision, so the work survives a crashed machine or a new session. Read this first, then the roadmap's Progress table and the observation log.
 
-Last updated: 2026-11-26 22:41 UTC.
+Last updated: 2026-11-26 22:48 UTC.
 
 ## Where the build stands
 
@@ -14,6 +14,7 @@ Last updated: 2026-11-26 22:41 UTC.
 - **Protected release workflow.** #29 merged after independent review as `64a902a`. The committed workflow ran on the live harness. Five staging cases passed at 100%, the real authenticated replay passed, the hold reached idle before the switch, post-switch smoke and health passed, and the release report was delivered. The live catalog lists `harness-release` from the registered clean factory checkout.
 - **M5 released.** Protected #33 merged with #36 as `2b6c817` after independent review. #37 merged the hourly source, commands, outcome comparisons and manager approval controls. The combined rebase passed 1,415 focused and 18,675 full-suite tests, unit, build and package checks. The live cockpit released `a0766b2` through the named workflow after all five smoke cases and authenticated replay passed. Three registered projects expose enabled hourly automations. An isolated cockpit booted from that installed entry auto-claimed five causes, checked the patch, recorded one simulated PR and refused another start. Real merged improvements and before/after windows remain pending genuine use.
 - **M6 implementation in progress.** #38 merged as `f1c8724` after independent review. The exact rebased candidate passed typecheck, 725 focused tests, 18,684 full-suite tests, unit, build and package checks. The live cockpit started the named release for `f1c8724`. Staging, authenticated replay and the switch remain in flight.
+- **Score-status follow-up.** `impl/m6-score-status` (`e8e40ea`) exposes pending and errored scores in the Factory view and refreshes them on existing score events. The regression failed before the fix. Typecheck and 545 focused tests passed. The full suite waits for the `f1c8724` release.
 - **Next.** Follow the `f1c8724` release through staging, replay, admission hold and post-switch health. Verify the installed real-route matrix, Factory view, proactive triggers and core scoring. The first genuine hourly harness check is scheduled for 23:22 UTC and is under observation.
 
 ## Standing instructions for when the harness manager resumes
