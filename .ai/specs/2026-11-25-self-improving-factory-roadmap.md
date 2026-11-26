@@ -22,7 +22,7 @@ The factory is built by the factory. After a one-time bootstrap (M0), which the 
 | M1 | done 2026-11-26 | PR #11 shipped slash-skill reporting in release `f1747bd`. Live New task acceptance passed. With `factory.models.lowReasoning` set on this machine, an `operate` task ran on OpenCode with the self-hosted low-reasoning model, read-only in one turn, and its prompt carried the capability block (checked in the runner's stored session, since the model refuses to quote its own system prompt). |
 | M1.5 | released, live acceptance pending | PR #12 shipped the charter and manager playbooks in release `7dd520c`. Isolated concurrent managers passed. One project completed a live rollout. The concurrent live two-project check is pending. |
 | M2 | done 2026-11-26 | Run identity (#13), delegated routing (#14), shared USD storage (#15), task metrics (#16), budget enforcement (#17), the workflow PR gate (#18) and lower task CPU priority (#19) are released and checked live. Historical metrics replay passed locally. The live scratch check observed niceness 5 with the workspace cap still at 2. |
-| M3 | in progress | The scorer catalog and stateless judge are live in #20–21. Score storage, `cez score` and cause routing are live in #22–23. The installed build reconstructed both cause queues after restart. The outage retry passed in staging. Score views are in full validation. The one-minute acceptance and blind calibration remain open. |
+| M3 | in progress | The scorer catalog and stateless judge are live in #20–21. Score storage, `cez score` and cause routing are live in #22–23. The installed build reconstructed both cause queues after restart. The outage retry passed in staging. Score views merged in #24 and are releasing. The one-minute acceptance and blind calibration remain open. |
 
 ## Goal and definition of done
 
@@ -366,7 +366,7 @@ New features and improvements found so far, not yet scheduled into a milestone. 
 | M1 | 1–2 sessions | six small PRs |
 | M2 | done 2026-11-26 | Run identity (#13), delegated routing (#14), shared USD storage (#15), task metrics (#16), budget enforcement (#17), the workflow PR gate (#18) and lower task CPU priority (#19) are released and checked live. Historical metrics replay passed locally. The live scratch check observed niceness 5 with the workspace cap still at 2. |
 | M3 | 2 sessions | plus calibration over about 20 runs |
-| M4 | in progress | Staging passed five release checks and blocked a benchmark regression. Rollback and admission controls are staged. Check-only replay passed exact-commit grouping and Linux isolation. Replay API and CLI are in focused validation. Agent and alternate-version replay and the first owner-run release remain open. |
+| M4 | in progress | Staging passed five release checks and blocked a benchmark regression. Rollback and admission controls are staged, with the base release controls in full validation. Check-only replay passed exact-commit grouping and Linux isolation. Replay API and CLI are in focused validation. Agent and alternate-version replay and the first owner-run release remain open. |
 | M5 | 2–3 sessions | plus two weeks for its acceptance |
 | M6 | 2 sessions | |
 
