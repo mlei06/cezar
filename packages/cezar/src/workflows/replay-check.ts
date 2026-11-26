@@ -34,8 +34,10 @@ export async function prepareReplayCheck(command: string, cwd: string) {
         // Use an anonymous pipe so a sandboxed Node command can detect stdout
         // without libuv trying to inspect a Unix socket.
         '--noprofile', '--norc', '-o', 'pipefail', '-c', '"$@" 2>&1 | /bin/cat', 'cez-replay-check',
-        codex, 'sandbox', '--permission-profile', 'replay', '--',
-        '/usr/bin/env', `TMPDIR=${scratch}`, '/bin/bash', '--noprofile', '--norc', '-c', command,
+        // Resolve the profile from scratch, before any project config can shadow it.
+        codex, 'sandbox', '--permission-profile', 'replay', '--cd', scratch, '--',
+        '/usr/bin/env', `TMPDIR=${scratch}`, '/bin/bash', '--noprofile', '--norc', '-c',
+        'cd -- "$1" && exec /bin/bash --noprofile --norc -c "$2"', 'cez-replay-check', worktree, command,
       ],
       env: { PATH: path, HOME: scratch, CODEX_HOME: scratch },
       close,

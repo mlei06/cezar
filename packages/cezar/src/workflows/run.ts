@@ -1,4 +1,4 @@
-import { replayRunInputSchema, type ReplayRunInput, type StepToolPolicy, type SwitchRunAgentInput } from '@open-mercato/cezar-contract';
+import { replayRunInputSchema, type ReplayRunInput, type HarnessVersion, type StepToolPolicy, type SwitchRunAgentInput } from '@open-mercato/cezar-contract';
 import { readOnlyEnv } from '../core/read-only-env.ts';
 import { AgentUsageHolds } from '../workspace/agent-usage-holds.ts';
 import { completionReason } from './completion-reason.ts';
@@ -1152,7 +1152,7 @@ function formatWakeInstant(at: Date): string {
 
 export interface StartRunInput {
   /** The immutable fork and prompt for an admitted replay, persisted before it enters the queue. */
-  replay?: { sourceId: string; startCommit: string; change: string; systemPrompt?: string };
+  replay?: { sourceId: string; startCommit: string; change: string; harness: HarnessVersion; systemPrompt?: string };
   secrets?: RunRecord['secretNames'];
   budget?: RunRecord['budget'];
   onBudget?: RunRecord['onBudget'];
@@ -1285,6 +1285,14 @@ const REPLAY_EXTERNAL_NODE_PORTS: Readonly<Partial<Record<ExecutableNode['type']
   'github.wait-ci': 'failed',
   'notify.webhook': 'done',
 };
+
+const REPLAY_CHECK_NODE_TYPES = new Set(['start', 'end', 'loop', 'check', 'if', ...Object.keys(REPLAY_EXTERNAL_NODE_PORTS)]);
+
+function replayCheckWorkflow(workflow: WorkflowDef): boolean {
+  const graph = workflow.graph ?? compileV1(workflow.steps);
+  return graph.nodes.every((node) => REPLAY_CHECK_NODE_TYPES.has(node.type));
+}
+
 
 /**
  * Joins the parts of one agent step's system prompt in fixed order — skill
@@ -2421,7 +2429,7 @@ export class RunManager {
       this.store.updateRun(run.id, {
         replayOf: input.replay.sourceId, replayChange: input.replay.change,
         baseBranch: input.replay.startCommit, startCommit: input.replay.startCommit,
-        systemPrompt: input.replay.systemPrompt,
+        systemPrompt: input.replay.systemPrompt, harnessVersion: input.replay.harness,
       });
     }
     // The run's place in a dispatch tree (spec 2026-09-10-dispatch), written the way
@@ -2507,15 +2515,13 @@ export class RunManager {
     }
     const { harnessVersion, workflowDef, finishedAt } = source;
     const currentHarness = await runHarnessVersion();
-    if ((input.harness ?? harnessVersion.id) !== currentHarness.id ||
+    if (!currentHarness.commit || (input.harness ?? harnessVersion.id) !== currentHarness.id ||
       (!input.harness && harnessVersion.commit !== currentHarness.commit)) {
       return { error: 'Replaying on another harness requires a staging cockpit.' };
     }
     const workflow = input.workflow ? await this.findWorkflow(input.workflow) : source.workflowDef;
     if (!workflow) return { error: 'The requested replay workflow is unavailable.' };
-    const localNodeTypes = new Set(['start', 'end', 'loop', 'check', 'if', ...Object.keys(REPLAY_EXTERNAL_NODE_PORTS)]);
-    if (workflow.steps.some((step) => stepKind(step) === 'agent') ||
-      workflow.graph?.nodes.some((node) => !localNodeTypes.has(node.type))) {
+    if (!replayCheckWorkflow(workflow)) {
       return { error: 'This workflow needs an isolated agent or system node that replay cannot yet use.' };
     }
     if (input.model || input.runner || input.effort || input.skill) return { error: 'The replay workflow has no agent input to change.' };
@@ -2542,8 +2548,9 @@ export class RunManager {
     const change = input.brief ? 'brief' : input.workflow ? `workflow ${input.workflow}` : input.harness ? `harness ${input.harness}` : 'repeat';
     const runs = slots.map((variant) => this.startRun(workflow, {
       task, images, worktree: true, generateFollowups: false,
-      replay: { sourceId, startCommit, change, systemPrompt: source.systemPrompt },
+      replay: { sourceId, startCommit, change, harness: currentHarness, systemPrompt: source.systemPrompt },
     }, { groupId, variant }));
+    this.store.flush();
     return { groupId, runs };
   }
 
@@ -3176,7 +3183,7 @@ export class RunManager {
     // and `.catch`es a def that no longer fits to `undefined`, so anything present here already
     // has the `steps` array the old inline `Array.isArray` check was asking for.
     const def = run.workflowDef;
-    if (def) return def;
+    if (def || run.replayOf) return def ?? null;
     const { workflows } = await loadWorkflows(this.repoRoot);
     return workflows.find((w) => w.name === run.workflow) ?? null;
   }
@@ -4723,7 +4730,7 @@ export class RunManager {
       // (#489, spec 2026-09-10-dispatch A11, #1597), as well as the task's account.
       autonomous: run.autonomous,
       dispatch: run.dispatch,
-      worktree: run.worktree,
+      worktree: run.replayOf ? true : run.worktree,
       ...(run.readOnly ? { readOnly: true } : {}),
       ...(run.readOnly && run.enforceReadOnly ? { enforceReadOnly: true } : {}),
     });
@@ -5663,7 +5670,7 @@ export class RunManager {
   enqueueMessage(runId: string, content: PastedContent[]): QueuedMessage | null {
     if (!this.isQueued(runId)) return null;
     const run = this.store.getRun(runId);
-    if (!run) return null;
+    if (!run || run.replayOf) return null;
     const message = this.toQueuedMessage(runId, content);
     this.store.updateRun(runId, { queuedMessages: [...(run.queuedMessages ?? []), message] });
     return message;
@@ -7345,6 +7352,20 @@ export class RunManager {
       this.store.appendEvent(runId, event);
     };
 
+    if (original?.replayOf) {
+      const current = await runHarnessVersion();
+      if (state.cancelled) return;
+      if (!original.startCommit || !original.workflowDef || input.worktree !== true ||
+        original.harnessVersion?.id !== current.id || !current.commit || original.harnessVersion.commit !== current.commit ||
+        !replayCheckWorkflow(workflow)) {
+        const error = 'The replay needs its saved workflow, exact worktree and pinned harness.';
+        this.publishRunFailure(runId, { status: 'failed', error, finishedAt: new Date().toISOString(), currentStepId: undefined });
+        emit({ type: 'lifecycle', message: error });
+        this.dropActive(runId, state);
+        return;
+      }
+    }
+
     // Resolve the agent backend for this run: the task choice (GUI) wins over
     // the config default. Per-step `runner` can still override it below.
     const config = await loadConfig(this.repoRoot);
@@ -7565,6 +7586,9 @@ export class RunManager {
         });
         if (state.cancelled) { this.dropActive(runId, state); return; }
         if (!wt.ready) { this.parkLifecycle(runId, state, wt.operationId); return; }
+        if (original?.replayOf && await getHeadCommit(wt.path) !== original.startCommit) {
+          throw new Error('The replay worktree no longer points at its recorded commit.');
+        }
         state.cwd = wt.path;
         state.releaseWorktree = await this.lifecycle.acquireAgentLease(runId);
         this.store.updateRun(runId, {

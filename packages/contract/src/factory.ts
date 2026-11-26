@@ -9,7 +9,7 @@ export const replayRunInputSchema = z.object({
   runner: runnerSchema.optional(),
   effort: z.string().trim().min(1).optional(),
   skill: z.string().trim().min(1).optional(),
-  brief: z.string().trim().min(1).optional(),
+  brief: z.string().trim().min(1).max(100_000).optional(),
   times: z.number().int().min(1).max(5).default(1),
 }).strict().refine(({ times: _times, ...changes }) =>
   Object.values(changes).filter((value) => value !== undefined).length <= 1, {

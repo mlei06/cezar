@@ -159,6 +159,8 @@ import {
   switchRunAgentInputSchema,
   runBudgetSchema,
   scoreRunInputSchema,
+  replayRunInputSchema,
+  type ReplayRunResponse,
   scoresQuerySchema,
   managerScoresQuerySchema,
   type FactoryCheckResponse,
@@ -1017,6 +1019,7 @@ interface RunScoresBody extends RunScoresResponse {}
 interface ScoreRunBody extends ScoreRunResponse {}
 interface ReleaseHoldBody extends ReleaseHoldStatus {}
 interface HarnessReleaseReportBody extends HarnessReleaseReportDelivery {}
+interface ReplayRunBody extends ReplayRunResponse {}
 interface RunWithUsageBody extends RunRecord {
   usage?: ReturnType<typeof currentUsage>;
 }
@@ -5799,6 +5802,17 @@ export function createApp(deps: ServerDeps) {
       } catch {
         return c.json({ error: 'The score file could not be updated.' }, 409);
       }
+    })
+
+    .post('/runs/:id/replay', paramZodValidator(runIdParamSchema), jsonZodValidator(replayRunInputSchema, { absent: ({ times: 1 }) }), async (c): Promise<Response & (
+      TypedResponse<ReplayRunBody, 202, 'json'> | TypedResponse<{ error: string }, 404 | 409, 'json'>
+    )> => {
+      const { id } = c.req.valid('param');
+      const { manager, store } = c.get('project');
+      if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
+      const result = await manager.startReplay(id, c.req.valid('json'));
+      if ('error' in result) return c.json(result, 409);
+      return c.json({ groupId: result.groupId, runs: result.runs.map((run) => run.id) }, 202);
     })
 
     .patch('/runs/:id/budget', paramZodValidator(runIdParamSchema), jsonZodValidator(runBudgetSchema), (c) => {

@@ -117,23 +117,32 @@ describe('graph workflows run through RunManager', () => {
     writeFileSync(join(repoRoot, 'a.txt'), 'new\n');
     await run('git', ['add', 'a.txt'], cwd);
     await run('git', [...GIT_ID, 'commit', '-qm', 'new checkout'], cwd);
-    const result = await manager.startReplay(original.id, { times: 3 });
-    expect(result).not.toHaveProperty('error');
-    if ('error' in result) throw new Error(result.error);
+    const app = createApp({ repoRoot, store, manager, version: 'test' });
+    const replayRequest = (input: object) => apiRequest(app, `/api/v1/runs/${original.id}/replay`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input),
+    });
+    expect((await replayRequest({ times: 3, brief: 'Different brief', workflow: 'different' })).status).toBe(400);
+    expect((await replayRequest({ model: 'fixture-model' })).status).toBe(409);
+    const response = await replayRequest({ times: 3 });
+    expect(response.status, await response.clone().text()).toBe(202);
+    const result = await response.json() as { groupId: string; runs: string[] };
     expect(result.runs).toHaveLength(3);
     expect(original.groupId).toBe(result.groupId);
-    for (const replay of result.runs) {
-      const completed = await settle(replay.id);
+    for (const id of result.runs) {
+      const completed = await settle(id);
       expect(completed).toMatchObject({
         replayOf: original.id, groupId: result.groupId, startCommit: oldCommit, worktreePath: expect.any(String),
       });
       expect(completed.status).toMatch(/review|done/);
       expect(completed.task).toContain('Keep the original content.');
-      expect(manager.continueRun(replay.id)).toMatchObject({ ok: false, error: expect.stringContaining('Replay') });
-      expect(manager.switchAgent(replay.id, { runner: 'codex', agentProfile: 'default', changedBy: 'user' }))
+      expect(manager.continueRun(id)).toMatchObject({ ok: false, error: expect.stringContaining('Replay') });
+      expect(manager.switchAgent(id, { runner: 'codex', agentProfile: 'default', changedBy: 'user' }))
         .toHaveProperty('error', expect.stringContaining('Replay'));
-      expect(store.readEvents(replay.id)).toContainEqual(expect.objectContaining({ type: 'check-output', text: 'one' }));
+      expect(store.readEvents(id)).toContainEqual(expect.objectContaining({ type: 'check-output', text: 'one' }));
     }
+    const compare = await apiRequest(app, `/api/v1/groups/${result.groupId}`);
+    expect(compare.status).toBe(200);
+    expect((await compare.json() as { runs: unknown[] }).runs).toHaveLength(4);
     expect(readFileSync(join(repoRoot, 'a.txt'), 'utf8')).toBe('new\n');
   });
 
@@ -154,8 +163,15 @@ describe('graph workflows run through RunManager', () => {
       nodes: [{ id: 'start', type: 'start' }, { ...riskyCheck, type: 'check' }, { ...localCheck, type: 'check' }],
       edges: [{ from: 'start.next', to: 'external' }, { from: 'external.pass', to: 'local' }],
     }) : { name: 'chain', source: 'file', steps: [riskyCheck, localCheck] };
-    const replay = manager.startRun(workflow, { task: 'Repeat the local check.' });
-    store.updateRun(replay.id, { replayOf: 'baseline' });
+    const original = store.createRun({ title: 'Baseline', task: 'Repeat the local check.', workflow: workflow.name, steps: [] });
+    store.updateRun(original.id, {
+      status: 'done', finishedAt: new Date().toISOString(), workflowDef: workflow,
+      startCommit: (await run('git', ['rev-parse', 'HEAD'], { cwd: repoRoot })).stdout.trim(),
+      harnessVersion: await runHarnessVersion(),
+    });
+    const result = await manager.startReplay(original.id, { times: 1 });
+    if ('error' in result) throw new Error(result.error);
+    const replay = result.runs[0]!;
     expect((await settle(replay.id)).status).toMatch(/done|review/);
     expect(store.readEvents(replay.id)).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: 'note', stepId: 'external', message: 'Side-effect check skipped during replay.' }),
