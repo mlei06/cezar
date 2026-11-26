@@ -3,6 +3,7 @@ import { readOnlyEnv } from '../core/read-only-env.ts';
 import { AgentUsageHolds } from '../workspace/agent-usage-holds.ts';
 import { completionReason } from './completion-reason.ts';
 import { prepareReplayCheck } from './replay-check.ts';
+import { resolveReplayHarness, stagedCheckReplay } from './staged-replay.ts';
 import { WorktreeLifecycleCoordinator } from '../worktree-lifecycle/coordinator.ts';
 import type { RunParked, RunSubject, WebhookAttentionRequest, TrackerAssociation, UsageWindowsObservation } from '@open-mercato/cezar-contract';
 import { saveUsageWindows } from '../workspace/usage-windows.ts';
@@ -2521,14 +2522,21 @@ export class RunManager {
     }
     const { harnessVersion, workflowDef, finishedAt } = source;
     const currentHarness = await runHarnessVersion();
-    if (!currentHarness.commit || (input.harness ?? harnessVersion.id) !== currentHarness.id ||
-      (!input.harness && harnessVersion.commit !== currentHarness.commit)) {
-      return { error: 'Replaying on another harness requires a staging cockpit.' };
-    }
     const workflow = input.workflow ? await this.findWorkflow(input.workflow) : source.workflowDef;
     if (!workflow) return { error: 'The requested replay workflow is unavailable.' };
     const mode = replayMode(workflow);
     if (!mode) return { error: 'This workflow needs an isolated agent or system node that replay cannot yet use.' };
+    const requested = input.harness ?? harnessVersion.id;
+    let target: HarnessVersion = currentHarness;
+    if (requested !== currentHarness.id) {
+      const installed = await resolveReplayHarness(requested);
+      if ('error' in installed) return installed;
+      if (mode !== 'checks') return { error: 'An alternate harness currently supports isolated check workflows.' };
+      target = { id: installed.id, commit: installed.commit };
+    }
+    if (!target.commit || (!input.harness && harnessVersion.commit !== target.commit)) {
+      return { error: 'The exact original harness commit is unavailable.' };
+    }
     const changesAgent = input.model || input.runner || input.effort || input.skill;
     if (mode === 'checks' && changesAgent) return { error: 'The replay workflow has no agent input to change.' };
     const runner = input.runner ?? source.runner;
@@ -2567,7 +2575,7 @@ export class RunManager {
         runner: 'codex', model, agentProfile: input.runner && input.runner !== source.runner ? undefined : source.agentProfile,
         reasoningEffort: input.effort ?? source.reasoningEffort, readOnly: true, enforceReadOnly: true, secrets: [],
       } : {}),
-      replay: { sourceId, startCommit, change, harness: currentHarness, systemPrompt: source.systemPrompt },
+      replay: { sourceId, startCommit, change, harness: target, systemPrompt: source.systemPrompt },
     }, { groupId, variant }));
     this.store.flush();
     return { groupId, runs };
@@ -7375,13 +7383,18 @@ export class RunManager {
       const current = await runHarnessVersion();
       if (state.cancelled) return;
       const mode = replayMode(workflow);
+      const sameHarness = current.id === original.harnessVersion?.id && current.commit === original.harnessVersion.commit;
       if (!original.startCommit || !original.workflowDef || input.worktree !== true ||
-        original.harnessVersion?.id !== current.id || !current.commit || original.harnessVersion.commit !== current.commit ||
-        !mode || (mode === 'read-only-agent' && (input.runner !== 'codex' || !input.enforceReadOnly))) {
+        !original.harnessVersion?.commit || !mode || (!sameHarness && mode !== 'checks') ||
+        (mode === 'read-only-agent' && (input.runner !== 'codex' || !input.enforceReadOnly))) {
         const error = 'The replay needs its saved workflow, exact worktree and pinned harness.';
         this.publishRunFailure(runId, { status: 'failed', error, finishedAt: new Date().toISOString(), currentStepId: undefined });
         emit({ type: 'lifecycle', message: error });
         this.dropActive(runId, state);
+        return;
+      }
+      if (!sameHarness) {
+        await this.executeStagedReplay(original, state, emit);
         return;
       }
     }
@@ -7846,6 +7859,39 @@ export class RunManager {
     }
     this.clearIdleTimer(state);
     this.dropActive(runId, state);
+  }
+
+  private async executeStagedReplay(
+    run: RunRecord, state: ActiveRun, emit: (event: { type: string; stepId?: string; [key: string]: unknown }) => void,
+  ): Promise<void> {
+    const controller = new AbortController();
+    state.interrupt = () => controller.abort();
+    this.store.updateRun(run.id, { status: 'running', startedAt: new Date().toISOString() });
+    emit({ type: 'lifecycle', message: 'starting a check replay on an isolated staging cockpit' });
+    try {
+      const result = await stagedCheckReplay(this.repoRoot, run, controller.signal);
+      if (state.cancelled || this.active.get(run.id) !== state) return;
+      for (const step of result.run.steps) {
+        this.store.updateStep(run.id, step.id, { status: step.status, startedAt: step.startedAt, finishedAt: step.finishedAt, error: step.error });
+      }
+      for (const entry of result.events) {
+        if (entry.type === 'check-output') emit({
+          type: entry.type, stepId: entry.stepId, text: entry.text, command: entry.command, exitCode: entry.exitCode,
+        });
+      }
+      if (result.run.status === 'done' || result.run.status === 'review') {
+        await this.settleSuccess(run.id, state);
+      } else {
+        throw new Error(result.run.error ?? 'The staged check workflow did not complete successfully.');
+      }
+    } catch (error) {
+      if (state.cancelled || this.active.get(run.id) !== state) return;
+      const message = error instanceof Error ? error.message : 'The staged replay could not run.';
+      this.publishRunFailure(run.id, { status: 'failed', error: message, finishedAt: new Date().toISOString() });
+      emit({ type: 'lifecycle', message: 'run failed — ' + message });
+    } finally {
+      this.dropActive(run.id, state);
+    }
   }
 
   /**
@@ -9807,6 +9853,7 @@ export class RunManager {
     };
 
     const stepBackend = step.runner ?? taskBackend;
+    if (replay && (stepBackend !== 'codex' || !state.enforceReadOnly)) return 'The replay agent requires enforced Codex read-only tools.';
     // Normalise the selected model to canonical `provider/model` and back to the
     // backend's own wire form via the ONE shared mapper (#405). Fail-loud: an
     // unresolvable model (e.g. a bare id on opencode) returns the step error
