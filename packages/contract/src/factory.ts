@@ -150,3 +150,53 @@ export const factoryCheckResponseSchema = z.object({
   issues: z.array(z.object({ path: z.string(), message: z.string() })),
 });
 export type FactoryCheckResponse = z.infer<typeof factoryCheckResponseSchema>;
+
+/** Self-improvement settings (spec D6, D7): global in workspace config, overridable per project. */
+export const improvementApprovalSchema = z.enum(['manager', 'owner', 'none']);
+export const improvementScopeSchema = z.enum(['docs', 'agents-md', 'skills', 'workflows', 'code']);
+export type ImprovementScope = z.infer<typeof improvementScopeSchema>;
+export const factoryImprovementSettingsSchema = z.object({
+  enabled: z.boolean().optional().catch(undefined),
+  threshold: z.number().int().min(1).max(100).optional().catch(undefined),
+  ageDays: z.number().min(0).max(365).optional().catch(undefined),
+  minForAge: z.number().int().min(1).max(100).optional().catch(undefined),
+  cooldownRuns: z.number().int().min(0).max(1000).optional().catch(undefined),
+  cooldownDays: z.number().min(0).max(365).optional().catch(undefined),
+  approval: improvementApprovalSchema.optional().catch(undefined),
+  scope: z.array(improvementScopeSchema).max(5).optional().catch(undefined),
+}).passthrough();
+export type FactoryImprovementSettings = z.infer<typeof factoryImprovementSettingsSchema>;
+
+/** The decisions file an improvement run writes (the `improve-factory` skill defines it). */
+export const improvementDecisionSchema = z.enum(['fixed', 'dismissed', 'escalated', 'deferred']);
+export const improvementClusterSchema = z.object({
+  id: z.string().trim().min(1).max(120),
+  causes: z.array(z.string().min(1).max(64)).min(1).max(500),
+  decision: improvementDecisionSchema,
+  reason: z.string().trim().min(1).max(2000),
+  files: z.array(z.string().min(1).max(500)).max(200).optional(),
+  prevents: z.string().max(2000).optional(),
+}).passthrough();
+export type ImprovementCluster = z.infer<typeof improvementClusterSchema>;
+export const improvementDecisionsSchema = z.object({
+  clusters: z.array(improvementClusterSchema).max(200),
+}).passthrough();
+export type ImprovementDecisions = z.infer<typeof improvementDecisionsSchema>;
+
+export const improvementRecordSchema = z.object({
+  id: z.string().min(1).max(64),
+  queue: z.enum(['project', 'harness']),
+  projectId: z.string().min(1),
+  runId: z.string().optional(),
+  startedBy: z.enum(['manager', 'owner', 'automation']),
+  startedAt: z.string().datetime(),
+  causeIds: z.array(z.string()),
+  state: z.enum(['running', 'pr-open', 'merged', 'closed', 'failed']),
+  clusters: z.array(improvementClusterSchema).optional(),
+  pr: z.object({ number: z.number().int().positive().optional(), url: z.string().optional() }).optional(),
+  mergeCommit: z.string().optional(),
+  mergedAt: z.string().datetime().optional(),
+  finishedAt: z.string().datetime().optional(),
+}).passthrough();
+export type ImprovementRecord = z.infer<typeof improvementRecordSchema>;
+export const improvementRecordsSchema = z.array(improvementRecordSchema);
