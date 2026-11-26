@@ -104,6 +104,8 @@ Release `7dd520c` passed health and contained both playbooks and the charter loa
 
 | M4-6 | Comparing a replay can execute Git filters, and an ordinary continuation can exceed its tool grant. | A real Git fixture kept configured checkout and clean filters inert while serving text and structured diffs. Three staged Plan variants changed the requested model, used the existing Codex read broker and each received four scores. Only the original fed the cause queues. | harness | Keep Codex Plan agents on Read, Grep and Glob with no shared run-directory grant. Keep other agent workflows and alternate-harness replay open until their execution boundaries are verified. |
 
+| M4-7 | Host-specific fixture inputs obscured regressions, and adding release routes exceeded declaration emission limits alongside the score routes. | #25 isolated the WSL and ledger inputs, named the existing workspace config response, and passed both workspace contract parity and the full suite with 18,623 passing tests. An independent real Codex fixture completed the same-commit read-only replay. | harness | Reuse the inferred config payload type to preserve API parity. Keep native replay verification on isolated repositories. |
+
 ## Judge calibration
 
 A new blind sample contains 20 archived runs. The installed scoring queue admitted all 20, for 78 scorer calls. Blind labels were recorded before admission. Local evidence and run identities stay out of the fork.
