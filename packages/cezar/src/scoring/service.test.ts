@@ -138,6 +138,41 @@ it('scores tasks settled during startup recovery without backfilling older finis
   }
 });
 
+it('reconciles saved verdicts for the current settlement without calling the judge again', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'cez-recover-verdicts-'));
+  const dataDir = join(root, '.ai/cezar');
+  vi.stubEnv('CEZ_HOME', join(root, 'workspace'));
+  vi.stubEnv('CEZ_DRY_RUN', '0');
+  vi.stubEnv('CEZ_SCORING', '1');
+  const store = RunStore.open(dataDir);
+  const project = { id: 'example', root, dataDir, store };
+  const at = new Date().toISOString();
+  const run = store.createRun({ title: 'Fixture', task: 'Run the check.', workflow: 'quick-task', steps: [] });
+  store.updateRun(run.id, { status: 'done', startedAt: at, finishedAt: at });
+  const score = {
+    scorer: 'outcome', label: 'delivered', score: 1, pass: true, reasoning: 'Recorded verdict', evidence: [], causes: [],
+    judge: { runner: 'codex' as const, transcriptChars: 10, shortened: false }, at,
+  };
+  writeRunScore(dataDir, run.id, 'outcome', { status: 'scored', finishedAt: at, score });
+  writeRunScore(dataDir, run.id, 'efficiency', { status: 'scored', finishedAt: '2026-01-01T00:00:00.000Z', score: {
+    ...score, scorer: 'efficiency',
+  } });
+  const judge = vi.fn();
+  const reconcile = vi.fn();
+  const service = new ScoringService(vi.fn(), judge, undefined, reconcile);
+  const off = service.watch(project);
+  try {
+    await vi.waitFor(() => expect(reconcile).toHaveBeenCalledWith(project, [{ run, score }]));
+    expect(judge).not.toHaveBeenCalled();
+  } finally {
+    off();
+    service.dispose();
+    store.flush();
+    vi.unstubAllEnvs();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 it('redacts a preserved brief, archived credentials and the judge output before scoring or publishing', async () => {
   const root = mkdtempSync(join(tmpdir(), 'cez-score-redaction-'));
   const dataDir = join(root, '.ai/cezar');

@@ -21,6 +21,11 @@ export interface ScoringProject {
   store: RunStore;
 }
 
+export interface SettledScore {
+  run: RunRecord;
+  score: RecordedScore;
+}
+
 function scoringEnabled(): boolean {
   return process.env.CEZ_SCORING !== '0' && process.env.CEZ_DRY_RUN !== '1';
 }
@@ -38,30 +43,38 @@ export class ScoringService {
   private readonly catalog = new ScorerCatalog(true);
   private readonly queue = new JudgeQueue();
 
-  constructor(private readonly onScore: (event: ScoreRecordedEvent) => void,
+  constructor(private readonly onScore: (event: ScoreRecordedEvent, project: ScoringProject, run: RunRecord) => void,
     private readonly judgeFor: (repoRoot: string) => Promise<JudgeRoute | { error: string }> = resolveJudgeRoute,
-    private readonly secrets = new SecretStore()) {}
+    private readonly secrets = new SecretStore(),
+    private readonly reconcileScores?: (project: ScoringProject, scores: readonly SettledScore[]) => void) {}
 
   watch(project: ScoringProject, recoveredSince?: number): () => void {
     if (!scoringEnabled()) return () => undefined;
     const runs = project.store.listRuns();
     const observed = new Map(runs.map((run) => [run.id, settledAt(run)]));
     const loadPending = () => {
+      const saved: SettledScore[] = [];
       for (const run of runs) {
         try {
-          if (Object.values(readRunScores(project.dataDir, run.id)).some((score) => score.status === 'pending')) {
-            void this.queueRun(project, run, 'resume').catch(() => undefined);
-          } else {
-            const at = settledAt(run);
-            // Recovery can settle a task before the server attaches its watcher.
-            if (at && recoveredSince !== undefined && Date.parse(at) >= recoveredSince) {
-              void this.queueRun(project, run, 'new').catch(() => undefined);
+          const at = settledAt(run);
+          if (!at) continue;
+          const scores = Object.values(readRunScores(project.dataDir, run.id)).filter((entry) => entry.finishedAt === at);
+          if (this.reconcileScores) {
+            for (const entry of scores) {
+              if (entry.status === 'scored') saved.push({ run, score: entry.score });
             }
+          }
+          if (scores.some((entry) => entry.status === 'pending')) {
+            void this.queueRun(project, run, 'resume').catch(() => undefined);
+          } else if (recoveredSince !== undefined && Date.parse(at) >= recoveredSince) {
+            // Recovery can settle a task before the server attaches its watcher.
+            void this.queueRun(project, run, 'new').catch(() => undefined);
           }
         } catch {
           // A damaged score file does not prevent opening the project or other tasks.
         }
       }
+      if (saved.length) this.reconcileScores?.(project, saved);
     };
     const initial = setImmediate(loadPending);
     const changed = (run: RunRecord) => {
@@ -181,7 +194,7 @@ export class ScoringService {
                 at: new Date().toISOString(),
               };
               save({ status: 'scored', finishedAt, score });
-              this.onScore({ projectId: project.id, runId: run.id, score });
+              this.onScore({ projectId: project.id, runId: run.id, score }, project, run);
               break;
           }
         },

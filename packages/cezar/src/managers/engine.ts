@@ -39,6 +39,7 @@ import {
   type ManagerTaskDetail,
   type ManagerTaskAgent,
   type ManagerTaskBudgetInput,
+  type QueuedCause,
   type RunBudgetResponse,
   type ManagerAccountState,
   type ManagerAgentsResponse,
@@ -3376,6 +3377,29 @@ export class ManagerEngine {
       status: after.get(run.id) ?? run.status,
       children: liveDescendants.filter((childId) => after.get(childId) === 'cancelled'),
     };
+  }
+
+  /** Infrastructure findings go to the owner through a connected manager's chat. */
+  reportInfrastructureCause(entry: QueuedCause, startedByManager?: string): void {
+    if (this.disposed) return;
+    const connected = this.deps.store.list().filter((manager) => connectedTo(manager, entry.projectId));
+    const manager = connected.find(({ id }) => id === startedByManager)
+      ?? connected.find(({ projects }) => projects !== 'all') ?? connected[0];
+    if (!manager) return;
+    const messageId = `factory-infra:${entry.id}`;
+    if (this.deps.store.message(manager.id, messageId)) return;
+    const guidance = firstLine(entry.cause.fix, REPORT_REASON_LIMIT);
+    this.postDirect(manager.id, {
+      messageId, turn: 'watch',
+      text: `[[task:${entry.projectId}/${entry.runId}]]
+
+Scoring found an infrastructure issue that needs the owner's attention.${guidance ? `
+
+${guidance}` : ''}`,
+      headline: 'Infrastructure issue from task scoring',
+      fields: {},
+      attentionKeys: [],
+    });
   }
 
   async raiseTaskBudget(id: string, input: ManagerTaskBudgetInput): Promise<RunBudgetResponse | ManagerRefusal> {
