@@ -27,7 +27,8 @@ function findBatch(dataDir: string, id: string): { record: ImprovementRecord; pa
   return undefined;
 }
 
-export function runImprovementDecisions(dataDir: string, run: RunRecord): { decisions: ImprovementDecisions } | { error: string } {
+export function runImprovementDecisions(dataDir: string, run: RunRecord):
+  { decisions: ImprovementDecisions; harness: boolean } | { error: string } {
   const batch = run.improvementId && findBatch(dataDir, run.improvementId);
   if (!batch || batch.record.runId !== run.id) return { error: 'The improvement has no claimed batch.' };
   const result = readImprovementDecisions(join(artifactsDir(dataDir, run.id), IMPROVEMENT_DECISIONS));
@@ -41,7 +42,8 @@ export function runImprovementDecisions(dataDir: string, run: RunRecord): { deci
       if (!remaining.delete(id)) return { error: 'Each cause in the batch must appear exactly once.' };
     }
   }
-  return remaining.size ? { error: 'The decisions file must cover the entire batch.' } : result;
+  return remaining.size ? { error: 'The decisions file must cover the entire batch.' }
+    : { ...result, harness: batch.record.queue === 'harness' };
 }
 
 export async function checkImprovementStep(dataDir: string, root: string, cwd: string, run: RunRecord, step: string):
@@ -71,11 +73,11 @@ export async function checkImprovementStep(dataDir: string, root: string, cwd: s
 }
 
 /** A factory PR can be public. The agent's raw batch and transcript stay in the cockpit. */
-export function improvementHandoff(decisions: ImprovementDecisions): string {
+export function improvementPrSummary(decisions: ImprovementDecisions): string {
   const counts = ['fixed', 'dismissed', 'escalated', 'deferred'].map((kind) =>
     kind + ': ' + decisions.clusters.filter(({ decision }) => decision === kind).length);
-  return '## Goal\nReduce recurring task failures.\n\n## Progress log\n' +
-    '- Regressions addressed and cluster decisions: ' + counts.join(', ') + '.\n' +
+  return '## Regressions addressed\n\nReduce recurring task failures.\n\n' +
+    '- Cluster decisions: ' + counts.join(', ') + '.\n' +
     '- Evidence, expected effects and reasons are recorded with the improvement in the cockpit.\n' +
     '- Factory and applicable project checks passed.';
 }
@@ -103,7 +105,14 @@ export function watchImprovementRuns(dataDir: string, store: RunStore, projectId
     try { settleRun(dataDir, run); }
     catch { console.warn('[cezar] improvement settlement deferred'); }
   };
+  const deleted = (id: string) => {
+    try {
+      const batch = findBatch(dataDir, id);
+      if (batch?.record.runId === id && batch.record.state === 'running') failImprovement(batch.paths, batch.record.id, new Date());
+    } catch { console.warn('[cezar] improvement deletion settlement deferred'); }
+  };
   store.on('run', changed);
+  store.on('deleted', deleted);
   for (const run of store.listRuns()) changed(run);
   for (const harness of [false, true]) {
     const paths = improvementPaths(dataDir, harness);
@@ -114,7 +123,7 @@ export function watchImprovementRuns(dataDir: string, store: RunStore, projectId
       }
     } catch { console.warn('[cezar] improvement recovery deferred'); }
   }
-  return () => { store.off('run', changed); };
+  return () => { store.off('run', changed); store.off('deleted', deleted); };
 }
 
 export function hasOpenImprovementPr(dataDir: string, projectId: string, number: number): boolean {

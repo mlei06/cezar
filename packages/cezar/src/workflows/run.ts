@@ -3,7 +3,7 @@ import { readOnlyEnv } from '../core/read-only-env.ts';
 import { AgentUsageHolds } from '../workspace/agent-usage-holds.ts';
 import { completionReason } from './completion-reason.ts';
 import { prepareReplayCheck, runReplayShell } from './replay-check.ts';
-import { checkImprovementStep, improvementHandoff, runImprovementDecisions } from '../improvement/lifecycle.ts';
+import { checkImprovementStep, improvementPrSummary, runImprovementDecisions } from '../improvement/lifecycle.ts';
 import { hasImprovementSkill, IMPROVE_FACTORY } from '../improvement/workflow.ts';
 import { resolveReplayHarness, saveStagedReplayDiff, stagedReplay } from './staged-replay.ts';
 import { WorktreeLifecycleCoordinator } from '../worktree-lifecycle/coordinator.ts';
@@ -8749,10 +8749,10 @@ export class RunManager {
           return 'failed';
         }
         // A gate answered "open a full PR": ready for review instead of a draft.
-        const markReady = async (url: string): Promise<boolean> => {
+        const markReady = async (url: string, createdHere = false): Promise<boolean> => {
           // A stored URL can come from the agent's transcript. Confirm the PR belongs
           // to this task branch before changing a PR we did not just find by branch.
-          if (url === run.pullRequestUrl && process.env.CEZ_DRY_RUN !== '1' && !/\/pullrequest\/\d+/.test(url)) {
+          if (!createdHere && url === run.pullRequestUrl && process.env.CEZ_DRY_RUN !== '1' && !/\/pullrequest\/\d+/.test(url)) {
             const target = await resolvePrTarget(run);
             const existing = target && run.worktreePath ? await findBranchPr(run.worktreePath, target) : null;
             if (existing?.url !== url) {
@@ -8789,8 +8789,11 @@ export class RunManager {
         const title = node.title ? render(node.title) : undefined;
         const outcome = await createTaskPr({
           repoRoot: this.repoRoot,
-          run: title ? { ...run, title } : run,
-          handoffText: improvement ? improvementHandoff(improvement.decisions) : readHandoff(this.dataDir, runId),
+          run: improvement ? { ...run, title: 'Improve factory reliability' } : title ? { ...run, title } : run,
+          handoffText: improvement ? '' : readHandoff(this.dataDir, runId),
+          ...(improvement ? { body: !improvement.harness && improvement.decisions.pullRequestDescription
+            ? this.store.redactRunText(runId, improvement.decisions.pullRequestDescription)
+            : improvementPrSummary(improvement.decisions) } : {}),
           ...(excludedPaths.size ? { excludedPaths: [...excludedPaths] } : {}),
           ...(readyPr ? { draft: false } : {}),
           ...(run.pullRequestUrl && updateExistingPr ? { updateExisting: true } : {}),
@@ -8804,7 +8807,7 @@ export class RunManager {
         if (number) this.store.recordPrRef(runId, { number: Number(number), url: outcome.url, origin: 'created' });
         outputs.set(node.id, { url: outcome.url, number: number ? Number(number) : '' });
         // An adopted PR (the agent opened one already) keeps its own draft state until told.
-        if ((improvement || (readyPr && outcome.updated)) && !await markReady(outcome.url)) return 'failed';
+        if ((improvement || (readyPr && outcome.updated)) && !await markReady(outcome.url, !outcome.updated)) return 'failed';
         note(`${readyPr ? 'PR (ready for review)' : 'PR'} ${outcome.updated ? 'already open' : 'opened'}: ${outcome.url}`);
         return 'created';
       }

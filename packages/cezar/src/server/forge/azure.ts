@@ -262,7 +262,7 @@ export function createAzureDriver(remote: AzureRemote, deps: AzureDriverDeps = {
       const repo = await repoFacts();
       const targetRef = target ? `refs/heads/${target}` : 'defaultBranch' in repo ? repo.defaultBranch : undefined;
       if (!targetRef) return { ok: false, error: 'cannot tell which branch the pull request should target' };
-      const body = buildPrBody(input.handoffText, run.task);
+      const body = input.body ?? buildPrBody(input.handoffText, run.task);
       const res = await t.request('POST', ['git', 'repositories', remote.repo, 'pullrequests'], {
         body: {
           sourceRefName: `refs/heads/${branch}`,

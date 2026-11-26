@@ -113,10 +113,10 @@ describe('graph workflows run through RunManager', () => {
   it('limits the built-in improvement workflow to its claimed batch', async () => {
     const workflow = await builtin('improve-factory');
     const original = manager.startRun(workflow, { task: 'mock:done', runner: 'codex' });
-    expect(await settle(original.id)).toMatchObject({
+    await vi.waitFor(() => expect(store.getRun(original.id)).toMatchObject({
       status: 'failed', error: 'Start this workflow through the factory improvement queue.',
       steps: expect.arrayContaining([expect.objectContaining({ id: 'work', status: 'pending' })]),
-    });
+    }));
   });
 
   it('claims one runnable improvement and settles its decisions without publishing an empty PR', async () => {

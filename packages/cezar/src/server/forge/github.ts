@@ -2923,7 +2923,7 @@ export async function createDraftPr(input: DraftPrInput): Promise<DraftPrOutcome
   }
   if (existing) return { ok: true, url: existing, dryRun: false, updated: true };
 
-  const body = buildPrBody(input.handoffText, run.task);
+  const body = input.body ?? buildPrBody(input.handoffText, run.task);
   // Target the branch the worktree forked from (config `baseBranch`) — without
   // --base, gh aims at the repo default (main) even when work started on
   // develop. `<remote>/x` normalizes to `x`; a raw sha (detached-HEAD fork
