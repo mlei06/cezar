@@ -8120,6 +8120,12 @@ export class RunManager {
           port = verdict ?? 'done';
           if (verdict) emit({ type: 'note', stepId: node.id, message: `verdict: ${verdict}` });
         }
+      } else if (node.sideEffects && this.store.getRun(runId)?.replayOf) {
+        const message = 'Side-effect check skipped during replay.';
+        emit({ type: 'note', stepId: node.id, message });
+        outputs.set(node.id, { output: message });
+        this.finishStep(runId, node.id, 'done', undefined, emit);
+        port = 'pass';
       } else {
         const rendered = nodeToStep(node);
         if (!node.literalCommand && rendered.command) rendered.command = renderNodeRefs(rendered.command, outputs);

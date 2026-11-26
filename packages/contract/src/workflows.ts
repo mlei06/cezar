@@ -47,6 +47,7 @@ export const workflowStepDefSchema = z
     bashAllowlist: z.array(z.string()).optional(),
     // check step
     command: z.string().optional(),
+    sideEffects: z.boolean().optional(),
     onFail: z
       .object({
         retry: z.string().min(1),
@@ -60,6 +61,10 @@ export const workflowStepDefSchema = z
   })
   .refine((s) => Boolean(s.command) !== Boolean(s.prompt ?? s.skill), {
     message: 'a step is either an agent step (prompt/skill) or a check step (command), not both',
+  })
+  .refine((s) => s.sideEffects === undefined || Boolean(s.command), {
+    path: ['sideEffects'],
+    message: 'only check steps can declare sideEffects',
   })
   .refine((s) => s.secrets === undefined || (s.command
     ? s.secrets.length > 0
@@ -129,6 +134,7 @@ export const workflowGraphNodeSchema = z.discriminatedUnion('type', [
     ...graphNodeBase,
     type: z.literal('check'),
     command: z.string().min(1),
+    sideEffects: z.boolean().optional(),
     literalCommand: z.literal(true).optional(),
     retryOn: z.array(z.number().int().positive()).optional(),
     secrets: stepSecretsSchema.optional(),

@@ -92,6 +92,25 @@ describe('graph workflows run through RunManager', () => {
     expect(Number(output?.text)).toBeGreaterThanOrEqual(5);
   });
 
+  it.each([false, true])('skips side-effect checks and follows the success edge during replay (graph: %s)', async (graph) => {
+    const riskyCheck = { id: 'external', command: 'exit 7', sideEffects: true };
+    const localCheck = { id: 'local', command: 'printf verified' };
+    const workflow: WorkflowDef = graph ? def({
+      nodes: [{ id: 'start', type: 'start' }, { ...riskyCheck, type: 'check' }, { ...localCheck, type: 'check' }],
+      edges: [{ from: 'start.next', to: 'external' }, { from: 'external.pass', to: 'local' }],
+    }) : { name: 'chain', source: 'file', steps: [riskyCheck, localCheck] };
+    const replay = manager.startRun(workflow, { task: 'Repeat the local check.' });
+    store.updateRun(replay.id, { replayOf: 'baseline' });
+    expect((await settle(replay.id)).status).toMatch(/done|review/);
+    expect(store.readEvents(replay.id)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'note', stepId: 'external', message: 'Side-effect check skipped during replay.' }),
+      expect.objectContaining({ type: 'check-output', stepId: 'local', text: 'verified' }),
+    ]));
+    expect(store.readEvents(replay.id).some((event) => event.type === 'check-output' && event.stepId === 'external')).toBe(false);
+    const ordinary = manager.startRun(workflow, { task: 'Run the complete workflow.' });
+    expect((await settle(ordinary.id)).status).toBe('failed');
+  });
+
   it('provides factory workflow defaults and lets project files override all three', async () => {
     const defaults = [
       ['implement', undefined, 3_000_000, 30],
