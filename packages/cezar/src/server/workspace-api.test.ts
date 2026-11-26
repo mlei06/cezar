@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { diskGuardStatusSchema, hostUsageSchema, setWorkspaceConfigInputSchema, type WorkspaceConfigResponse } from '@open-mercato/cezar-contract';
+import { diskGuardStatusSchema, hostUsageSchema, setWorkspaceConfigInputSchema, workspaceConfigResponseSchema, type WorkspaceConfigResponse } from '@open-mercato/cezar-contract';
 import { workspaceConfigPath, workspaceUiStatePath } from '../paths.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { RunStore } from '../runs/store.ts';
@@ -84,6 +84,21 @@ describe('the workspace settings API (step 2.7)', () => {
     });
 
   // ---- GET/PUT /api/v1/workspace/config ---------------------------------------
+
+  it('patches improvement settings without exposing or replacing the judge', async () => {
+    const protectedFactory = { judge: { runner: 'codex', model: 'judge-model' }, reserved: { key: 'value' } };
+    writeFileSync(workspaceConfigPath(), JSON.stringify({ factory: { ...protectedFactory, improvement: { enabled: false, threshold: 6, future: true } } }));
+    const saved = await putConfig({ factory: { improvement: { threshold: null, approval: 'owner', scope: [] } } });
+    expect(saved.status, await saved.clone().text()).toBe(200);
+    const improvement = { enabled: false, approval: 'owner', scope: [] };
+    expect(workspaceConfigResponseSchema.parse(await saved.json()).factory).toEqual({ improvement });
+    expect(workspaceConfigResponseSchema.parse(await (await getConfig()).json()).factory).toEqual({ improvement });
+    expect(rawConfig().factory).toEqual({ ...protectedFactory, improvement: { ...improvement, future: true } });
+    const before = readFileSync(workspaceConfigPath(), 'utf8');
+    expect((await putConfig({ factory: { improvement: { cooldownRuns: -1 } } })).status).toBe(400);
+    expect((await putConfig({ factory: { judge: { runner: 'codex', model: 'other-model' }, improvement: { threshold: 7 } } })).status).toBe(400);
+    expect(readFileSync(workspaceConfigPath(), 'utf8')).toBe(before);
+  });
 
   it('GET answers the zero-config defaults when no file exists — and never the registry', async () => {
     const res = await getConfig();

@@ -155,15 +155,39 @@ export type FactoryCheckResponse = z.infer<typeof factoryCheckResponseSchema>;
 export const improvementApprovalSchema = z.enum(['manager', 'owner', 'none']);
 export const improvementScopeSchema = z.enum(['docs', 'agents-md', 'skills', 'workflows', 'code']);
 export type ImprovementScope = z.infer<typeof improvementScopeSchema>;
+const improvementFields = {
+  enabled: z.boolean(),
+  threshold: z.number().int().min(1).max(100),
+  ageDays: z.number().min(0).max(365),
+  minForAge: z.number().int().min(1).max(100),
+  cooldownRuns: z.number().int().min(0).max(1000),
+  cooldownDays: z.number().min(0).max(365),
+  approval: improvementApprovalSchema,
+  scope: z.array(improvementScopeSchema).max(5),
+};
+
+export const factoryImprovementOverridesSchema = z.object(improvementFields).partial();
+export const factoryImprovementPatchSchema = z.strictObject({
+  enabled: improvementFields.enabled.nullable().optional(),
+  threshold: improvementFields.threshold.nullable().optional(),
+  ageDays: improvementFields.ageDays.nullable().optional(),
+  minForAge: improvementFields.minForAge.nullable().optional(),
+  cooldownRuns: improvementFields.cooldownRuns.nullable().optional(),
+  cooldownDays: improvementFields.cooldownDays.nullable().optional(),
+  approval: improvementFields.approval.nullable().optional(),
+  scope: improvementFields.scope.nullable().optional(),
+});
+export type FactoryImprovementPatch = z.infer<typeof factoryImprovementPatchSchema>;
+
 export const factoryImprovementSettingsSchema = z.object({
-  enabled: z.boolean().optional().catch(undefined),
-  threshold: z.number().int().min(1).max(100).optional().catch(undefined),
-  ageDays: z.number().min(0).max(365).optional().catch(undefined),
-  minForAge: z.number().int().min(1).max(100).optional().catch(undefined),
-  cooldownRuns: z.number().int().min(0).max(1000).optional().catch(undefined),
-  cooldownDays: z.number().min(0).max(365).optional().catch(undefined),
-  approval: improvementApprovalSchema.optional().catch(undefined),
-  scope: z.array(improvementScopeSchema).max(5).optional().catch(undefined),
+  enabled: improvementFields.enabled.optional().catch(undefined),
+  threshold: improvementFields.threshold.optional().catch(undefined),
+  ageDays: improvementFields.ageDays.optional().catch(undefined),
+  minForAge: improvementFields.minForAge.optional().catch(undefined),
+  cooldownRuns: improvementFields.cooldownRuns.optional().catch(undefined),
+  cooldownDays: improvementFields.cooldownDays.optional().catch(undefined),
+  approval: improvementFields.approval.optional().catch(undefined),
+  scope: improvementFields.scope.optional().catch(undefined),
 }).passthrough();
 export type FactoryImprovementSettings = z.infer<typeof factoryImprovementSettingsSchema>;
 

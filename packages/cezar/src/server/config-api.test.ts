@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { configResponseSchema } from '@open-mercato/cezar-contract';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
@@ -75,6 +76,21 @@ describe('the config API', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
     });
+
+  it('patches improvement settings without rewriting other project config', async () => {
+    const protectedFactory = { judge: { runner: 'codex', model: 'judge-model' }, reserved: { key: 'value' } };
+    writeFileSync(configPath(), JSON.stringify({ factory: { ...protectedFactory, improvement: { enabled: false, threshold: 6, future: true } } }));
+    const saved = await put({ factory: { improvement: { threshold: null, approval: 'owner', scope: [] } } });
+    expect(saved.status, await saved.clone().text()).toBe(200);
+    const improvement = { enabled: false, approval: 'owner', scope: [] };
+    expect(configResponseSchema.parse(await saved.json()).factory).toEqual({ improvement });
+    expect((await getBody()).factory).toEqual({ improvement });
+    expect(rawFile().factory).toEqual({ ...protectedFactory, improvement: { ...improvement, future: true } });
+    const before = readFileSync(configPath(), 'utf8');
+    expect((await put({ factory: { improvement: { cooldownRuns: -1 } } })).status).toBe(400);
+    expect((await put({ factory: { judge: { runner: 'codex', model: 'other-model' }, improvement: { threshold: 7 } } })).status).toBe(400);
+    expect(readFileSync(configPath(), 'utf8')).toBe(before);
+  });
 
   it('GET answers the zero-config defaults when no file exists', async () => {
     const res = await get();
