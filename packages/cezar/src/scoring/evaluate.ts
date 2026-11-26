@@ -7,7 +7,7 @@ export const JUDGE_TIMEOUT_MS = 180_000;
 export const JUDGE_OUTAGE_RETRY_MS = [5 * 60_000, 30 * 60_000, 2 * 60 * 60_000] as const;
 
 export type JudgeCall = (input: { systemPrompt: string; userPrompt: string; timeoutMs: number }) =>
-  Promise<{ text: string } | { unavailable: true } | { timedOut: true } | { contextTooLarge: true }>;
+  Promise<{ text: string } | { unavailable: true } | { timedOut: true } | { contextTooLarge: true } | { error: string }>;
 
 export type JudgeEvaluation =
   | { status: 'scored'; verdict: JudgeVerdict; transcriptChars: number; shortened: boolean }
@@ -23,6 +23,7 @@ export async function evaluateScorer(scorer: Scorer, renderTranscript: (maxChars
     const transcript = renderTranscript(budget - systemPrompt.length);
     if ('error' in transcript) return { status: 'error', reason: transcript.error };
     const response = await call({ systemPrompt, userPrompt: transcript.text, timeoutMs: JUDGE_TIMEOUT_MS });
+    if ('error' in response) return { status: 'error', reason: response.error };
     if ('unavailable' in response) return { status: 'unavailable' };
     if ('contextTooLarge' in response) {
       reason = 'The transcript exceeded the judge’s context window.';

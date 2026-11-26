@@ -116,7 +116,8 @@ export interface AgentRunSpec {
    *  config). For a manager turn that may call none: their tool lists and instructions otherwise
    *  fill its context on every turn (spec 2026-11-21-manager-short-sessions-and-memory § 2.4). */
   noMcpServers?: boolean;
-  /** Tool-free inference. Claude and OpenCode remove the built-in grants; Codex uses an empty restricted grant. */
+  /** Tool-free inference. Claude strips the toolset, OpenCode generates text without a session,
+   *  and the Codex judge uses an empty restricted grant. */
   noTools?: boolean;
   /** Claude only: extra settings (e.g. a `PreToolUse` hook) for `--settings`, written to a `0600`
    *  temp file, never inline in argv. Other backends ignore it, so never rely on it elsewhere. */

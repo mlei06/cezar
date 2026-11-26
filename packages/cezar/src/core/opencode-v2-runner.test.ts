@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { AgentEvent, AgentSession } from './agent-runner.ts';
 import type { UiEvent } from './ui-events.ts';
-import { OpencodeServerRunner } from './opencode-server-runner.ts';
+import { OpencodeServerRunner, OPENCODE_TOOL_FREE_UNAVAILABLE } from './opencode-server-runner.ts';
 
 const bin = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__/opencode/mock-opencode-v2-serve.mjs');
 const sessions: AgentSession[] = [];
@@ -22,6 +22,28 @@ function start(prompt: string, autoEnd = true, env?: Record<string, string>) {
 }
 
 describe('OpenCode V1 + V2 runner compatibility', () => {
+  it('sends a tool-free prompt to stateless text generation with the configured model', async () => {
+    const events: AgentEvent[] = [];
+    const result = await new OpencodeServerRunner({ bin }).run({
+      cwd: process.cwd(), userPrompt: 'judge evidence', systemPrompt: 'RUBRIC', noTools: true,
+      model: 'mock/mock-model#high', env: { MOCK_STATELESS_ONLY: '1' },
+    }, (event) => events.push(event));
+    expect(result).toMatchObject({ text: 'RUBRIC\n\n---\n\njudge evidence', toolCalls: [] });
+    expect(result.sessionId).toBeUndefined();
+    expect(events.map((event) => event.type)).toEqual(['text', 'done']);
+  });
+
+  it.each(['1.0.0', '2.0.19'])('fails closed when OpenCode %s lacks stateless generation', async (version) => {
+    const events: AgentEvent[] = [];
+    const result = await new OpencodeServerRunner({ bin }).run({
+      cwd: process.cwd(), userPrompt: 'judge evidence', noTools: true,
+      env: { MOCK_STATELESS_ONLY: '1', MOCK_MISSING_GENERATION: '1', MOCK_OPENCODE_VERSION: version },
+    }, (event) => events.push(event));
+    expect(result.text).toBe('');
+    expect(result.sessionId).toBeUndefined();
+    expect(events).toEqual([{ type: 'error', message: `opencode: ${OPENCODE_TOOL_FREE_UNAVAILABLE}` }, { type: 'done' }]);
+  });
+
   it('authenticates V2 HTTP and SSE and preserves text/tools/usage in both event protocols', async () => {
     const { session, events, ui } = start('hello');
     const result = await session.result;

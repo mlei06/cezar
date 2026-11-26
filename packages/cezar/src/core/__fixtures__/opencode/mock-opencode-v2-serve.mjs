@@ -30,7 +30,7 @@ const server = createServer((req, res) => {
   const path = req.url;
   if (req.method === 'GET' && path === '/api/info') {
     if (process.env.MOCK_V2_PROBE_UNAUTHORIZED === '1') return json(res, { error: 'Unauthorized' }, 401);
-    return json(res, { version: '2.0.19', pid: process.pid, urls: [] });
+    return json(res, { version: process.env.MOCK_OPENCODE_VERSION ?? '2.0.19', pid: process.pid, urls: [] });
   }
   if (req.method === 'GET' && path === '/api/event') {
     if (process.env.MOCK_NO_EVENT_BUS === '1') return json(res, {}, 404);
@@ -45,6 +45,16 @@ const server = createServer((req, res) => {
   req.on('end', () => {
     let data;
     try { data = body ? JSON.parse(body) : undefined; } catch { return json(res, {}, 400); }
+    if (req.method === 'POST' && path === '/api/experimental/generate/text') {
+      if (process.env.MOCK_MISSING_GENERATION === '1') return json(res, {}, 404);
+      if (data?.prompt !== 'RUBRIC\n\n---\n\njudge evidence' || data.model?.id !== 'mock-model'
+        || data.model.providerID !== 'mock' || data.model.variant !== 'high'
+        || Object.keys(data).some((key) => key !== 'prompt' && key !== 'model')) {
+        return json(res, { error: 'invalid V2 stateless request shape' }, 400);
+      }
+      return json(res, { data: { text: data.prompt } });
+    }
+    if (process.env.MOCK_STATELESS_ONLY === '1') return json(res, { error: 'unexpected session request' }, 400);
     if (req.method === 'POST' && path === '/api/session') {
       if (!data?.location?.directory || realpathSync(data.location.directory) !== process.cwd()
         || data.title !== 'cezar task'

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { loadConfig } from '../config.ts';
 import { classifyAgentFailure } from '../core/agent-failure-class.ts';
 import type { AgentRunResult, RunnerId } from '../core/agent-runner.ts';
+import { OPENCODE_TOOL_FREE_UNAVAILABLE } from '../core/opencode-server-runner.ts';
 import { createRunner } from '../core/runner-factory.ts';
 import { oneShotAccountRef } from '../usage-ledger/identity.ts';
 import { INTERNAL_CONSUMERS, trackOneShot } from '../usage-ledger/recorder.ts';
@@ -61,6 +62,7 @@ export async function resolveJudgeRoute(repoRoot: string): Promise<JudgeRoute | 
         await rm(scratch, { recursive: true, force: true }).catch(() => undefined);
       }
       if (timedOut) return { timedOut: true };
+      if (providerError === `opencode: ${OPENCODE_TOOL_FREE_UNAVAILABLE}`) return { error: OPENCODE_TOOL_FREE_UNAVAILABLE };
       if (classifyAgentFailure(providerError) === 'context_too_large') return { contextTooLarge: true };
       return { unavailable: true };
     },

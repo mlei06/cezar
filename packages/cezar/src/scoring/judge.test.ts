@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
 import { buildClaudeArgs } from '../core/claude-cli-runner.ts';
-import { opencodeReadOnlyConfig } from '../core/private-mcp.ts';
 import { summarizeRunMetrics } from '../runs/task-metrics.ts';
 import type { RunEvent, RunRecord } from '../runs/store.ts';
 import type { Scorer } from '../factory/scorers.ts';
@@ -20,19 +19,12 @@ const scorer: Scorer = {
 const event = (seq: number, type: string, fields: Record<string, unknown>): RunEvent => ({ seq, ts: stamp, stepId: 'work', type, ...fields });
 
 describe('judge inputs and validation', () => {
-  it('keeps both local judge runner toolsets disabled', () => {
+  it('keeps Claude judge tools and MCP disabled', () => {
     const args = buildClaudeArgs({ cwd: '/tmp', userPrompt: 'Judge the task', noTools: true, allowedTools: ['Read'] });
     expect(args[args.indexOf('--tools') + 1]).toBe('');
     expect(args).toContain('--strict-mcp-config');
     expect(args).not.toContain('--allowedTools');
 
-    const config = JSON.parse(opencodeReadOnlyConfig(JSON.stringify({
-      default_agent: 'custom', agent: { custom: { permission: { bash: 'allow' } } },
-    }), true));
-    expect(config).toMatchObject({
-      default_agent: 'build', permission: { '*': 'deny' },
-      agent: { build: { permission: { '*': 'deny' } }, custom: { permission: { '*': 'deny' } } },
-    });
   });
 
   it('shortens the largest tool output and keeps all messages and call arguments', () => {
@@ -70,6 +62,9 @@ describe('judge inputs and validation', () => {
 
     call.mockClear().mockResolvedValue({ unavailable: true });
     expect(await evaluateScorer(scorer, () => transcript, call)).toEqual({ status: 'unavailable' });
+    expect(call).toHaveBeenCalledTimes(1);
+    call.mockClear().mockResolvedValue({ error: 'This judge runner cannot disable tools.' });
+    expect(await evaluateScorer(scorer, () => transcript, call)).toEqual({ status: 'error', reason: 'This judge runner cannot disable tools.' });
     expect(call).toHaveBeenCalledTimes(1);
     call.mockClear().mockResolvedValue({ timedOut: true });
     expect(await evaluateScorer(scorer, () => transcript, call)).toEqual({ status: 'error', reason: 'The judge exceeded the reply timeout.' });
