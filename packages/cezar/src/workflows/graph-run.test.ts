@@ -14,6 +14,7 @@ import { apiRequest } from '../server/loopback-request.testkit.ts';
 import { createApp } from '../server/server.ts';
 import * as templates from './templates.ts';
 import { RunStore } from '../runs/store.ts';
+import { runHarnessVersion } from '../self-update/run-version.ts';
 import { graphToSteps, type WorkflowGraph } from './graph.ts';
 import { loadWorkflows, resolveWorkflowModelAlias } from './load.ts';
 import { MISSING_SESSION_NOTE } from './resume-fallback.ts';
@@ -84,6 +85,58 @@ describe('graph workflows run through RunManager', () => {
     return workflow!;
   }
 
+  function stubReplaySandbox(): void {
+    const sandbox = join(repoRoot, '.ai', 'cezar', 'fixture-sandbox');
+    writeFileSync(sandbox, [
+      '#!/bin/sh',
+      '[ "$1" = sandbox ] || exit 1',
+      '[ "$2" = --permission-profile ] && [ "$3" = replay ] || exit 2',
+      'grep -q "^enabled = false$" "$CODEX_HOME/config.toml" || exit 5',
+      '[ -z "$FIXTURE_PASSWORD" ] || exit 3',
+      'while [ "$#" -gt 0 ] && [ "$1" != -- ]; do shift; done',
+      '[ "$#" -gt 0 ] || exit 4',
+      'shift',
+      'export FIXTURE_SANDBOX_USED=1',
+      'exec "$@"',
+    ].join('\n'), { mode: 0o700 });
+    vi.stubEnv('CEZ_CODEX_BIN', sandbox);
+    vi.stubEnv('FIXTURE_PASSWORD', 'fixture-secret');
+  }
+
+  it.skipIf(process.platform !== 'linux')('replays a saved check workflow in a group from its original commit', async () => {
+    stubReplaySandbox();
+    const cwd = { cwd: repoRoot };
+    const oldCommit = (await run('git', ['rev-parse', 'HEAD'], cwd)).stdout.trim();
+    const workflow: WorkflowDef = { name: 'repeat', source: 'file', steps: [{ id: 'check', command: 'cat a.txt' }] };
+    const original = store.createRun({ title: 'Baseline', task: 'Check the file.', workflow: workflow.name, steps: [] });
+    store.updateRun(original.id, {
+      status: 'done', startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(),
+      startCommit: oldCommit, harnessVersion: await runHarnessVersion(), workflowDef: workflow,
+    });
+    store.appendEvent(original.id, { type: 'user-message', text: 'Keep the original content.' });
+    writeFileSync(join(repoRoot, 'a.txt'), 'new\n');
+    await run('git', ['add', 'a.txt'], cwd);
+    await run('git', [...GIT_ID, 'commit', '-qm', 'new checkout'], cwd);
+    const result = await manager.startReplay(original.id, { times: 3 });
+    expect(result).not.toHaveProperty('error');
+    if ('error' in result) throw new Error(result.error);
+    expect(result.runs).toHaveLength(3);
+    expect(original.groupId).toBe(result.groupId);
+    for (const replay of result.runs) {
+      const completed = await settle(replay.id);
+      expect(completed).toMatchObject({
+        replayOf: original.id, groupId: result.groupId, startCommit: oldCommit, worktreePath: expect.any(String),
+      });
+      expect(completed.status).toMatch(/review|done/);
+      expect(completed.task).toContain('Keep the original content.');
+      expect(manager.continueRun(replay.id)).toMatchObject({ ok: false, error: expect.stringContaining('Replay') });
+      expect(manager.switchAgent(replay.id, { runner: 'codex', agentProfile: 'default', changedBy: 'user' }))
+        .toHaveProperty('error', expect.stringContaining('Replay'));
+      expect(store.readEvents(replay.id)).toContainEqual(expect.objectContaining({ type: 'check-output', text: 'one' }));
+    }
+    expect(readFileSync(join(repoRoot, 'a.txt'), 'utf8')).toBe('new\n');
+  });
+
   it.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('lowers the CPU priority of workflow checks', async () => {
     const command = `'${process.execPath}' -p 'require("node:os").getPriority()'`;
     const workflow: WorkflowDef = { name: 'priority', source: 'file', steps: [{ id: 'check', command }] };
@@ -94,20 +147,7 @@ describe('graph workflows run through RunManager', () => {
   });
 
   it.skipIf(process.platform !== 'linux').each([false, true])('isolates local checks and skips side-effect checks during replay (graph: %s)', async (graph) => {
-    const sandbox = join(repoRoot, '.ai', 'cezar', 'fixture-sandbox');
-    writeFileSync(sandbox, [
-      '#!/bin/sh',
-      '[ "$1" = sandbox ] || exit 1',
-      'case "$*" in *sandbox_workspace_write.network_access=false*) ;; *) exit 2;; esac',
-      '[ -z "$FIXTURE_PASSWORD" ] || exit 3',
-      'while [ "$#" -gt 0 ] && [ "$1" != -- ]; do shift; done',
-      '[ "$#" -gt 0 ] || exit 4',
-      'shift',
-      'export FIXTURE_SANDBOX_USED=1',
-      'exec "$@"',
-    ].join('\n'), { mode: 0o700 });
-    vi.stubEnv('CEZ_CODEX_BIN', sandbox);
-    vi.stubEnv('FIXTURE_PASSWORD', 'fixture-secret');
+    stubReplaySandbox();
     const riskyCheck = { id: 'external', command: 'exit 7', sideEffects: true };
     const localCheck = { id: 'local', command: 'test "$FIXTURE_SANDBOX_USED" = 1 && printf verified' };
     const workflow: WorkflowDef = graph ? def({

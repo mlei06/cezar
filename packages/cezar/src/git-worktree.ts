@@ -314,7 +314,7 @@ function refuseBelowDiskFloor(worktreePath: string): void {
 interface CreateWorktreeOptions {
   branch?: string;
   onCreated?: (startCommit: string) => void;
-  skipCheckoutHooks?: boolean;
+  isolatedReplay?: boolean;
 }
 
 export async function createWorktree(
@@ -325,6 +325,12 @@ export async function createWorktree(
 ): Promise<WorktreeInfo> {
   const {materialized: _materialized, ...info} = await createWorktreeWithOutcome(repoRoot, runId, baseBranch, opts);
   return info;
+}
+
+export async function hasReplayCommit(repoRoot: string, commit: string): Promise<boolean> {
+  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(commit)) return false;
+  const result = await git(repoRoot, ['rev-parse', '--verify', '--quiet', `${commit}^{commit}`]);
+  return result.ok && result.stdout.trim() === commit.toLowerCase();
 }
 
 /** Internal generation boundary; the public helper retains its original response shape. */
@@ -349,8 +355,18 @@ export async function createWorktreeWithOutcome(
   if (!isSafeGitRef(branch)) throw new Error(`refusing option-like branch name: ${branch}`);
   const absolutePath = join(canonicalPath(repoRoot), WORKTREES_DIR, runId);
   const branchRef = `refs/heads/${branch}`;
-  const checkout = (args: string[]) => git(repoRoot, opts.skipCheckoutHooks
-    ? ['-c', 'core.hooksPath=/dev/null', ...args] : args);
+  const checkoutOptions: string[] = [];
+  if (opts.isolatedReplay) {
+    const config = await git(repoRoot, ['config', '--null', '--list', '--name-only']);
+    if (!config.ok) throw new Error('Replay could not read the repository checkout configuration.');
+    checkoutOptions.push('-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false');
+    for (const key of new Set(config.stdout.split('\0'))) {
+      if (/^filter\..+\.(process|smudge)$/.test(key)) checkoutOptions.push('-c', `${key}=`);
+    }
+    // An active required filter still fails the checkout instead of using its pointer file.
+  }
+  const checkout = (args: string[]) => git(repoRoot, [...checkoutOptions, ...args],
+    opts.isolatedReplay ? { env: { ...process.env, GIT_NO_LAZY_FETCH: '1', GIT_NO_REPLACE_OBJECTS: '1' } } : {});
 
   // A missing directory can leave stale administrative metadata behind.
   // Prune first so the checks below describe the filesystem as it exists now.

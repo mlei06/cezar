@@ -177,7 +177,7 @@ export class WorktreeLifecycleCoordinator {
     if (this.runs.getRun(runId)?.replayOf) {
       if (signal?.aborted) throw new Error('Preparation cancelled before materialization');
       const wt = await this.materialize(choice, branch => createWorktree(this.root, runId, base, {
-        branch, onCreated, skipCheckoutHooks: true,
+        branch, onCreated, isolatedReplay: true,
       }));
       return { ready: true, ...wt };
     }
