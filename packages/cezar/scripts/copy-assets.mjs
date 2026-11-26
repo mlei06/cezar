@@ -14,4 +14,11 @@ for (const asset of ASSETS) {
   mkdirSync(dirname(to), { recursive: true });
   copyFileSync(join(pkg, 'src', asset), to);
 }
-console.log(`copy-assets: ${ASSETS.length} files → dist/`);
+const scorerNames = ['outcome', 'efficiency', 'procedure', 'scope'];
+for (const name of scorerNames) {
+  const asset = join(name, 'scorer.md');
+  const to = join(pkg, 'dist/factory/scorers', asset);
+  mkdirSync(dirname(to), { recursive: true });
+  copyFileSync(join(pkg, '../..', '.ai/cezar/scorers', asset), to);
+}
+console.log(`copy-assets: ${ASSETS.length + scorerNames.length} files → dist/`);
