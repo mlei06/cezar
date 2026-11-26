@@ -32,6 +32,8 @@ describe('task metrics', () => {
       id: 'fixture', title: 'Fixture', task: 't', workflow: 'example', status: 'done', archived: false,
       createdAt: at(0), startedAt: at(1000), finishedAt: at(4000), steps: [], tokensUsed: 0,
     };
+    const queued = { ...run, status: 'queued' as const, startedAt: undefined, finishedAt: undefined };
+    expect(summarizeRunMetrics(queued, [], base + 100_000).wallMs).toBe(0);
     const legacy = summarizeRunMetrics(run, []);
     expect(runMetricsSchema.parse(legacy)).toMatchObject({ wallMs: 3000, toolCalls: 0, startedBy: 'owner' });
     expect(legacy.requests).toBeUndefined();

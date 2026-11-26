@@ -98,7 +98,7 @@ export function summarizeRunMetrics(run: RunRecord, events: readonly RunEvent[],
   const observedModel = actualModel ?? model;
   const cacheReadTokens = cacheRead ?? stats?.cacheReadTokens;
   const begin = Date.parse(run.startedAt ?? run.createdAt);
-  const end = run.finishedAt ? Date.parse(run.finishedAt) : now;
+  const end = run.finishedAt ? Date.parse(run.finishedAt) : run.startedAt ? now : begin;
   const checks = run.steps.filter((step) => step.kind === 'check' &&
     (!run.workflowDef?.graph || run.workflowDef.graph.nodes.some((node) => node.id === step.id && node.type === 'check')));
   return {
