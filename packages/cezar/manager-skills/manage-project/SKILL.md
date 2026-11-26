@@ -32,6 +32,8 @@ Before planning or claiming something is missing, run the relevant discovery com
 
 Pick the workflow before writing the brief. Prefer a project workflow that covers the job. Use `plan` for read-only investigation, `implement` for changes, `operate` for known operations and `review-pr` for an independent review. When work repeats, propose a project workflow and use a task with `write-cezar-workflow` to add and validate it.
 
+If the workflow has a PR step, let Cezar publish after validation. Brief the agent on the change and its acceptance checks. Leave push, PR creation and marking ready to Cezar.
+
 Use `cez-manager task create --project <id> --title "<short title>" --workflow <workflow> "<brief>"`. Select a relevant task skill with `--skill`. Use `--runner`, `--account`, `--model`, `--effort`, `--secrets` and `--budget-*` for explicit task choices when needed. Step settings take precedence over task defaults. Use the workspace's actual `maxParallel` and current account capacity.
 
 Use `operate` for a known playbook or routine report. Use `--model high-reasoning` when the task needs heavy reasoning and its workflow leaves the model open. Leave the runner and model open for ordinary work so Cezar can use the project defaults and account readings.

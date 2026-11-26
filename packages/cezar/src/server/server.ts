@@ -230,7 +230,7 @@ import {
   sweepPendingAccounts,
 } from '../workspace/managed-accounts.ts';
 import { WORKFLOWS_DIR, loadWorkflows, modelAlias, resolveWorkflowModelAlias } from '../workflows/load.ts';
-import { workflowCapabilities } from '../workflows/capabilities.ts';
+import { hasPrPublishStep, workflowCapabilities } from '../workflows/capabilities.ts';
 import {
   NODE_CATALOG,
   graphIssues,
@@ -6609,8 +6609,15 @@ export function createApp(deps: ServerDeps) {
       const { root: repoRoot, dataDir, store, manager } = c.get('project');
       const draft = c.req.valid('json').draft ?? true;
       const id = c.req.param('id');
-      if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
-      if (manager.isActive(id)) return c.json({ error: 'run is still active — wait for the review gate' }, 409);
+      const activeRun = store.getRun(id);
+      if (!activeRun) return c.json({ error: 'not found' }, 404);
+      if (manager.isActive(id)) {
+        return c.json({
+          error: hasPrPublishStep(activeRun.workflowDef)
+            ? 'run is still active — finish the agent step so the workflow can publish the PR'
+            : 'run is still active — wait for the review gate',
+        }, 409);
+      }
       const run = (await withRestoredWorktree(c.get('project'), store.getRun(id)))!;
       // A pull-request head run's branch holds the whole foreign PR under this run's changes: a
       // draft PR from it into the default base would re-propose that PR (spec

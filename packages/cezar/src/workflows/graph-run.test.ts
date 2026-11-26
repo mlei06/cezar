@@ -152,9 +152,10 @@ describe('graph workflows run through RunManager', () => {
   });
 
   it.each([
-    { forge: 'GitHub', needsRepair: false, remote: null, url: /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/777$/ },
-    { forge: 'Azure', needsRepair: true, remote: 'https://dev.azure.com/test/project/_git/repo', url: /^https:\/\/dev\.azure\.com\/test\/project\/_git\/repo\/pullrequest\/777$/ },
-  ])('opens a $forge PR with agent changes after ordered checks pass', async ({ needsRepair, remote, url }) => {
+    { forge: 'GitHub', source: 'manual', needsRepair: false, remote: null, url: /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/777$/ },
+    { forge: 'Azure', source: 'manual', needsRepair: false, remote: 'https://dev.azure.com/test/project/_git/repo', url: /^https:\/\/dev\.azure\.com\/test\/project\/_git\/repo\/pullrequest\/777$/ },
+    { forge: 'Azure', source: 'manager', needsRepair: true, remote: 'https://dev.azure.com/test/project/_git/repo', url: /^https:\/\/dev\.azure\.com\/test\/project\/_git\/repo\/pullrequest\/777$/ },
+  ])('publishes one $forge PR for a $source task after ordered checks pass', async ({ source, needsRepair, remote, url }) => {
     if (remote) await run('git', ['remote', 'add', 'origin', remote], { cwd: repoRoot });
     const second = 'echo second >> checks.log; echo check-rewrite > a.txt';
     writeFileSync(join(repoRoot, '.ai/agentic.config.json'), JSON.stringify({ validation: { commands: [
@@ -170,7 +171,20 @@ describe('graph workflows run through RunManager', () => {
     try {
       const workflow = await builtin('implement');
       expect(workflow.graph?.nodes.some((node) => node.type === 'gate.human')).toBe(false);
-      const id = manager.startRun(workflow, { task: 'implement change', worktree: false }).id;
+      const app = createApp({ repoRoot, store, manager, version: 'test' });
+      const response = await apiRequest(app, '/api/v1/runs', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          workflow: 'implement',
+          task: 'Implement the change and open a regular PR.',
+          ...(source === 'manager' ? { startedByManager: { id: 'fixture', name: 'Fixture manager' } } : {}),
+        }),
+      });
+      expect(response.status).toBe(201);
+      const { id } = await response.json() as { id: string };
+      const early = await apiRequest(app, `/api/v1/runs/${id}/pr`, { method: 'POST' });
+      expect(early.status).toBe(409);
+      expect(await early.json()).toEqual({ error: 'run is still active — finish the agent step so the workflow can publish the PR' });
       const final = await settle(id);
       expect(final.status, final.error).not.toBe('failed');
       const cwd = final.worktreePath!;
@@ -179,6 +193,7 @@ describe('graph workflows run through RunManager', () => {
       expect(final.graphState?.loops?.retry ?? 0).toBe(needsRepair ? 1 : 0);
       expect(final.graphState?.taken).toContain('check-2.pass->pr');
       expect(publish).toHaveBeenCalledTimes(1);
+      expect(launch.mock.calls[0]?.[0]?.systemPrompt).toContain('Do not push, open a PR, or mark a PR ready yourself');
       expect(publish.mock.calls[0]?.[0].draft ?? true).toBe(true);
       expect(final.pullRequestUrl).toMatch(url);
       expect(store.readEvents(id).some((event) => event.type === 'ask.requested')).toBe(false);
@@ -186,6 +201,38 @@ describe('graph workflows run through RunManager', () => {
       expect(stdout.trim()).toBe('agent-change.txt');
     } finally {
       publish.mockRestore();
+      launch.mockRestore();
+    }
+  }, 30_000);
+
+  it.each([true, false])('sets publication guidance based on a custom graph PR step: %s', async (publishes) => {
+    const original = CodexAppServerRunner.prototype.startSession;
+    const launch = vi.spyOn(CodexAppServerRunner.prototype, 'startSession').mockImplementationOnce(function (this: CodexAppServerRunner, ...args) {
+      writeFileSync(join(args[0].cwd, 'custom-change.txt'), 'Custom change\n');
+      return original.apply(this, args);
+    });
+    try {
+      const workflow = def({
+        nodes: [
+          { id: 'start', type: 'start' },
+          { id: 'edit', type: 'agent', runner: 'codex', prompt: 'Change the file and open a regular PR.' },
+          { id: 'check', type: 'check', command: 'true' },
+          ...(publishes ? [{ id: 'publish', type: 'github.draft-pr' } as const] : []),
+          { id: 'end', type: 'end', status: 'success' },
+        ],
+        edges: [
+          { from: 'start', to: 'edit' },
+          { from: 'edit.done', to: 'check' },
+          { from: 'check.pass', to: publishes ? 'publish' : 'end' },
+          ...(publishes ? [{ from: 'publish.created', to: 'end' }] : []),
+        ],
+      });
+      const final = await settle(manager.startRun(workflow, { task: 'Edit the file' }).id);
+      expect(final.status).not.toBe('failed');
+      expect(Boolean(final.pullRequestUrl)).toBe(publishes);
+      const guidance = 'Do not push, open a PR, or mark a PR ready yourself';
+      expect(launch.mock.calls[0]?.[0]?.systemPrompt?.includes(guidance)).toBe(publishes);
+    } finally {
       launch.mockRestore();
     }
   }, 30_000);
