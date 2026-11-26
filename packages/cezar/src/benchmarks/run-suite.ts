@@ -86,7 +86,7 @@ async function replayTarget(project: BenchmarkProject, task: BenchmarkTask, work
 }
 
 export async function runBenchmarkSuite(project: BenchmarkProject, name: string, suite: BenchmarkSuite,
-  tasks: ReadonlyMap<string, BenchmarkTask>, config?: string): Promise<{ batch: BenchmarkMatrixRun } | { reason: string }> {
+  tasks: ReadonlyMap<string, BenchmarkTask>, config?: string, workflowOverrides?: readonly WorkflowDef[]): Promise<{ batch: BenchmarkMatrixRun } | { reason: string }> {
   const choices = config ? suite.configurations.filter(({ name }) => name === config) : suite.configurations;
   if (!choices.length) return { reason: 'The suite has no configuration with that name.' };
   if (tasks.size * choices.length * suite.times > MAX_REPLAYS) {
@@ -108,7 +108,7 @@ export async function runBenchmarkSuite(project: BenchmarkProject, name: string,
     const batch: BenchmarkMatrixRun = { id: randomUUID(), suite: name, createdAt: new Date().toISOString(), scorers: suite.scorers, runs: [] };
     const plans: PlannedRun[] = [];
     for (const [taskId, task] of tasks) {
-      const workflow = catalog.workflows.find((entry) => entry.name === task.workflow);
+      const workflow = (workflowOverrides ?? catalog.workflows).find((entry) => entry.name === task.workflow);
       const available = workflow && await hasReplayCommit(project.root, task.startCommit);
       const groupId = randomUUID();
       let variant = 0;
@@ -125,6 +125,9 @@ export async function runBenchmarkSuite(project: BenchmarkProject, name: string,
           plans.push({ ...target, input: { ...target.input, benchmarkRunId: runId }, group: { groupId, variant: String(++variant) } });
         }
       }
+    }
+    if (workflowOverrides && batch.runs.some(({ state }) => state === 'unavailable')) {
+      return { reason: 'A required benchmark route is unavailable in the replay sandbox.' };
     }
     atomicWriteJsonSync(join(dir, batch.id + '.json'), batch);
     for (const { workflow, input, group } of plans) project.manager.startRun(workflow, input, group);
