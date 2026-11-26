@@ -150,6 +150,12 @@ export const modelUsageSchema = z.object({
 });
 export type ModelUsage = z.infer<typeof modelUsageSchema>;
 
+export const harnessVersionSchema = z.object({
+  id: z.string(),
+  commit: z.string().optional(),
+});
+export type HarnessVersion = z.infer<typeof harnessVersionSchema>;
+
 /** One step of a run's chain. */
 export const stepStateSchema = z.object({
   id: z.string(),
@@ -168,6 +174,9 @@ export const stepStateSchema = z.object({
   usageTurnsRecorded: usageCounterSchema.optional(),
   usageInvocationEpoch: usageCounterSchema.optional(),
   startedAt: z.string().optional(),
+  /** Starting revision and harness for a Continue step, independent of the original run. */
+  startCommit: z.string().optional(),
+  harnessVersion: harnessVersionSchema.optional(),
   finishedAt: z.string().optional(),
   error: z.string().optional(),
   /** Latest agent session id — `claude --resume <id>` and friends. */
@@ -510,6 +519,9 @@ export const runRecordSchema = z.object({
     .optional(),
   /** Stable baseline for session git views: a worktree's fork ref, or an in-place run's starting commit. */
   baseBranch: z.string().optional(),
+  /** Immutable fork revision (initial HEAD for an in-place run). */
+  startCommit: z.string().optional(),
+  harnessVersion: harnessVersionSchema.optional(),
   /** Set when count-based retention (#483) reclaimed the worktree DIRECTORY (the branch is
    *  kept): the dir is gone but recoverable. */
   worktreeReclaimedAt: z.string().optional(),

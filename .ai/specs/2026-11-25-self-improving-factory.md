@@ -1,6 +1,6 @@
 # The self-improving factory
 
-Status: draft v5.17, 2026-11-25. Fork: `mlei06/cezar`, trunk `factory`. Spec owner: the overseer (see the roadmap). Implementation plan: `2026-11-25-self-improving-factory-roadmap.md`. Findings during the build: `2026-11-25-self-improving-factory-observations.md`.
+Status: draft v5.18, 2026-11-25. Fork: `mlei06/cezar`, trunk `factory`. Spec owner: the overseer (see the roadmap). Implementation plan: `2026-11-25-self-improving-factory-roadmap.md`. Findings during the build: `2026-11-25-self-improving-factory-observations.md`.
 
 ## TLDR
 
@@ -203,7 +203,7 @@ edges:
   - { from: report.done, to: done }
 ```
 
-The manager picks the workflow with `--workflow`. `--model`, `--skill`, `--secrets` and the `--budget-*` flags override single settings for one task. Model routing lives in workflow files, where an improvement run can change it in a one-line, reviewed diff. `manage-project` says only: pick the workflow that fits, and propose a project workflow when a kind of task recurs.
+The manager picks the workflow with `--workflow`. `--model`, `--skill`, `--secrets` and the `--budget-*` flags override single settings for one task. Project workflows can pin or select a model in a reviewed diff. Tasks without a model pin follow the delegated-task policy. `manage-project` tells the manager to pick a fitting workflow, select the reasoning tier when needed, and propose a project workflow when a kind of task recurs.
 
 ### D3. Agents know what they have
 
@@ -419,6 +419,8 @@ Cezar enforces this. A PR that touches a protected path is marked owner-only, an
 - `startCommit`, the exact commit its worktree forked from;
 - `harnessVersion`, the self-update version id it ran under, with its commit.
 
+In-place runs use the checked-out commit at the start of execution. A Continue step records its own starting HEAD and running harness version on the step, preserving the run's original identity for replay. A non-Git run has no `startCommit`. A standalone install uses its package version as the id. If the install lacks commit metadata, the harness commit is unknown and exact replay is unavailable.
+
 These join the run's existing snapshots of its workflow definition (`workflowDef`) and saved instructions (`systemPrompt`). With its original inputs (brief, attachments, runner, model, effort, skill), that's enough to reproduce a run. The worktree isn't needed: it's the run's output, not its input. Today Cezar records only the base branch's name and works out the fork point later from git's reflog, which expires, so recording these must start early. Runs from before the change can't be replayed exactly.
 
 **Replay.** `cez replay <run>` reruns a task from its `startCommit` with its original inputs, and changes at most one thing:
@@ -583,7 +585,7 @@ The manager still never writes code itself (every change is a task, D11), and ha
 | Harness queue | `~/.cezar/factory/harness-queue.json` | workspace-wide |
 | Improvements | `.ai/cezar/factory/improvements.json` | run, clusters, decisions, PR, merge commit, before/after |
 | Benchmark results | `.ai/cezar/factory/benchmarks/<suite>/<at>.json` | one matrix per run |
-| Run identity | the run record: `startCommit`, `harnessVersion` | written at run start, beside the existing `workflowDef` and `systemPrompt` snapshots |
+| Run identity | `startCommit`, `harnessVersion` on the run and on Continue steps | written at run or Continue start, beside the existing run snapshots |
 | Replay source | the run record: `replayOf` (run id), `replayChange` (what was changed), and the existing `groupId`/`variant` | replays are variants |
 | Installed harness versions | `~/.cezar/versions/<id>` (self-update's layout) | unchanged |
 | Harness build worktrees | `~/.cezar/factory/builds/<sha>` | one per release; pruned with its version |
@@ -825,6 +827,8 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
 4. **Scoring the managers:** apply the same metrics, scorers and improvement to manager turns, after D6.
 
 ## Changelog
+
+- **v5.18:** D8 records initial and Continue identity separately, and specifies the representation when the project commit or harness commit is unavailable.
 
 - **v5.17:** D2 keeps ordinary tasks on project defaults, adds the high-reasoning alias and configurable usage threshold to existing account selection, and adds cached admission-time probing and ordered hosted fallbacks for the low tier. Manager chat stays user-selected.
 

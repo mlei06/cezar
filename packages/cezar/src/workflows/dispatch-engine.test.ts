@@ -170,7 +170,7 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
     }, 40_000);
 
     it('creates a child forked off the parent branch, with its order, budget and tree files', async () => {
-      reboot({ maxParallel: 1, maxMonitoringSessions: 0 });
+      reboot({ maxParallel: 2, maxMonitoringSessions: 0 });
       const parent = await parkedRoot(20);
       const created = dispatchOk(parent.id, order('mock:done take the left flank', {
         title: 'Take the left flank',
@@ -186,6 +186,10 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
       // The child forks off the PARENT's branch, which is what `execute()` reads.
       expect(child?.baseBranch).toBe(store.getRun(parent.id)?.branch);
       expect(child?.baseBranch).toMatch(/^cez\//);
+      await waitFor(created.id, (r) => Boolean(r?.startCommit));
+      const parentTip = await run('git', ['rev-parse', child!.baseBranch!], { cwd: repoRoot });
+      expect(store.getRun(created.id)?.startCommit).toBe(parentTip.stdout.trim());
+      expect(store.getRun(created.id)?.harnessVersion).toEqual(store.getRun(parent.id)?.harnessVersion);
       // The task order the child receives — its own scope, the fork point, its files.
       expect(child?.task).toContain('## Task order');
       expect(child?.task).toContain('- Scope: src/left/**');

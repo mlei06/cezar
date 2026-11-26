@@ -107,6 +107,7 @@ import { commentOnIssue, commentOnPr, fetchPrWatchFingerprint, findBranchPr, res
 import { baseDivergence, createOrSwitchBranch } from '../server/git-changes.ts';
 import { isReadOnlyWorkflow, readOnlyWorkflowRefusal } from './capabilities.ts';
 import { getHeadCommit, getRepoInfo } from '../server/git.ts';
+import { runHarnessVersion } from '../self-update/run-version.ts';
 import { loadWorkflows, newerCatalogWorkflow, resolveWorkflowModelAlias } from './load.ts';
 import { capabilityPrompt } from './capability-prompt.ts';
 import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/store.ts';
@@ -6546,12 +6547,17 @@ export class RunManager {
     this.prepareAutomationsSession(state);
     this.prepareArtifactsSession(runId, state);
 
+    const [startCommit, harnessVersion] = await Promise.all([getHeadCommit(state.cwd), runHarnessVersion()]);
     // Cancellation may have retired this continuation while its async preparation was running.
     // Do not let the late promise make a durably cancelled run look active again.
     if (state.cancelled) {
       this.dropActive(runId, state);
       return;
     }
+    this.store.updateStep(runId, stepId, {
+      ...(startCommit ? { startCommit } : {}),
+      harnessVersion,
+    });
 
     let stepCost = 0;
     let turnText = '';
@@ -7253,9 +7259,16 @@ export class RunManager {
       // An unresolvable task-level model surfaces loudly at the step below; the
       // metadata echo stays absent rather than guessing.
     }
+    const startingRun = !resumeStep && !resumedWorkflow && !original?.startedAt;
+    const initialHarnessVersion = startingRun ? await runHarnessVersion() : undefined;
+    if (state.cancelled) {
+      this.dropActive(runId, state);
+      return;
+    }
     this.store.updateRun(runId, {
       status: 'running',
       startedAt: (resumeStep || resumedWorkflow ? original?.startedAt : undefined) ?? new Date().toISOString(),
+      ...(initialHarnessVersion ? { harnessVersion: initialHarnessVersion } : {}),
       runner: original?.agentSwitch?.workflow ? original.runner : taskBackend,
       systemPrompt: extraSystemPrompt,
       modelIdentity,
@@ -7442,7 +7455,12 @@ export class RunManager {
           : `worktree off — switched the repo working tree to ${switched.branch}`,
       });
       const startingCommit = await getHeadCommit(repo.root);
-      if (startingCommit) this.store.updateRun(runId, { baseBranch: startingCommit });
+      if (startingCommit) {
+        this.store.updateRun(runId, { baseBranch: startingCommit, ...(startingRun ? { startCommit: startingCommit } : {}) });
+      }
+    } else if (repo && startingRun && state.cwd === this.repoRoot && !state.cancelled) {
+      const startCommit = await getHeadCommit(repo.root);
+      if (startCommit && !state.cancelled) this.store.updateRun(runId, { startCommit });
     }
 
     // Handoff journal (spec 007) — seeded after the worktree exists so the

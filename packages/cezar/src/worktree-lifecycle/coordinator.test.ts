@@ -76,6 +76,18 @@ afterEach(async () => {
 // A flow can prepare, fail, retry and remove real worktrees. Its overall budget must cover
 // several operations; `settled` and the individual liveness checks keep their own deadlines.
 describe('worktree lifecycle coordinator with real Git and command fixtures', { timeout: 20_000 }, () => {
+  it('keeps the fork commit when a setup hook adds a commit', async () => {
+    const p = await project();
+    const startCommit = p.git('rev-parse', 'HEAD').trim();
+    await p.config([entry('git -c user.name=Test -c user.email=test@example.invalid commit --allow-empty -qm setup')]);
+    const prepared = await p.prepare();
+    expect(prepared.ready).toBe(true);
+    expect(p.git('rev-parse', prepared.branch).trim()).not.toBe(startCommit);
+    expect(p.records.get(p.id)?.startCommit).toBe(startCommit);
+    expect((await p.prepare()).ready).toBe(true);
+    expect(p.records.get(p.id)?.startCommit).toBe(startCommit);
+  });
+
   it.skipIf(process.platform === 'win32')('shutdown drains the script process group before persisting stopped recovery state', async () => {
     const p = await project();
     await p.config([entry('sleep 120 & child=$!; printf "%s" "$child" > child.pid; wait')]);
