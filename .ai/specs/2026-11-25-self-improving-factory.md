@@ -841,7 +841,7 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
 
 **Acceptance:**
 - Rerunning the first end-to-end test's deploy request needs no round trip to the owner for access, and its tasks stay within budget.
-- Every finished task shows Outcome and Efficiency within a minute when the judge is up.
+- Every finished task shows Outcome and Efficiency within two minutes when the judge is up (v5.35; a self-hosted judge measured 65–82 s on real transcripts).
 - Within two weeks of D6 shipping, at least one project improvement PR and one harness improvement PR have merged, and the failure rates of their clusters have dropped.
 - The overseer's calibration (roadmap M3) shows the judge agreeing with the overseer on pass/fail for at least 80% of sampled runs, and on the main cause's target for at least 70%.
 
@@ -854,6 +854,7 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
 
 ## Changelog
 
+- **v5.35:** the scoring latency target is two minutes, not one. Measured on the installed build, the self-hosted judge needs 65–82 s for Outcome on real transcripts, and the queue already gives Outcome and Efficiency priority. Reaching 60 s would mean a hosted judge, which sends transcripts off the owner's network, against D5's reason for a self-hosted one. Calibration is reliable (observations C-5). The overseer revised it as spec owner; the owner can restore one minute with a faster judge route.
 - **v5.38:** D6 scans the checked public harness improvement commit range for known private run references before the forge push. This covers commit messages and added lines in every outgoing commit. A hit or an unreadable range returns the batch for a clean candidate.
 - **v5.37:** D8 releases an improvement's queue slot while it waits for its own benchmark. Failed, interrupted and timed-out gates cancel their remaining queued or active replay variants. An automatic matrix includes a configuration that inherits the exact candidate workflow's agent selection.
 - **v5.36:** D5 prioritizes ready Outcome and Efficiency during a run's first minute. A single worker processes each ready priority group newest first.

@@ -41,6 +41,22 @@ These instructions apply when the owner restarts the harness manager. It remains
 
 ## Open overseer items
 
+- **Where the program stands (2026-11-27 03:50 UTC):** M0, M1, M1.5, M2, M3, M4 and M6 are done; M5 is released and waiting on real use. Definition of done:
+  1. Every milestone's acceptance holds: yes, except M5's real-use items.
+  2. The deployment project's one-message bug-to-production run: not run. Production deploys of other projects aren't delegated.
+  3. Improvement PRs merged with measured drops: one harness improvement (#41) merged and released. Its before/after numbers come after 10 scored runs on `51781d3`. No project improvement yet.
+  4. The harness ships its own releases with a demonstrated automatic rollback: shipped through the protected workflow; rollback proven in fixtures, not live.
+  5. Calibration of at least 80% pass/fail: yes, adjudicated (C-5).
+
+  **Owner decisions pending**, with the overseer's recommendations:
+  - read-only `git show` in `plan`: yes;
+  - `gh` on the service PATH: yes; checks inside read-only reviews: no;
+  - `az repos pr show` in the Azure review grant: yes;
+  - a post-release verification step in `harness-release`: yes;
+  - the procedure rubric on harness-blocked steps (C-3): clarify it;
+  - the history cleanup;
+  - `wsl --shutdown`.
+
 - **Blind calibration batch 2 (C-1 to C-5):** 26 of 35 blind (74%), 31 of 35 adjudicated (89%). The judge caught two real failures the overseer missed: the charter checks blocked by a missing Bash grant, the same `plan` permission gap escalated in A-5. The judge is reliable on pass/fail. Owner decision C-3: whether the procedure rubric should stop failing agents for steps the harness refused. M3 still has the one-minute latency open (B25).
 
 - **Owner decisions escalated by the second harness improvement run (A-5):**
