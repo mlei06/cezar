@@ -116,6 +116,8 @@ export function prepareRestrictedCodexHome(
       GIT_CONFIG_KEY_1: 'core.pager', GIT_CONFIG_VALUE_1: 'cat',
       GIT_CONFIG_KEY_2: 'core.hooksPath', GIT_CONFIG_VALUE_2: '/dev/null',
       GIT_CONFIG_KEY_3: 'protocol.allow', GIT_CONFIG_VALUE_3: 'never',
+      // Empty on purpose: when set, git consults only this list, so no transport or helper is allowed (#45).
+      GIT_ALLOW_PROTOCOL: '',
       GIT_NO_LAZY_FETCH: '1', GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0',
       GH_PROMPT_DISABLED: '1', GH_PAGER: 'cat', GH_BROWSER: 'false',
       RIPGREP_CONFIG_PATH: '',

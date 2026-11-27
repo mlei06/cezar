@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CodexAppServerRunner } from '../core/codex-app-server-runner.ts';
+import { GIT_SHOW_AT_REF } from '../core/read-grants.ts';
 import { mockCodexPath } from '../core/codex-app-server-transport.ts';
 import { mergeWriteWorkspaceConfig } from '../workspace/config.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
@@ -753,7 +754,7 @@ describe('graph workflows run through RunManager', () => {
     const final = await settle(id);
     expect(final.status).not.toBe('failed');
     expect(final.readOnly).toBe(true);
-    expect(final.steps[0]?.toolPolicy).toMatchObject({ enforceReadOnly: true, allowedTools: ['Read', 'Grep', 'Glob'] });
+    expect(final.steps[0]?.toolPolicy).toMatchObject({ enforceReadOnly: true, allowedTools: ['Read', 'Grep', 'Glob', 'Bash'], bashAllowlist: [GIT_SHOW_AT_REF] });
     expect(final.pullRequestUrl).toBeUndefined();
   }, 30_000);
 
@@ -773,7 +774,7 @@ describe('graph workflows run through RunManager', () => {
       expect(final).toMatchObject({ readOnly: true, enforceReadOnly: true, worktree: false });
       expect(final.branch).toBeUndefined();
       expect(final.worktreePath).toBeUndefined();
-      expect(final.steps[0]?.toolPolicy).toMatchObject({ enforceReadOnly: true, allowedTools: ['Read', 'Grep', 'Glob'] });
+      expect(final.steps[0]?.toolPolicy).toMatchObject({ enforceReadOnly: true, allowedTools: ['Read', 'Grep', 'Glob', 'Bash'], bashAllowlist: [GIT_SHOW_AT_REF] });
     }
     const { stdout } = await run('git', ['branch', '--format=%(refname:short)'], { cwd: repoRoot });
     expect(stdout.trim()).toBe('main');

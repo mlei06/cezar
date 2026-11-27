@@ -6,9 +6,11 @@ import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent, AgentRunResult, AgentRunSpec, RunnerId } from '../core/agent-runner.ts';
 import { RunStore } from '../runs/store.ts';
-import { RunManager } from './run.ts';
+import { RunManager, replayMode } from './run.ts';
+import { buildClaudeArgs } from '../core/claude-cli-runner.ts';
 import { graphToSteps, type WorkflowGraph } from './graph.ts';
 import { PLAN, REVIEW_PR } from './templates.ts';
+import { GIT_SHOW_AT_REF } from '../core/read-grants.ts';
 
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
@@ -84,7 +86,7 @@ describe('a read-only workflow', { timeout: 30_000 }, () => {
     for (const { backend, spec } of captured.launches) {
       expect(backend).toBe('codex');
       expect(spec).toMatchObject({
-        enforceReadOnly: true, allowedTools: ['Read', 'Grep', 'Glob'], mcpServers: [],
+        enforceReadOnly: true, allowedTools: ['Read', 'Grep', 'Glob', 'Bash'], bashAllowlist: [GIT_SHOW_AT_REF], mcpServers: [],
         env: { GH_TOKEN: '', GITHUB_TOKEN: '', GIT_TERMINAL_PROMPT: '0' },
       });
       expect(spec.bypassPermissions).toBeUndefined();
@@ -109,6 +111,50 @@ describe('a read-only workflow', { timeout: 30_000 }, () => {
         JSON.stringify(event).includes('kimi cannot keep a read-only task'))).toBe(true);
     }, { timeout: 15_000 });
     expect(store.getRun(second)?.steps.at(-1)?.sessionId).toBeUndefined();
+  });
+
+  it('keeps Plan\'s shell denied on Claude, and drops the Codex grant when a Codex Plan continues there', async () => {
+    const id = manager!.startRun(PLAN, { task: 'inspect the repo', runner: 'codex' }).id;
+    await terminal(id);
+    expect(manager!.continueRun(id, { text: 'investigate further', runner: 'claude' })).toEqual({ ok: true });
+    await vi.waitFor(() => expect(captured.launches).toHaveLength(2), { timeout: 15_000 });
+    await terminal(id);
+    const second = manager!.startRun(PLAN, { task: 'inspect the repo', runner: 'claude' }).id;
+    await vi.waitFor(() => expect(captured.launches).toHaveLength(3), { timeout: 15_000 });
+    await terminal(second);
+    expect(captured.launches.map(({ backend }) => backend)).toEqual(['codex', 'claude', 'claude']);
+    for (const { spec } of captured.launches.slice(1)) {
+      expect(spec).toMatchObject({ enforceReadOnly: true, allowedTools: ['Read', 'Grep', 'Glob'], mcpServers: [] });
+      expect(spec.bashAllowlist).toBeUndefined();
+      expect(spec.bypassPermissions).toBeUndefined();
+      // Claude's own read-only denial of Bash stays in force.
+      const args = buildClaudeArgs(spec);
+      expect(args[args.indexOf('--disallowedTools') + 1]!.split(',')).toContain('Bash');
+      expect(args[args.indexOf('--allowedTools') + 1]).toBe('Read,Grep,Glob');
+    }
+  });
+
+  it('attaches the grant at execution only: the saved Plan definition is unchanged and still replays', async () => {
+    const id = manager!.startRun(PLAN, { task: 'inspect the repo', runner: 'codex' }).id;
+    await terminal(id);
+    const record = store.getRun(id)!;
+    expect(record.steps[0]?.toolPolicy).toMatchObject({ allowedTools: ['Read', 'Grep', 'Glob', 'Bash'], bashAllowlist: [GIT_SHOW_AT_REF] });
+    const work = record.workflowDef!.graph!.nodes.find((node) => node.id === 'work')!;
+    expect(work).toMatchObject({ allowedTools: ['Read', 'Grep', 'Glob'] });
+    expect(work).not.toHaveProperty('bashAllowlist');
+    expect(record.workflowDef!.steps.every((step) => step.bashAllowlist === undefined)).toBe(true);
+    expect(replayMode(record.workflowDef!)).toBe('agent');
+  });
+
+  it('drops the grant name from any other workflow that names it', async () => {
+    const graph: WorkflowGraph = {
+      ...PLAN.graph!,
+      nodes: PLAN.graph!.nodes.map((node) => node.type === 'agent' ? { ...node, allowedTools: ['Read', 'Bash'], bashAllowlist: [GIT_SHOW_AT_REF] } : node),
+    };
+    manager!.startRun({ ...PLAN, name: 'custom-plan', source: 'file', graph, steps: graphToSteps(graph) }, { task: 'inspect', runner: 'codex' });
+    await vi.waitFor(() => expect(captured.launches).toHaveLength(1), { timeout: 15_000 });
+    expect(captured.launches[0]!.spec.allowedTools).toEqual(['Read']);
+    expect(captured.launches[0]!.spec.bashAllowlist).toBeUndefined();
   });
 
   it('launches on Claude with a read-only shell and no private MCP', async () => {
