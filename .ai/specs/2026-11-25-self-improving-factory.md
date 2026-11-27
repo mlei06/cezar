@@ -1,6 +1,6 @@
 # The self-improving factory
 
-Status: draft v5.38, 2026-11-26. Fork: `mlei06/cezar`, trunk `factory`. Spec owner: the overseer (see the roadmap). Implementation plan: `2026-11-25-self-improving-factory-roadmap.md`. Findings during the build: `2026-11-25-self-improving-factory-observations.md`.
+Status: draft v5.39, 2026-11-27. Fork: `mlei06/cezar`, trunk `factory`. Spec owner: the overseer (see the roadmap). Implementation plan: `2026-11-25-self-improving-factory-roadmap.md`. Findings during the build: `2026-11-25-self-improving-factory-observations.md`.
 
 ## TLDR
 
@@ -51,8 +51,8 @@ One task often has several causes in different places. That's why a failure carr
 - **Reuse before adding.** Extend Cezar's workflows, settings, metrics and automations; add a concept only when nothing existing can carry it.
 - **Fixes as pull requests.** Every improvement is a reviewed diff. Nothing rewrites factory files in place.
 - **Redrafts, not additions.** A self-improvement change rewrites the guidance it touches and removes what's outdated. Skills and AGENTS.md get shorter or stay the same length unless the PR says why.
-- **Policy is not factory.** What the loop may edit (workflows, skills, docs, code; scorer rubrics only with the owner) lives in repos. What governs the loop (thresholds, approvals, judge, scope) lives in settings, which the loop can't change.
-- **Nobody grades their own grader.** Changes to scorers, the judge, or the self-improvement workflow and skill always need the owner.
+- **Policy is not factory.** What the loop may edit (workflows, skills, docs, code, scorer rubrics) lives in repos. What governs the loop (thresholds, approvals, judge, scope) lives in settings, which the loop can't change.
+- **Nobody grades their own grader unseen.** Changes to scorers, the judge settings, `improve-factory` and its skill, and `harness-release` get the review D11.2 gives them: every self-improvement PR gets an independent review task (D6), a runtime change (including the `improve-factory` and `harness-release` workflows) gets one, and a skill, rubric or docs-only PR outside self-improvement merges after the manager's own diff check. The overseer audits each one after merge and reverts what weakens the grader (v5.39).
 - **Deterministic where possible.** Metrics, routing, triggers, guards and bookkeeping are code. Models do only the judging, clustering and writing.
 
 ## Glossary
@@ -157,7 +157,7 @@ steps:
 | `plan` | ordinary task route, read-only | 1.5M, 20 min | specs, investigation, design |
 | `review-pr` (exists) | ordinary task route, read-only | 1.5M, 20 min | PR review |
 | `operate` | the machine's low-reasoning model (`factory.models.lowReasoning`) | 800k, 20 min | running known workflows or scripts, status, summaries, moving docs |
-| `improve-factory` | project default | 4M, 45 min | improvement runs (D6); owner-protected |
+| `improve-factory` | project default | 4M, 45 min | improvement runs (D6) |
 
 **`implement` validates with check steps, not with the model.** Its graph is an agent step, then one check step per validation command, with a failing check looping back to the agent (at most twice). Waiting for the tests is then the engine's job. The commands come from the project's existing `.ai/agentic.config.json` (`validation.commands`, which the om-* skills already read). When the file is missing, or has no `validation.commands`, they come from the project's `test` script. With neither, `implement` runs no checks and opens the PR with a note that no validation is configured (v5.9). Guidance in a skill wasn't enough: the M0 warm-up task polled its test run across eight model turns although `factory-work` told it not to (observation M0-6).
 
@@ -399,18 +399,9 @@ Edge cases (v5.30):
 - `owner`: the owner approves;
 - `none`: the manager merges after the review task, with no person.
 
-Whatever the policy, these always need the owner:
-- changes to any scorer, the judge settings, `improve-factory` or its skill;
-- widening secrets or permissions;
-- more than 400 changed lines of product code.
+Whatever the policy, widening secrets or permissions needs the owner, and enabling the `credential-health` automation waits for the owner because it uses project secrets.
 
-Cezar enforces this. A PR that touches a protected path is marked owner-only, and the manager's merge of it is refused.
-
-**How (v5.31):**
-- **The paths:** the protected paths are `.ai/cezar/scorers/`, the `improve-factory` and `harness-release` workflow files, and any `skills/improve-factory/` folder.
-- **The check:** an autonomous manager's merge card is checked against the PR's changed files, renames included, before it runs. A hit leaves the card waiting for the owner with the reason, and the owner can approve it as usual.
-- **An unreadable file list** (a forge without the changes view) is held only when the project already has protected paths.
-- **Not yet covered:** the 400-line limit applies to improvement PRs, so it's checked once improvement runs record their PRs (the workflow slice). Widened secrets or permissions aren't repository paths and aren't detected here.
+There is no owner-protected path list (v5.39). An autonomous manager's merge doesn't look up the PR's changed files and isn't held for scorers, the judge settings, `improve-factory`, its skill, `harness-release` or the size of the diff. Those merges keep the ordinary gates: an independent review task for every self-improvement PR and otherwise D11.2's review split, checks on the exact head (a manager passes the reviewed full SHA, and a head that moved is refused), the manager's project access, and an explicit approval when the manager is not autonomous or the policy is `owner`. The overseer audits changes to scorers, the judge settings, `improve-factory` and `harness-release` after merge, and reverts or fixes forward what weakens them. Cezar adds no audit automation for this.
 
 **Scope.** A project's policy can limit what its improvement runs may touch: `docs`, `agents-md`, `skills`, `workflows`, `code`. The check step rejects changes outside it.
 
@@ -429,7 +420,6 @@ Cezar enforces this. A PR that touches a protected path is marked owner-only, an
 | Cooldown after a merge | 5 scored runs or 3 days | 10 scored runs on the new release |
 | At most in flight | 1, and none while its PR is open | 1 |
 | Approval | `manager`, after a review task | `manager`, after a review task; the release benchmarks and can roll back |
-| Always the owner | scorers, judge, `improve-factory`, secrets or permissions, more than 400 changed lines of product code | same |
 | Scope | docs, agents-md, skills, workflows, code | same |
 | Scorers sampled | all four on every run | same |
 | Task budget | 3M input tokens, 30 active minutes | same |
@@ -529,7 +519,7 @@ The harness uses exactly that:
 5. **Roll back** on any failure: `cezar use <previous id>`, restart, and report.
 6. **Report:** post the release notes (the merged PRs since the last release), the benchmark comparison and the switch result to the harness manager. Append every step to `~/.cezar/factory/release-log.ndjson`.
 
-The new pieces are waiting for idle, the health check with automatic rollback, the staging cockpit and the log. Linking, switching and the launchers are self-update's. The release script also removes old build worktrees (keeping 5) and their links. The workflow's own changes are owner-protected, like the grader.
+The new pieces are waiting for idle, the health check with automatic rollback, the staging cockpit and the log. Linking, switching and the launchers are self-update's. The release script also removes old build worktrees (keeping 5) and their links. The workflow is runtime, so a change to it gets a review task under D11.2, and the overseer audits it after merge, like the grader's (v5.39).
 
 **3. Attribution.** Every score records `harnessVersion` (the version id and its commit). After a release, the harness manager compares failure rates for the clusters the release's PRs targeted, once 10 runs have been scored on it. A release that made them worse is reverted with `harness-release --rollback`, which switches back and opens a revert PR.
 
@@ -556,7 +546,7 @@ These use Cezar's existing automations and manager jobs:
 
 Every manager works by these rules, which ship in the `manage-project` skill (and, for the harness project, `manage-harness`), so a manager dropped into any project behaves the same. They came out of running the harness project during M1. Project-specific rules stay in that project's AGENTS.md or its task skill, never in the manager skill.
 
-1. **Ungated by default.** A manager plans, briefs, reviews, merges and (where a release workflow exists) releases without waiting for the owner. Only D7's "Always the owner" list needs the owner. The owner audits afterwards: what the manager decided is recorded where the owner will read it (below).
+1. **Ungated by default.** A manager plans, briefs, reviews, merges and (where a release workflow exists) releases without waiting for the owner. There is no owner-only list (v5.39): D6's project approval policy and rule 4 cover explicit approvals and secrets or permissions. Changes to scorers, the judge settings, `improve-factory` and `harness-release` follow rule 2 (and D6's independent review for a self-improvement PR), and the overseer audits them after merge. The owner audits afterwards: what the manager decided is recorded where the owner will read it (below).
 2. **Reviews only for runtime changes.** A PR that changes anything that executes (product code, scripts, build, test or CI config, workflows) gets a review task before merging. A PR that only changes documentation, specs, skills or AGENTS.md merges after the manager's own diff check, with no review task.
 3. **Review stalemates.** At most two review rounds per PR. After that the manager decides: correctness bugs, data loss, secret-value leaks and security issues block the merge; anything else (edge cases, defense in depth, style) merges, with the remaining findings listed as follow-ups in the PR and the project's backlog. The manager reports the decision rather than asking.
 4. **Requirement ambiguities.** When the spec or brief is unclear, the manager decides in the direction that best fits the spec's decisions and reuse map, and keeps going. It records each decision under "Spec decisions" in the PR description and as one line in the project's observation or decision log, in the same PR. It stops for the owner only when a decision would contradict the spec outright or touch security, secrets or permissions.
@@ -820,7 +810,7 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
   - a manual start skips the threshold but not the guards;
   - nothing starts while a run is in flight or its PR is open, or during cooldown;
   - a failed run returns its causes.
-- **Approval:** a PR touching a protected path is owner-only, even under `none`, and the manager's merge is refused.
+- **Approval:** an autonomous manager merges a reviewed PR that changes scorers, `improve-factory`, its skill or `harness-release` without a changed-files lookup, at the reviewed head it passed (a moved head is refused); an explicit `owner` policy or a non-autonomous manager still waits for approval.
 - **Run identity:** every run records `startCommit` and `harnessVersion` at start, including dispatched children and Continue.
 - **Replay:**
   - a replay starts from the original's `startCommit` with its saved workflow and inputs, changes exactly the one thing asked, and joins the original's variant group;
@@ -854,6 +844,7 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
 
 ## Changelog
 
+- **v5.39:** the owner removed the owner-protected merge gate. D6 "Approval", the grader principle, D9 and D11.1 drop the protected path list, D7 drops its "Always the owner" row, the hold on unreadable file lists and the 400-line limit; an autonomous merge no longer looks up changed files. Independent review, exact-head checks, project access, explicit non-autonomous and `owner`-policy approval, the owner for widened secrets or permissions, and the `credential-health` enable guard stay. The overseer audits changes to scorers, the judge settings, `improve-factory` and `harness-release` after merge. Those changes get D11.2's review split: an independent review for every self-improvement PR and every runtime change, the manager's own diff check for a skill, rubric or docs-only PR outside self-improvement. A manager merge carries the reviewed full head SHA as a precondition. v5.31's history below is kept.
 - **v5.35:** the scoring latency target is two minutes, not one. Measured on the installed build, the self-hosted judge needs 65–82 s for Outcome on real transcripts, and the queue already gives Outcome and Efficiency priority. Reaching 60 s would mean a hosted judge, which sends transcripts off the owner's network, against D5's reason for a self-hosted one. Calibration is reliable (observations C-5). The overseer revised it as spec owner; the owner can restore one minute with a faster judge route.
 - **v5.38:** D6 scans the checked public harness improvement commit range for known private run references before the forge push. This covers commit messages and added lines in every outgoing commit. A hit or an unreadable range returns the batch for a clean candidate.
 - **v5.37:** D8 releases an improvement's queue slot while it waits for its own benchmark. Failed, interrupted and timed-out gates cancel their remaining queued or active replay variants. An automatic matrix includes a configuration that inherits the exact candidate workflow's agent selection.

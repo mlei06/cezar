@@ -157,15 +157,16 @@ import { managerConsumerId } from '../usage-ledger/report.ts';
 import { FACTORY_REPORT_JOB } from '../factory/report.ts';
 import { harnessImprovementRecordsPath, projectImprovementRecordsPath, readImprovementRecords } from '../improvement/bookkeeping.ts';
 import { CREDENTIAL_HEALTH } from '../factory/credential-health.ts';
-import { hasProtectedPaths, protectedChanges } from '../improvement/protection.ts';
 import { resolveImprovementSettings } from '../improvement/settings.ts';
-import { improvementPathScope } from '../improvement/workflow.ts';
 import { automationRunResponseSchema, FACTORY_IMPROVEMENT_AUTOMATION_ID, type AutomationRunResponse } from '@open-mercato/cezar-contract';
 
 /**
  * The manager turn engine (spec 2026-10-31-managers § Turns, § Watching, § Safety). One turn per
  * manager at a time, each a single resumed agent session, so a manager costs nothing while idle.
  */
+
+/** An automatic merge needs the head the caller reviewed; a forge-stamped head is not review evidence. */
+const NO_REVIEWED_HEAD = 'no reviewed head SHA was passed';
 
 export type ManagerRefusal = { error: string; status: 400 | 403 | 404 | 409 | 502 };
 
@@ -3612,11 +3613,19 @@ ${guidance}` : ''}`,
     if (action.type === 'connector-call') return { ...action, connectorName: connectorDisplayName(action.connector, this.deps.store.state(id).connectors).slice(0, 200) };
     const prefix = `/p/${encodeURIComponent(action.projectId)}`;
     if (action.type === 'merge-pr') {
-      const response = await this.forward(`${prefix}/github/prs/${action.number}/merge-state`);
+      // A reviewed head is compared with the live forge, never a cached read (factory D6, v5.39).
+      const response = await this.forward(`${prefix}/github/prs/${action.number}/merge-state${action.headSha !== undefined ? '?refresh=1' : ''}`);
       if (!response.ok) return ManagerEngine.refusalOf(response);
       const body = (await response.json()) as { available: boolean; reason?: string; mergeState?: { title: string; state: string; headSha: string } };
       if (!body.available || !body.mergeState) return { error: body.reason ?? 'GitHub merge is unavailable', status: 409 };
       if (body.mergeState.state !== 'open') return { error: `#${action.number} is already ${body.mergeState.state}`, status: 409 };
+      // A supplied head is the reviewed one: a precondition, never restamped (factory D6, v5.39).
+      if (action.headSha !== undefined) {
+        if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(action.headSha)) return { error: '--head must be the full commit SHA that was reviewed', status: 400 };
+        if (action.headSha.toLowerCase() !== body.mergeState.headSha.toLowerCase()) {
+          return { error: `#${action.number}'s head moved: reviewed ${action.headSha.slice(0, 12)}, now ${body.mergeState.headSha.slice(0, 12)}. Review the new head first.`, status: 409 };
+        }
+      }
       // The forge's title, never the agent's: the card is what the user decides on.
       return { ...action, title: body.mergeState.title.slice(0, 1000), headSha: body.mergeState.headSha };
     }
@@ -3642,10 +3651,20 @@ ${guidance}` : ''}`,
     }
     const action = await this.stampAction(id, input.action);
     if ('error' in action) return action;
+    // Only a caller-supplied head is review evidence; stampAction has checked it against the live forge.
+    const reviewedHead = input.action.type === 'merge-pr' ? input.action.headSha : undefined;
+    const stillAutonomous = () => this.deps.store.get(id)?.autonomous === true;
     // From here to `publish` nothing awaits, so two racing proposals see each other's card.
     const same = (other: ManagerActionRequest) => actionKey(other) === actionKey(action) && sameMethod(other, action);
     const pending = this.deps.store.messages(id).find((message) => message.kind === 'action' && message.status === 'pending' && same(message.action));
-    if (pending) return { actionId: pending.id, status: 'pending' };
+    if (pending?.kind === 'action') {
+      // A retry re-checks a card held by an older policy (the v5.31 path and size holds) against today's.
+      if (scope.manager.autonomous === true && pending.action.type === 'merge-pr' && !(await this.autonomousHold(pending.action, scope.source, reviewedHead))) {
+        const current = this.deps.store.message(id, pending.id);
+        if (stillAutonomous() && current?.kind === 'action' && current.status === 'pending') return this.runAutonomous(id, current.id, []);
+      }
+      return { actionId: pending.id, status: 'pending' };
+    }
     // One waiting card per PR or automation: a new head, method or revision replaces the older card.
     const replaced: string[] = [];
     for (const older of this.deps.store.messages(id)) {
@@ -3668,27 +3687,36 @@ ${guidance}` : ''}`,
     if (action.type === 'merge-pr') this.managerActed(id, { prs: [{ projectId: action.projectId, number: action.number }] }, `you proposed merging #${action.number} since`);
     this.deps.telemetry?.track('manager_action_proposed', managerActionLabel(action));
     this.emitChange(id);
-    // Owner-protected paths (factory D6): the card waits for the owner even for an autonomous manager.
-    let ownerOnly: string | undefined;
-    if (scope.manager.autonomous === true) {
-      if (action.type === 'merge-pr') ownerOnly = await this.ownerOnlyMerge(action, scope.source);
-      if (action.type === 'enable-automation' && action.automationId === CREDENTIAL_HEALTH) ownerOnly = 'credential checks use project secrets';
-    }
-    if (ownerOnly) {
+    // Explicit owner approval policy and credential checks (factory D6): these wait even for an autonomous manager.
+    const ownerOnly = scope.manager.autonomous === true ? await this.autonomousHold(action, scope.source, reviewedHead) : undefined;
+    // Autonomy is re-read after the policy check: switched off meanwhile, the card waits like any approval.
+    if (ownerOnly && stillAutonomous()) {
       this.alert(id, message, `Needs your approval: ${describeAction(action)} (${ownerOnly})`, 'approval');
-      return { actionId: message.id, status: 'pending', result: `Waiting for the owner: ${ownerOnly}.`, ...(replaced.length ? { replaced } : {}) };
+      const result = ownerOnly === NO_REVIEWED_HEAD
+        ? `Not merged automatically: ${NO_REVIEWED_HEAD}. Retry with --head <full sha> of the head that was reviewed, or the user approves the card.`
+        : `Waiting for the owner: ${ownerOnly}.`;
+      return { actionId: message.id, status: 'pending', result, ...(replaced.length ? { replaced } : {}) };
     }
     // Autonomous: the card is the record, not a question — it runs now, as an approval would.
-    if (scope.manager.autonomous === true) {
-      const decided = await this.decide(id, message.id, 'approve');
-      const settled = this.deps.store.message(id, message.id);
-      const status = settled?.kind === 'action' ? settled.status : 'failed';
-      const result = settled?.kind === 'action' ? settled.result : 'error' in decided ? decided.error : undefined;
-      return { actionId: message.id, status, ...(result ? { result } : {}), ...(replaced.length ? { replaced } : {}) };
-    }
+    if (scope.manager.autonomous === true && stillAutonomous()) return this.runAutonomous(id, message.id, replaced);
     // An approval always waits on the user, so it never needs the agent's judgement.
     this.alert(id, message, `Needs your approval: ${describeAction(action)}`, 'approval');
     return { actionId: message.id, status: 'pending', ...(replaced.length ? { replaced } : {}), ...(alsoWaitingIn.length ? { alsoWaitingIn } : {}) };
+  }
+
+  /** Why an autonomous manager's card still waits for the user, if it does. */
+  private async autonomousHold(action: ManagerActionRequest, source?: ManagerProjectSource, reviewedHead?: string): Promise<string | undefined> {
+    if (action.type === 'merge-pr') return reviewedHead === undefined ? NO_REVIEWED_HEAD : this.improvementApprovalHold(action, source);
+    if (action.type === 'enable-automation' && action.automationId === CREDENTIAL_HEALTH) return 'credential checks use project secrets';
+  }
+
+  /** Autonomous: the card is the record, not a question — it runs now, as an approval would. */
+  private async runAutonomous(id: string, actionId: string, replaced: string[]): Promise<{ actionId: string; status: ManagerActionStatus; replaced?: string[]; result?: string }> {
+    const decided = await this.decide(id, actionId, 'approve');
+    const settled = this.deps.store.message(id, actionId);
+    const status = settled?.kind === 'action' ? settled.status : 'failed';
+    const result = settled?.kind === 'action' ? settled.result : 'error' in decided ? decided.error : undefined;
+    return { actionId, status, ...(result ? { result } : {}), ...(replaced.length ? { replaced } : {}) };
   }
 
   /**
@@ -3924,15 +3952,16 @@ ${guidance}` : ''}`,
     return { ok: false, result: (await ManagerEngine.refusalOf(merged)).error };
   }
 
-  /** Why a merge needs the owner, if the configured policy or the current diff requires it. */
-  private async ownerOnlyMerge(
+  /** Why a merge waits for the user: only an explicit `approval: 'owner'` improvement policy (factory D6, v5.39). */
+  private async improvementApprovalHold(
     action: Extract<ManagerActionRequest, { type: 'merge-pr' }>,
     source?: ManagerProjectSource,
   ): Promise<string | undefined> {
     const project = source ?? (await this.deps.projects().catch(() => [])).find(({ id }) => id === action.projectId);
-    const openedByImprovement = project?.runs().some((run) => run.improvementId && prTie(run, action.number) === 0);
+    if (!project) return;
+    const openedByImprovement = project.runs().some((run) => run.improvementId && prTie(run, action.number) === 0);
     let recordedImprovement;
-    if (project?.root) {
+    if (project.root) {
       try {
         const projectPath = projectImprovementRecordsPath(join(project.root, '.ai/cezar'));
         recordedImprovement = [projectPath, harnessImprovementRecordsPath()].flatMap(readImprovementRecords)
@@ -3941,39 +3970,13 @@ ${guidance}` : ''}`,
         if (openedByImprovement) return 'its improvement policy could not be checked';
       }
     }
-    const improvement = recordedImprovement || openedByImprovement;
-    if (improvement && project) {
-      const [config, workspace] = await Promise.all([loadConfig(project.root), loadWorkspaceConfig()]);
-      const settings = resolveImprovementSettings({
-        harness: recordedImprovement?.queue === 'harness', workspace: workspace.factory?.improvement,
-        project: config.factory?.improvement,
-      });
-      if (settings.approval === 'owner') return 'the project requires owner approval for improvement PRs';
-    }
-
-    const response = await this.forward(`/p/${encodeURIComponent(action.projectId)}/github/prs/${action.number}/changes?refresh=1&target=merge`).catch(() => undefined);
-    type ChangedFile = { path: string; previousPath?: string; additions?: number; deletions?: number };
-    const body = response?.ok ? (await response.json().catch(() => ({}))) as {
-      available?: boolean; files?: ChangedFile[]; headSha?: string; truncated?: boolean;
-    } : {};
-    if (body.available === true && Array.isArray(body.files)) {
-      if (body.headSha && body.headSha !== action.headSha) return 'its head changed during the check';
-      const hits = protectedChanges(body.files);
-      if (hits.length) return `it changes owner-protected ${hits.slice(0, 5).join(', ')}${hits.length > 5 ? ', …' : ''}`;
-      if (improvement) {
-        const product = body.files.filter(({ path, previousPath }) => improvementPathScope(path) === 'code' ||
-          (previousPath && improvementPathScope(previousPath) === 'code'));
-        if (!body.headSha || body.truncated || product.some((file) => file.additions === undefined || file.deletions === undefined)) {
-          return 'the product-code line count could not be checked for this improvement PR';
-        }
-        if (product.reduce((total, file) => total + (file.additions ?? 0) + (file.deletions ?? 0), 0) > 400) {
-          return 'it changes more than 400 lines of product code';
-        }
-      }
-      return;
-    }
-    if (improvement) return 'the changed files could not be checked for this improvement PR';
-    if (project?.root && hasProtectedPaths(project.root)) return 'its changed files could not be checked against the owner-protected paths';
+    if (!recordedImprovement && !openedByImprovement) return;
+    const [config, workspace] = await Promise.all([loadConfig(project.root), loadWorkspaceConfig()]);
+    const settings = resolveImprovementSettings({
+      harness: recordedImprovement?.queue === 'harness', workspace: workspace.factory?.improvement,
+      project: config.factory?.improvement,
+    });
+    if (settings.approval === 'owner') return 'the project requires owner approval for improvement PRs';
   }
 
   /** Reached only from an approved `add-job`; the cockpit edits jobs through `update`. */

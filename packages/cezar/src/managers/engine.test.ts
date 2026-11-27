@@ -2834,46 +2834,166 @@ describe('ManagerEngine', () => {
   describe('safety', () => {
     const merge = { type: 'merge-pr', projectId: 'alpha', number: 7 } as const;
 
-    describe('owner-protected paths (factory D6)', () => {
-      const protectedEngine = (changes: unknown, root = '/alpha') => makeEngine({
-        projects: async () => [{ ...connected, root }],
-        request: async (path, init) => {
-          requests.push({ path, method: init?.method ?? 'GET' });
-          if (path.includes('/merge-state')) return Response.json({ available: true, mergeState: { title: 'Ship', state: 'open', headSha: 'sha-1', defaultMethod: 'squash', methods: ['squash'] } });
-          if (path.includes('/changes')) return Response.json(changes);
-          if (path.endsWith('/merge')) return Response.json({ merged: true });
-          return Response.json({ ok: true });
-        },
-      });
+    describe('autonomous merges (factory D6, v5.39)', () => {
+      // `heads` are the PR's head at each merge-state read; the last one repeats.
+      const reviewed = 'a'.repeat(40);
+      const pushed = 'b'.repeat(40);
+      // `cached` is what a merge-state read without ?refresh=1 answers, when set.
+      const autonomousEngine = (root = '/alpha', heads = [reviewed], cached?: string) => {
+        let reads = 0;
+        return makeEngine({
+          projects: async () => [{ ...connected, root }],
+          request: async (path, init) => {
+            requests.push({ path, method: init?.method ?? 'GET', ...(typeof init?.body === 'string' ? { body: JSON.parse(init.body) } : {}) });
+            const head = heads[Math.min(reads, heads.length - 1)]!;
+            if (path.includes('/merge-state') && cached && !path.endsWith('?refresh=1')) {
+              return Response.json({ available: true, mergeState: { title: 'Ship', state: 'open', headSha: cached, defaultMethod: 'squash', methods: ['squash'] } });
+            }
+            if (path.includes('/merge-state')) {
+              reads += 1;
+              return Response.json({ available: true, mergeState: { title: 'Ship', state: 'open', headSha: head, defaultMethod: 'squash', methods: ['squash'] } });
+            }
+            if (path.includes('/changes')) throw new Error('a merge must not look up changed files');
+            if (path.endsWith('/merge')) {
+              const expected = (JSON.parse(String(init?.body)) as { expectedHeadSha?: string }).expectedHeadSha;
+              return expected === head ? Response.json({ merged: true }) : Response.json({ error: 'the head changed since the review' }, { status: 409 });
+            }
+            return Response.json({ ok: true });
+          },
+        });
+      };
       const autonomous = async (engine: ManagerEngine) => {
         const id = await create(engine);
         await engine.update(id, { autonomous: true });
         return id;
       };
       const merged = () => requests.some((request) => request.path.endsWith('/merge') && request.method === 'POST');
+      const lookedUpChanges = () => requests.some((request) => request.path.includes('/changes'));
+      const reviewedMerge = { ...merge, headSha: reviewed };
+      const pendingCard = (id: string, messageId: string, headSha = reviewed) => store.persistMessage(id, {
+        id: messageId, seq: store.nextSeq(id), at: new Date().toISOString(), kind: 'action', status: 'pending',
+        action: { ...merge, title: 'Ship', headSha }, sourceTasks: [],
+      } as ManagerMessage);
 
-      it('holds an autonomous merge that changes a scorer for the owner', async () => {
-        const engine = protectedEngine({ available: true, files: [{ path: 'README.md' }, { path: '.ai/cezar/scorers/outcome/scorer.md' }] });
+      it('never merges automatically on a forge-stamped head; a retry with the reviewed head runs the same card', async () => {
+        const engine = autonomousEngine();
         const id = await autonomous(engine);
-        const proposed = await engine.propose(id, { action: merge });
-        expect(proposed).toMatchObject({ status: 'pending', result: expect.stringContaining('.ai/cezar/scorers/outcome/scorer.md') });
+        const unreviewed = await engine.propose(id, { action: merge });
+        expect(unreviewed).toMatchObject({ status: 'pending', result: expect.stringContaining('--head') });
         expect(merged()).toBe(false);
-      });
-
-      it('catches a rename out of a protected skill, and still merges ordinary changes', async () => {
-        const engine = protectedEngine({ available: true, files: [{ path: 'docs/x.md', previousPath: 'packages/cezar/skills/improve-factory/SKILL.md' }] });
-        const id = await autonomous(engine);
-        expect(await engine.propose(id, { action: merge })).toMatchObject({ status: 'pending' });
-        requests.length = 0;
-        const clean = protectedEngine({ available: true, files: [{ path: 'src/app.ts' }] });
-        const other = await autonomous(clean);
-        expect(await clean.propose(other, { action: merge })).toMatchObject({ status: 'done' });
+        if ('error' in unreviewed) throw unreviewed;
+        expect(await engine.propose(id, { action: reviewedMerge })).toMatchObject({ actionId: unreviewed.actionId, status: 'done' });
         expect(merged()).toBe(true);
-        // B30: the files checked are the merge target's, not gh's default repository's.
-        expect(requests.find((request) => request.path.includes('/changes'))?.path).toBe('/api/v1/p/alpha/github/prs/7/changes?refresh=1&target=merge');
+        expect(actions(id)).toHaveLength(1);
       });
 
-      it('enforces owner policy and verifies the exact product line count for improvement PRs', async () => {
+      it('compares the reviewed head with live forge state, not a cached read, for a new card and a reused one', async () => {
+        const engine = autonomousEngine('/alpha', [pushed], reviewed);
+        const id = await autonomous(engine);
+        expect(await engine.propose(id, { action: reviewedMerge })).toMatchObject({ status: 409, error: expect.stringContaining('head moved') });
+        expect(actions(id)).toHaveLength(0);
+        pendingCard(id, 'old');
+        expect(await engine.propose(id, { action: reviewedMerge })).toMatchObject({ status: 409 });
+        expect(actions(id).map((message) => [message.id, message.status])).toEqual([['old', 'pending']]);
+        expect(merged()).toBe(false);
+        expect(requests.filter((request) => request.path.includes('/merge-state')).every((request) => request.path.endsWith('?refresh=1'))).toBe(true);
+      });
+
+      it('re-reads autonomy after the policy check: switched off meanwhile, a new or reused card waits', async () => {
+        const engine = autonomousEngine();
+        const id = await autonomous(engine);
+        const hold = vi.spyOn(engine as unknown as { autonomousHold: () => Promise<string | undefined> }, 'autonomousHold');
+        const switchOff = async () => {
+          store.update(id, (manager) => ({ ...manager, autonomous: false }));
+          return undefined;
+        };
+        hold.mockImplementationOnce(switchOff);
+        expect(await engine.propose(id, { action: reviewedMerge })).toMatchObject({ status: 'pending' });
+        expect(actions(id)[0]).toMatchObject({ status: 'pending' });
+        await engine.update(id, { autonomous: true });
+        hold.mockImplementationOnce(switchOff);
+        expect(await engine.propose(id, { action: reviewedMerge })).toMatchObject({ actionId: actions(id)[0]!.id, status: 'pending' });
+        expect(merged()).toBe(false);
+        hold.mockRestore();
+      });
+
+      it('merges a PR in a project holding the formerly protected scorers, skill and workflows, without a changed-files lookup', async () => {
+        const root = mkdtempSync(join(tmpdir(), 'cez-formerly-protected-'));
+        try {
+          for (const dir of ['.ai/cezar/scorers/outcome', '.ai/cezar/workflows', 'packages/cezar/skills/improve-factory']) mkdirSync(join(root, dir), { recursive: true });
+          writeFileSync(join(root, '.ai/cezar/workflows/improve-factory.yaml'), 'name: improve-factory\n');
+          writeFileSync(join(root, '.ai/cezar/workflows/harness-release.yaml'), 'name: harness-release\n');
+          const engine = autonomousEngine(root);
+          expect(await engine.propose(await autonomous(engine), { action: reviewedMerge })).toMatchObject({ status: 'done' });
+          expect(merged()).toBe(true);
+          expect(lookedUpChanges()).toBe(false);
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
+      });
+
+      it('carries the reviewed head as a precondition and refuses a head that moved before the proposal', async () => {
+        const moved = autonomousEngine('/alpha', [pushed]);
+        const id = await autonomous(moved);
+        expect(await moved.propose(id, { action: { ...merge, headSha: reviewed } }))
+          .toMatchObject({ status: 409, error: expect.stringContaining('head moved') });
+        expect(actions(id)).toHaveLength(0);
+        expect(await moved.propose(id, { action: { ...merge, headSha: 'aaaa' } })).toMatchObject({ status: 400 });
+        expect(merged()).toBe(false);
+
+        requests.length = 0;
+        const same = autonomousEngine('/alpha', [reviewed]);
+        const other = await autonomous(same);
+        expect(await same.propose(other, { action: { ...merge, headSha: reviewed.toUpperCase() } })).toMatchObject({ status: 'done' });
+        expect(requests.find((request) => request.path.endsWith('/merge'))?.body).toMatchObject({ expectedHeadSha: reviewed });
+      });
+
+      it('refuses an autonomous merge whose head moved after the proposal, through the forge guard', async () => {
+        const engine = autonomousEngine('/alpha', [reviewed, pushed]);
+        const id = await autonomous(engine);
+        expect(await engine.propose(id, { action: { ...merge, headSha: reviewed } }))
+          .toMatchObject({ status: 'failed', result: expect.stringContaining('head changed') });
+        expect(requests.find((request) => request.path.endsWith('/merge'))?.body).toMatchObject({ expectedHeadSha: reviewed });
+      });
+
+      it('a same-head retry re-checks a pending card held by the old path or size rules, and keeps an owner policy hold', async () => {
+        const root = mkdtempSync(join(tmpdir(), 'cez-legacy-card-'));
+        try {
+          const engine = autonomousEngine(root);
+          const id = await autonomous(engine);
+          const legacy = (messageId: string) => store.persistMessage(id, {
+            id: messageId, seq: store.nextSeq(id), at: new Date().toISOString(), kind: 'action', status: 'pending',
+            action: { ...merge, title: 'Ship', headSha: reviewed }, sourceTasks: [],
+          } as ManagerMessage);
+          legacy('held');
+          expect(await engine.propose(id, { action: reviewedMerge })).toMatchObject({ actionId: 'held', status: 'done' });
+          expect(actions(id).map((message) => [message.id, message.status])).toEqual([['held', 'done']]);
+          expect(lookedUpChanges()).toBe(false);
+
+          mkdirSync(join(root, '.ai/cezar/factory'), { recursive: true });
+          writeFileSync(projectImprovementRecordsPath(join(root, '.ai/cezar')), JSON.stringify([{
+            id: 'batch', queue: 'project', projectId: 'alpha', runId: 'run',
+            startedBy: 'automation', startedAt: '2026-11-10T00:00:00.000Z',
+            causeIds: ['cause'], state: 'pr-open', pr: { number: 7 },
+          }]));
+          writeFileSync(join(root, '.ai/cezar/config.json'), JSON.stringify({ factory: { improvement: { approval: 'owner' } } }));
+          requests.length = 0;
+          legacy('owner');
+          expect(await engine.propose(id, { action: reviewedMerge })).toEqual({ actionId: 'owner', status: 'pending' });
+          expect(merged()).toBe(false);
+
+          // Two racing retries run the card once.
+          writeFileSync(join(root, '.ai/cezar/config.json'), JSON.stringify({}));
+          const [one, two] = await Promise.all([engine.propose(id, { action: reviewedMerge }), engine.propose(id, { action: reviewedMerge })]);
+          expect([one, two].map((answer) => 'actionId' in answer && answer.actionId)).toEqual(['owner', 'owner']);
+          expect(requests.filter((request) => request.path.endsWith('/merge') && request.method === 'POST')).toHaveLength(1);
+          expect(actions(id).find((message) => message.id === 'owner')?.status).toBe('done');
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
+      });
+
+      it('merges an improvement PR without a line count, and holds it only under an explicit owner policy', async () => {
         const root = mkdtempSync(join(tmpdir(), 'cez-improvement-approval-'));
         try {
           const path = projectImprovementRecordsPath(join(root, '.ai/cezar'));
@@ -2883,44 +3003,18 @@ describe('ManagerEngine', () => {
             startedBy: 'automation', startedAt: '2026-11-10T00:00:00.000Z',
             causeIds: ['cause'], state: 'pr-open', pr: { number: 7 },
           }]));
-          const changes = (additions: number, headSha = 'sha-1') => ({
-            available: true, headSha, files: [
-              { path: 'src/app.ts', additions, deletions: 1 },
-              { path: 'docs/user-guide.md', additions: 1000, deletions: 1000 },
-            ],
-          });
-          const small = protectedEngine(changes(399), root);
-          expect(await small.propose(await autonomous(small), { action: merge })).toMatchObject({ status: 'done' });
-          const large = protectedEngine(changes(400), root);
-          expect(await large.propose(await autonomous(large), { action: merge }))
-            .toMatchObject({ status: 'pending', result: expect.stringContaining('more than 400') });
-          const moved = protectedEngine(changes(1, 'different-head'), root);
-          expect(await moved.propose(await autonomous(moved), { action: merge }))
-            .toMatchObject({ status: 'pending', result: expect.stringContaining('head changed') });
-          const unavailable = protectedEngine({ available: false }, root);
-          expect(await unavailable.propose(await autonomous(unavailable), { action: merge }))
-            .toMatchObject({ status: 'pending', result: expect.stringContaining('could not be checked') });
+          const plain = autonomousEngine(root);
+          expect(await plain.propose(await autonomous(plain), { action: reviewedMerge })).toMatchObject({ status: 'done' });
+          expect(merged()).toBe(true);
+          expect(lookedUpChanges()).toBe(false);
 
           writeFileSync(join(root, '.ai/cezar/config.json'), JSON.stringify({ factory: { improvement: { approval: 'owner' } } }));
           requests.length = 0;
-          const owner = protectedEngine(changes(1), root);
-          expect(await owner.propose(await autonomous(owner), { action: merge }))
+          const owner = autonomousEngine(root);
+          expect(await owner.propose(await autonomous(owner), { action: reviewedMerge }))
             .toMatchObject({ status: 'pending', result: expect.stringContaining('requires owner approval') });
           expect(merged()).toBe(false);
-        } finally {
-          rmSync(root, { recursive: true, force: true });
-        }
-      });
-
-      it('holds an unreadable file list only where the project has protected paths', async () => {
-        const root = mkdtempSync(join(tmpdir(), 'cez-protected-'));
-        try {
-          mkdirSync(join(root, '.ai/cezar/scorers'), { recursive: true });
-          const held = protectedEngine({ available: false, reason: 'unsupported' }, root);
-          expect(await held.propose(await autonomous(held), { action: merge })).toMatchObject({ status: 'pending', result: expect.stringContaining('could not be checked') });
-          requests.length = 0;
-          const plain = protectedEngine({ available: false, reason: 'unsupported' });
-          expect(await plain.propose(await autonomous(plain), { action: merge })).toMatchObject({ status: 'done' });
+          expect(lookedUpChanges()).toBe(false);
         } finally {
           rmSync(root, { recursive: true, force: true });
         }
@@ -3196,14 +3290,27 @@ describe('ManagerEngine', () => {
       const engine = makeEngine();
       const id = await create(engine);
       await engine.update(id, { autonomous: true });
-      const proposed = await engine.propose(id, { action: merge, reason: 'green' });
+      // A forge-stamped head is not review evidence: without --head the card waits (factory v5.39).
+      const unreviewed = await engine.propose(id, { action: merge, reason: 'green' });
+      expect(unreviewed).toMatchObject({ status: 'pending', result: expect.stringContaining('no reviewed head') });
+      expect(requests.some((request) => request.path.endsWith('/merge'))).toBe(false);
+      await engine.decide(id, (unreviewed as { actionId: string }).actionId, 'dismiss');
+      requests.length = 0;
+      const live = 'e'.repeat(40);
+      const reviewedEngine = makeEngine({ request: async (path, init) => {
+        requests.push({ path, method: init?.method ?? 'GET' });
+        if (path.includes('/merge-state')) return Response.json({ available: true, mergeState: { title: 'Ship', state: 'open', headSha: live, defaultMethod: 'squash', methods: ['squash'] } });
+        if (path.endsWith('/merge')) return Response.json({ merged: true });
+        return Response.json({ ok: true });
+      } });
+      const proposed = await reviewedEngine.propose(id, { action: { ...merge, headSha: live }, reason: 'green' });
       expect(proposed).toMatchObject({ status: 'done', result: 'Merged #7' });
       expect(requests.find((request) => request.path.endsWith('/merge'))).toMatchObject({ path: '/api/v1/p/alpha/github/prs/7/merge', method: 'POST' });
-      expect(actions(id)[0]).toMatchObject({ status: 'done', result: 'Merged #7' });
-      expect((await engine.summary(id))?.pendingActions).toBe(0);
+      expect(actions(id).at(-1)).toMatchObject({ status: 'done', result: 'Merged #7' });
+      expect((await reviewedEngine.summary(id))?.pendingActions).toBe(0);
       // Turned off again, the next merge waits on the user.
-      await engine.update(id, { autonomous: false });
-      const next = await engine.propose(id, { action: { ...merge, number: 8 } });
+      await reviewedEngine.update(id, { autonomous: false });
+      const next = await reviewedEngine.propose(id, { action: { ...merge, number: 8, headSha: live } });
       expect(next).toMatchObject({ status: 'pending' });
     });
 
@@ -3226,7 +3333,11 @@ describe('ManagerEngine', () => {
     it('an agent cannot pre-stamp the head it wants merged', async () => {
       const engine = makeEngine();
       const id = await create(engine);
-      await engine.propose(id, { action: { ...merge, headSha: 'attacker' } });
+      // A supplied head is a precondition (factory v5.39): any head but the forge's is refused, never carded.
+      expect(await engine.propose(id, { action: { ...merge, headSha: 'attacker' } })).toMatchObject({ status: 400 });
+      expect(await engine.propose(id, { action: { ...merge, headSha: 'd'.repeat(40) } })).toMatchObject({ status: 409 });
+      expect(actions(id)).toHaveLength(0);
+      await engine.propose(id, { action: merge });
       expect(actions(id)[0]?.action).toMatchObject({ headSha: 'sha-at-proposal' });
     });
 

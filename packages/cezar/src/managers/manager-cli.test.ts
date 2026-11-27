@@ -118,6 +118,33 @@ describe('cez manager', () => {
     expect(logs.join()).toContain('approval');
   });
 
+  it('a reused card that settled reports its outcome, not the pending snapshot', async () => {
+    const reused = (reply: Record<string, unknown>) => harness({}, {}, [], {
+      fetch: (async (url: string | URL | Request) => {
+        if (String(url).endsWith('/snapshot')) return Response.json(snapshot);
+        if (String(url).includes('/messages?pending=1')) return Response.json({ messages: [{ id: 'a1', at: '2026-11-10T02:00:00.000Z' }], hasMore: false });
+        if (String(url).endsWith('/actions')) return Response.json({ actionId: 'a1', ...reply }, { status: 201 });
+        return Response.json({ ok: true });
+      }) as typeof fetch,
+    });
+    const done = reused({ status: 'done', result: 'Merged #4' });
+    expect(await done.run('merge', '--project', 'alpha', '4', '--head', 'c'.repeat(40))).toBe(0);
+    expect(done.logs.at(-1)).toBe('done a1: merging #4 — Merged #4');
+    const failed = reused({ status: 'failed', result: 'the head changed since the review' });
+    expect(await failed.run('merge', '--project', 'alpha', '4', '--head', 'c'.repeat(40))).toBe(0);
+    expect(failed.logs.at(-1)).toBe('failed a1: merging #4 did not happen — the head changed since the review');
+    expect([...done.logs, ...failed.logs].join()).not.toContain('already pending');
+  });
+
+  it('merge --head carries the reviewed SHA; without it the action has none', async () => {
+    const { run, calls } = harness();
+    const sha = 'c'.repeat(40);
+    expect(await run('merge', '--project', 'alpha', '4', '--head', sha)).toBe(0);
+    expect(calls.at(-1)?.body).toMatchObject({ action: { type: 'merge-pr', number: 4, headSha: sha } });
+    expect(await run('merge', '--project', 'alpha', '4')).toBe(0);
+    expect((calls.at(-1)?.body as { action: object }).action).not.toHaveProperty('headSha');
+  });
+
   it('says so when the proposal is already waiting, instead of claiming a new card', async () => {
     const { run, logs } = harness({}, {}, [{ id: 'a1', at: '2026-11-10T02:00:00.000Z' }]);
     expect(await run('merge', '--project', 'alpha', '4')).toBe(0);
