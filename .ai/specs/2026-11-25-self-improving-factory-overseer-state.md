@@ -41,6 +41,8 @@ These instructions apply when the owner restarts the harness manager. It remains
 
 ## Open overseer items
 
+- **Blind calibration batch 2 (C-1 to C-5):** 26 of 35 blind (74%), 31 of 35 adjudicated (89%). The judge caught two real failures the overseer missed: the charter checks blocked by a missing Bash grant, the same `plan` permission gap escalated in A-5. The judge is reliable on pass/fail. Owner decision C-3: whether the procedure rubric should stop failing agents for steps the harness refused. M3 still has the one-minute latency open (B25).
+
 - **Owner decisions escalated by the second harness improvement run (A-5):**
   1. allow read-only `git show <ref>:<path>` in the built-in `plan` workflow;
   2. let read-only review steps run typecheck and tests, or reach `gh` by absolute path;

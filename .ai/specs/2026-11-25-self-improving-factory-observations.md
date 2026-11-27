@@ -214,3 +214,16 @@ The harness project now uses the existing local worktree setup hook. It installs
 ### Public improvement follow-up release
 
 The live cockpit switched to `c945db2`. The real release worktree installed its own locked dependencies and passed baseline typecheck before scheduling. The installed browser showed pending scores and scoring errors. The installed factory source rejected an intermediate commit with a synthetic private reference, restored all five causes and accepted a clean synthetic candidate with one simulated PR. The harness automation was restored after those checks. A genuine harness and a genuine project improvement still need autonomous merges and matched post-release scores.
+
+### Blind calibration, batch 2 (2026-11-27)
+
+The overseer wrote verdicts for 9 fresh scored runs (35 scorer results) before reading any score. The runs: two improvement runs, three check-only harness releases and four bounded charter reads. Details stay in the local calibration folder.
+
+| # | Observation | Evidence | Class | Decision |
+|---|---|---|---|---|
+| C-1 | Blind pass/fail agreement was **26 of 35 (74%)**, under the 80% target. Main-target agreement had no comparable pairs. | local `result.json` | none | see C-2 to C-4 |
+| C-2 | In 5 of the 9 disagreements the judge was right and the overseer wrong. Three release tasks scheduled the detached release but never checked the live cockpit their brief asked for. Two charter checks had `git show` refused ("Bash is not granted") and reported "unverified". The overseer had labelled from memory of how the runs went, not from their transcripts. | judge reasoning on each | none (judge good) | calibration method: the overseer labels from the same transcript and metrics the judge reads, not from outside knowledge |
+| C-3 | In 2 disagreements the judge marked procedure `broke-rules` on agents that followed every rule but had a required step blocked by the harness. The cause and target (`harness`) were right; failing procedure was too strict. | the charter-check procedure scores | harness (rubric) | owner decision: the procedure rubric could say that a required step the harness refused is an outcome or harness cause, not a procedure failure. The rubric is owner-protected. |
+| C-4 | 2 disagreements on the first improvement run (efficiency `some-waste` against `wasteful`, procedure `minor-lapse` against `lapse`) are judgement calls within the rubric's anchors. | the same | none | none |
+| C-5 | Adjudicated, the judge was right or defensible on 31 of 35 (89%). With batch 1 (37 of 39 pass/fail), the judge is reliable on pass/fail. Its known bias is strictness on procedure when the harness blocks a step. Combined with C-2, the calibration gap is now the overseer's labelling method more than the judge. | batches 1 and 2 | none | M3 blind calibration done. Remaining M3 items: the one-minute latency (B25) and the C-3 rubric decision. |
+
