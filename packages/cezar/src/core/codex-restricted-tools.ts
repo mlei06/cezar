@@ -48,11 +48,11 @@ export function codexReadTool(policy: CodexRestrictedPolicy): typeof CODEX_READ_
   return { ...CODEX_READ_TOOL, description: `Tools enforced by cezar. Use Read for files, Grep for content, Glob for file names, Bash for one command: ${policy.shell.describe} Native shell and write tools are denied; cezar refuses every other command and any other shell syntax.` };
 }
 
-/** On every broker git call, beside the tool env's `GIT_NO_LAZY_FETCH=1` (which git before 2.45 ignores). */
+/** Defense in depth behind the tool env's empty `GIT_ALLOW_PROTOCOL`, which alone covers every transport. */
 export const GIT_NETWORK_OFF = ['-c', 'protocol.allow=never', ...['file', 'git', 'ssh', 'http', 'https', 'ext'].flatMap(p => ['-c', `protocol.${p}.allow=never`])];
 
 const FALSE = new Set(['false', 'no', 'off', '0']);
-const TRUE = new Set(['true', 'yes', 'on', '1', '']);
+const TRUE = new Set(['true', 'yes', 'on', '1']);
 
 /**
  * Why an object read must not run here, from `git config --list -z`: a partial clone can fetch a
@@ -63,9 +63,10 @@ export function partialCloneRefusal(list: string): string | undefined {
     if (!entry) continue;
     const at = entry.indexOf('\n');
     const key = (at < 0 ? entry : entry.slice(0, at)).toLowerCase();
-    const value = at < 0 ? '' : entry.slice(at + 1).trim().toLowerCase();
+    // `-z` prints a bare key (git reads true) without a newline, an explicit `key =` (false) with one.
+    const value = at < 0 ? 'true' : entry.slice(at + 1).trim().toLowerCase();
     if (key === 'extensions.partialclone') return 'this repository is a partial clone; reads at a commit need every object present locally';
-    if (/^remote\..+\.promisor$/.test(key) && !FALSE.has(value)) {
+    if (/^remote\..+\.promisor$/.test(key) && !FALSE.has(value) && value !== '') {
       return TRUE.has(value) ? 'this repository has a promisor remote; reads at a commit need every object present locally'
         : `this repository's ${key} setting is unclear; reads at a commit are refused`;
     }

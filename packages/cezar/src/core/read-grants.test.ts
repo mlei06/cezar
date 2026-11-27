@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { READ_ONLY_BASH_PREFIXES } from '../workflows/capabilities.ts';
 import { prepareRestrictedCodexHome } from './codex-restricted-home.ts';
 import { codexBashArgv, compileCodexRestrictedPolicy } from './codex-restricted-policy.ts';
-import { CodexReadBroker, codexReadTool, partialCloneRefusal } from './codex-restricted-tools.ts';
+import { CodexReadBroker, codexReadTool, partialCloneRefusal, RESULT_CAP } from './codex-restricted-tools.ts';
 import { GIT_SHOW_AT_REF } from './read-grants.ts';
 
 // What `resolveAgentStepTools` hands Codex for a live built-in Plan step.
@@ -141,6 +141,8 @@ describe('partial-clone classification', () => {
     expect(partialCloneRefusal('extensions.partialclone\norigin\0')).toContain('partial clone');
     for (const value of ['remote.origin.promisor\ntrue\0', 'remote.Up.Stream.promisor\nYes\0', 'remote.origin.promisor\0']) expect(partialCloneRefusal(value)).toContain('promisor remote');
     expect(partialCloneRefusal('remote.origin.promisor\nmaybe\0')).toContain('unclear');
+    // `-z` prints an explicit `promisor =` (false) with its newline, a bare `promisor` (true) without.
+    expect(partialCloneRefusal('remote.origin.promisor\n\0')).toBeUndefined();
   });
 });
 
@@ -177,7 +179,7 @@ describe.skipIf(process.platform === 'win32')('broker git stays offline in a par
         return { ok: r.success, text: r.contentItems[0]?.text ?? '' };
       };
     };
-    return { root, cwd, sha, marker, objects, broker, toolEnv: home.toolEnv };
+    return { root, cwd, sha, marker, objects, broker, toolEnv: home.toolEnv, config: home.config as { shell_environment_policy: { set: Record<string, string> } } };
   }
 
   it('refuses Plan\'s git show and a pinned Read before any lookup, and Review\'s git show fetches nothing', async () => {
@@ -202,6 +204,67 @@ describe.skipIf(process.platform === 'win32')('broker git stays offline in a par
     expect((await f.broker(REVIEW_SPEC, f.cwd, olderGit)({ tool: 'Bash', command: 'git show HEAD:src/a.ts' })).ok).toBe(false);
     expect(existsSync(f.marker)).toBe(false);
     expect(f.objects()).toBe(before);
+  });
+
+  it('builds the shared tool env with an empty protocol allowlist', () => {
+    const f = partialClone();
+    expect(f.toolEnv.GIT_ALLOW_PROTOCOL).toBe('');
+    expect(f.config.shell_environment_policy.set.GIT_ALLOW_PROTOCOL).toBe('');
+  });
+
+  it('holds on the env guard alone: git with no overrides and no preflight cannot fetch over file', () => {
+    const f = partialClone();
+    const before = f.objects();
+    const { GIT_NO_LAZY_FETCH: _lazy, ...guarded } = f.toolEnv;
+    const read = (env: NodeJS.ProcessEnv) => spawnSync('git', ['show', 'HEAD:src/a.ts'], { cwd: f.cwd, env, encoding: 'utf8', timeout: 20_000 });
+    const denied = read(guarded);
+    expect(denied.status).not.toBe(0);
+    expect(denied.stderr).toContain("transport 'file' not allowed");
+    expect(existsSync(f.marker)).toBe(false);
+    expect(f.objects()).toBe(before);
+    // Without the allowlist the same env fetches, despite `protocol.allow=never`.
+    const { GIT_ALLOW_PROTOCOL: _allow, ...unguarded } = guarded;
+    expect(read(unguarded).stdout).toBe('export const remote = 1;\n');
+    expect(existsSync(f.marker)).toBe(true);
+    expect(f.objects()).not.toBe(before);
+  });
+
+  it('starts no helper for a transport outside the command-line overrides', async () => {
+    const f = partialClone();
+    const bin = join(f.root, 'probe-bin'); mkdirSync(bin);
+    const helperRan = join(f.root, 'helper-ran');
+    writeFileSync(join(bin, 'git-remote-probe'), `#!/bin/sh\ntouch '${helperRan}'\nexit 1\n`); chmodSync(join(bin, 'git-remote-probe'), 0o755);
+    run(f.cwd, 'config', 'remote.origin.url', 'probe::anywhere');
+    run(f.cwd, 'config', 'protocol.probe.allow', 'always');
+    const before = f.objects();
+    const { GIT_NO_LAZY_FETCH: _lazy, ...env }: NodeJS.ProcessEnv = { ...f.toolEnv, PATH: `${bin}:${f.toolEnv.PATH}` };
+    // Review's Bash git has no preflight, so this is the env guard against an unlisted transport.
+    expect((await f.broker(REVIEW_SPEC, f.cwd, env)({ tool: 'Bash', command: 'git show HEAD:src/a.ts' })).ok).toBe(false);
+    expect(existsSync(helperRan)).toBe(false);
+    expect(f.objects()).toBe(before);
+    // The six `-c` overrides alone do not cover it: without the allowlist the helper starts.
+    const { GIT_ALLOW_PROTOCOL: _allow, ...unguarded } = env;
+    await f.broker(REVIEW_SPEC, f.cwd, unguarded)({ tool: 'Bash', command: 'git show HEAD:src/a.ts' });
+    expect(existsSync(helperRan)).toBe(true);
+  });
+
+  it('refuses before any object lookup, with the empty allowlist reaching the git child', async () => {
+    const f = partialClone();
+    const bin = join(f.root, 'shim-bin'); mkdirSync(bin);
+    const log = join(f.root, 'git-calls');
+    const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+    writeFileSync(join(bin, 'git'), `#!/bin/sh\nprintf '%s|%s\\n' "\${GIT_ALLOW_PROTOCOL+set}:\${GIT_ALLOW_PROTOCOL}" "$*" >> '${log}'\nexec '${realGit}' "$@"\n`);
+    chmodSync(join(bin, 'git'), 0o755);
+    const plan = f.broker(PLAN_SPEC, f.cwd, { ...f.toolEnv, PATH: `${bin}:${f.toolEnv.PATH}` });
+    expect((await plan({ tool: 'Bash', command: 'git show HEAD:src/a.ts' })).ok).toBe(false);
+    expect((await plan({ tool: 'Read', path: 'src/a.ts', ref: f.sha })).ok).toBe(false);
+    const calls = readFileSync(log, 'utf8').trim().split('\n');
+    expect(calls).toHaveLength(2);
+    for (const call of calls) {
+      expect(call.startsWith('set:|')).toBe(true);
+      expect(call).toContain('config --list -z');
+      expect(call).not.toMatch(/rev-parse|cat-file/);
+    }
   });
 
   it('finds the partial clone from a task worktree of it', async () => {
@@ -249,6 +312,31 @@ describe.skipIf(process.platform === 'win32')('fully local reads at a commit', (
     const plan = f.broker(wt);
     expect(await plan({ tool: 'Read', path: 'a.txt', ref: f.sha })).toEqual({ ok: true, text: 'committed\n' });
     expect(await plan({ tool: 'Bash', command: 'git show HEAD:a.txt' })).toEqual({ ok: true, text: 'committed\n' });
+  });
+
+  it('reads with an explicitly empty promisor value, which git reads as false, and refuses a bare one', async () => {
+    const f = local();
+    const config = join(f.repo, '.git/config');
+    const base = readFileSync(config, 'utf8');
+    const plan = f.broker(f.repo);
+    writeFileSync(config, `${base}[remote "origin"]\n\turl = /nowhere\n\tpromisor =\n`);
+    expect(await plan({ tool: 'Read', path: 'a.txt', ref: f.sha })).toEqual({ ok: true, text: 'committed\n' });
+    expect(await plan({ tool: 'Bash', command: 'git show HEAD:a.txt' })).toEqual({ ok: true, text: 'committed\n' });
+    writeFileSync(config, `${base}[remote "origin"]\n\turl = /nowhere\n\tpromisor\n`);
+    expect(await plan({ tool: 'Read', path: 'a.txt', ref: f.sha })).toMatchObject({ ok: false, text: expect.stringContaining('promisor remote') });
+  });
+
+  it('holds Plan\'s read to the 2 MB file rule and the result cap', async () => {
+    const f = local();
+    writeFileSync(join(f.repo, 'big.txt'), 'x'.repeat(2_000_001));
+    writeFileSync(join(f.repo, 'large.txt'), `${'line of text\n'.repeat(80_000)}`);
+    f.git('add', '.'); f.git('commit', '-qm', 'sizes');
+    const plan = f.broker(f.repo);
+    expect(await plan({ tool: 'Bash', command: 'git show HEAD:big.txt' })).toMatchObject({ ok: false, text: expect.stringContaining('at most 2 MB') });
+    const large = await plan({ tool: 'Bash', command: 'git show HEAD:large.txt' });
+    expect(large.ok).toBe(true);
+    expect(large.text.length).toBeLessThanOrEqual(RESULT_CAP);
+    expect(large.text).toMatch(/\[cezar: output truncated; [^\]]*use Read with `ref`, `offset` and `limit`\]$/);
   });
 
   it('refuses the read when the promisor setting is unclear or the config cannot be read', async () => {
