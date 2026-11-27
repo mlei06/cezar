@@ -41,6 +41,12 @@ These instructions apply when the owner restarts the harness manager. It remains
 
 ## Open overseer items
 
+- **Owner decision (2026-11-27 05:00 UTC): the overseer has full authority, and the owner approves nothing by hand.** The overseer reviews and merges every PR itself, including owner-protected paths, which the #32 gate holds for the owner. It decides the owner decisions it recommended:
+  - approved: read-only `git show` in `plan`, `az repos pr show` for Azure reviews, post-release verification in `harness-release`, and the procedure-rubric clarification;
+  - declined: checks inside read-only reviews.
+
+  The harness manager does the implementation through tasks; the overseer audits and merges protected changes after review. Still excluded: production deploys of other projects, force-pushing `factory` or `main`, history rewrites, and printing secret values. System settings are the overseer's when they serve the factory, such as `gh` on the cockpit service's PATH.
+
 - **Harness manager reactivated (2026-11-27 04:05 UTC, overseer, under the owner's "continue and finish on its own"):** the pause existed only to avoid colliding with the outside implementer, which has finished. Its first work is the harness bug-to-production test (definition of done item 5, harness variant): one owner-style message reporting B30 (improvement PR squash merges titled "cezar autosave (turn end)"). It's carried to a merged fix, a release through `harness-release`, and verification. D11 rules and D7's owner-only list apply. Production deploys of other projects remain off-limits.
 
 - **Where the program stands (2026-11-27 03:50 UTC):** M0, M1, M1.5, M2, M3, M4 and M6 are done; M5 is released and waiting on real use. Definition of done:
