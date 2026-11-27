@@ -3341,9 +3341,11 @@ describe('fetchPrMergeState and an unreadable statusCheckRollup (#969)', () => {
   }) {
     const calls: string[] = [];
     execFileMock.mockImplementation((...args: unknown[]) => {
-      const argv = args[1] as string[];
+      const raw = args[1] as string[];
       const cb = args[args.length - 1] as (e: unknown, r: unknown) => void;
-      calls.push(argv.join(' '));
+      calls.push(raw.join(' '));
+      // The merge path pins `--hostname` (B30); route on the call itself.
+      const argv = raw[0] === 'api' && raw[1] === '--hostname' ? ['api', ...raw.slice(3)] : raw;
       const answer = (produce: () => unknown) => {
         let value: unknown;
         try {
@@ -3398,15 +3400,17 @@ describe('fetchPrMergeState and an unreadable statusCheckRollup (#969)', () => {
     const coreCall = calls.find((c) => c.includes(CORE_FIELDS));
     expect(coreCall).toBeDefined();
     expect(coreCall).not.toContain('statusCheckRollup');
-    expect(calls).toContain('pr view 353 --json statusCheckRollup');
+    expect(calls).toContain('pr view 353 --repo github.com/acme/demo --json statusCheckRollup');
   });
 
   it('keeps mergeable, mergeStateStatus and reviewDecision when the rollup detail is unreadable', async () => {
     // The fine-grained-PAT shape: detail exits 1 with empty stdout, the aggregate state is readable.
-    routeGh({ aggregate: () => aggregate('SUCCESS') });
+    const calls = routeGh({ aggregate: () => aggregate('SUCCESS') });
 
     const out = await fetchPrMergeState('/repo/fine-grained', repoRef, 353);
 
+    // The aggregate fallback is pinned to the merge's host like every other merge-path call (B30).
+    expect(calls.some((c) => /^api --hostname github\.com graphql /.test(c))).toBe(true);
     expect(out.available).toBe(true);
     if (!out.available) throw new Error('expected the merge state to survive');
     expect(out.mergeState.mergeable).toBe('mergeable');
@@ -3498,7 +3502,7 @@ describe('fetchPrMergeState and an unreadable statusCheckRollup (#969)', () => {
 
     await fetchPrMergeState('/repo/no-wasted-call', repoRef, 353);
 
-    expect(calls.some((c) => c.startsWith('api graphql'))).toBe(false);
+    expect(calls.some((c) => /^api --hostname github\.com graphql /.test(c))).toBe(false);
   });
 
   describe('reading the base branch rules', () => {
@@ -3604,7 +3608,7 @@ describe('fetchPrMergeState and an unreadable statusCheckRollup (#969)', () => {
         const out = await fetchPrMergeState('/repo/free-private', repoRef, 353);
 
         if (!out.available) throw new Error('expected the merge state to survive');
-        expect(calls).toContain('api repos/acme/demo/branches/main');
+        expect(calls).toContain('api --hostname github.com repos/acme/demo/branches/main');
         expect(out.mergeState.reviewDecision).toBe('not-required');
         expect(out.mergeState.checks).toEqual([{ name: 'ci', state: 'passing', required: false }]);
         expect(out.mergeState.blockers).toEqual([]);

@@ -431,3 +431,16 @@ export const githubAssetResponseSchema = z.discriminatedUnion('available', [
   z.object({ available: z.literal(true), dataUrl: z.string().regex(/^data:image\/(?:png|jpeg|gif|webp|avif);base64,[A-Za-z0-9+/=]+$/).max(7 * 1024 * 1024) }),
 ]);
 export type GithubAssetResponse = z.infer<typeof githubAssetResponseSchema>;
+
+/** `host/owner/repo#n`, lower-cased, for a GitHub PR web URL; undefined for anything else. */
+export function githubPrIdentity(url: string | undefined | null): string | undefined {
+  const m = url ? /^https:\/\/([^/\s]+)\/([^/\s]+)\/([^/\s]+)\/pull\/(\d+)\/?(?:[?#].*)?$/i.exec(url.trim()) : null;
+  return m ? `${m[1]}/${m[2]}/${m[3]}#${Number(m[4])}`.toLowerCase() : undefined;
+}
+
+/** Whether two PR web URLs name the same PR: by GitHub identity when both parse, else verbatim. */
+export function samePrUrl(a: string | undefined | null, b: string | undefined | null): boolean {
+  const left = githubPrIdentity(a);
+  const right = githubPrIdentity(b);
+  return left !== undefined || right !== undefined ? left === right : Boolean(a) && a === b;
+}

@@ -10,6 +10,7 @@ import { baseDivergence, rewriteLeaseArg } from '../git-changes.ts';
 import { getHeadCommit, getRepoInfo } from '../git.ts';
 import { fetchIssueMetadata } from './github-issue-metadata.ts';
 import { reportPrClosed } from './pr-closed.ts';
+import { githubPrIdentity } from './pr-url.ts';
 import type {
   DraftPrInput,
   DraftPrOutcome,
@@ -78,18 +79,21 @@ export async function fetchGithubPrDiff(
   repoRoot: string,
   number: number,
   refresh = false,
+  /** Pins head and files to this repository and host (the merge target) instead of gh's default. */
+  pinned?: GithubRepoRef,
 ): Promise<ForgePrDiffResult> {
   if (process.env.CEZ_DRY_RUN === '1') return mockGithubPrDiff(number);
   try {
     const head = ghPrHeadSchema.parse(
-      JSON.parse(await gh(repoRoot, ['pr', 'view', String(number), '--json', 'headRefOid'])),
+      JSON.parse(await gh(repoRoot, ['pr', 'view', String(number), ...(pinned ? mergeRepoArgs(pinned) : []), '--json', 'headRefOid'])),
     ).headRefOid;
-    const key = `${repoRoot}\0${number}\0${head}`;
+    const filesPath = pinned ? `repos/${pinned.owner}/${pinned.repo}` : 'repos/{owner}/{repo}';
+    const key = `${repoRoot}\0${pinned ? mergeRepoArgs(pinned)[1] : ''}\0${number}\0${head}`;
     const hit = prDiffCache.get(key);
     if (!refresh && hit && Date.now() - hit.at < CACHE_MS) return hit.data;
     const rows = z.array(ghPrFileSchema).parse(
       await fetchPrFilePages((page) =>
-        gh(repoRoot, ['api', `repos/{owner}/{repo}/pulls/${number}/files?per_page=100&page=${page}`], 30_000),
+        gh(repoRoot, ['api', ...(pinned ? mergeHostArgs(pinned) : []), `${filesPath}/pulls/${number}/files?per_page=100&page=${page}`], 30_000),
       ),
     );
     const limited = rows.slice(0, GH_PR_DIFF_FILE_CAP);
@@ -3440,12 +3444,12 @@ async function fetchMergeChecks(
   number: number,
 ): Promise<MergeChecksTier> {
   try {
-    const out = await gh(repoRoot, ['pr', 'view', String(number), '--json', 'statusCheckRollup']);
+    const out = await gh(repoRoot, ['pr', 'view', String(number), ...mergeRepoArgs(repoRef), '--json', 'statusCheckRollup']);
     return { tier: 'detailed', rollup: mergeChecksSchema.parse(JSON.parse(out)).statusCheckRollup ?? [] };
   } catch (error) {
     const reason = whyLine(error instanceof Error ? error.message : String(error));
     const runGraphql: GraphqlRunner = (query, variables) => {
-      const args = ['api', 'graphql', '-f', `query=${query}`];
+      const args = ['api', ...mergeHostArgs(repoRef), 'graphql', '-f', `query=${query}`];
       for (const [key, value] of Object.entries(variables)) args.push('-f', `${key}=${value}`);
       return gh(repoRoot, args);
     };
@@ -3516,7 +3520,7 @@ async function fetchMergeRequirements(
   const repo = `repos/${repoRef.owner}/${repoRef.repo}`;
   const branch = encodeURIComponent(base);
   const classic = <T>(path: string, parse: (output: string) => T) =>
-    gh(repoRoot, ['api', `${repo}/branches/${branch}/protection/${path}`])
+    gh(repoRoot, ['api', ...mergeHostArgs(repoRef), `${repo}/branches/${branch}/protection/${path}`])
       .then(parse)
       .catch((err: unknown) => (protectionAbsent(err) ? NOT_CONFIGURED : planGated(err) ? PLAN_GATED : null));
   const [checksRead, reviewsRead, rulesRead] = await Promise.all([
@@ -3532,7 +3536,7 @@ async function fetchMergeRequirements(
         .parse(JSON.parse(output));
       return (body.required_approving_review_count ?? 0) > 0 || body.require_code_owner_reviews === true;
     }),
-    gh(repoRoot, ['api', `${repo}/rules/branches/${branch}?per_page=100`])
+    gh(repoRoot, ['api', ...mergeHostArgs(repoRef), `${repo}/rules/branches/${branch}?per_page=100`])
       .then((output) => rulesetRulesSchema.parse(JSON.parse(output)))
       .catch((err: unknown) => (planGated(err) ? PLAN_GATED : null)),
   ]);
@@ -3546,7 +3550,7 @@ async function fetchMergeRequirements(
       (checksRead === PLAN_GATED || checksRead === NOT_CONFIGURED) &&
       (reviewsRead === PLAN_GATED || reviewsRead === NOT_CONFIGURED) &&
       (rulesRead === PLAN_GATED || rulesRead.length === 0);
-    if (!quiet || !(await branchUnprotected(repoRoot, repo, base))) return { readable: false, requiredChecks: [] };
+    if (!quiet || !(await branchUnprotected(repoRoot, repoRef, base))) return { readable: false, requiredChecks: [] };
     return { readable: true, requiredChecks: [], reviewsRequired: false };
   }
   const classicChecks = checksRead === NOT_CONFIGURED ? [] : checksRead;
@@ -3572,14 +3576,24 @@ async function fetchMergeRequirements(
 }
 
 /** True only when GitHub's answer for exactly `base` parses and says `protected: false`. */
-async function branchUnprotected(repoRoot: string, repo: string, base: string): Promise<boolean> {
+async function branchUnprotected(repoRoot: string, repoRef: GithubRepoRef, base: string): Promise<boolean> {
   try {
-    const output = await gh(repoRoot, ['api', `${repo}/branches/${encodeURIComponent(base)}`]);
+    const output = await gh(repoRoot, ['api', ...mergeHostArgs(repoRef), `repos/${repoRef.owner}/${repoRef.repo}/branches/${encodeURIComponent(base)}`]);
     const body = z.object({ name: z.string(), protected: z.boolean() }).parse(JSON.parse(output));
     return body.name === base && body.protected === false;
   } catch {
     return false;
   }
+}
+
+/** `--repo` for the merge path's reads: the repository the merge PUT targets, never gh's default. */
+function mergeRepoArgs(repoRef: GithubRepoRef): string[] {
+  return ['--repo', `${repoRef.host ?? GITHUB_COM}/${repoRef.owner}/${repoRef.repo}`];
+}
+
+/** `--hostname` for the merge path's `gh api` calls: the PUT's host, never an inherited `GH_HOST`. */
+function mergeHostArgs(repoRef: GithubRepoRef): string[] {
+  return ['--hostname', repoRef.host ?? GITHUB_COM];
 }
 
 /** Test hook — the merge-state cache would otherwise leak state across cases in one process. */
@@ -3627,12 +3641,12 @@ export async function fetchPrMergeState(
     // taking `mergeable`, `mergeStateStatus` and `reviewDecision` down with it even though the same
     // token reads all three. The check detail now has its own call, and its own way to degrade.
     const prOut = await gh(repoRoot, [
-      'pr', 'view', String(number), '--json',
+      'pr', 'view', String(number), ...mergeRepoArgs(repoRef), '--json',
       'number,title,url,state,isDraft,headRefName,baseRefName,headRefOid,mergeable,mergeStateStatus,reviewDecision,mergeCommit,mergedAt',
     ]);
     const parsedPr = mergePrSchema.parse(JSON.parse(prOut));
     const [policyOut, requirements, checks] = await Promise.all([
-      gh(repoRoot, ['api', `repos/${repoRef.owner}/${repoRef.repo}`]),
+      gh(repoRoot, ['api', ...mergeHostArgs(repoRef), `repos/${repoRef.owner}/${repoRef.repo}`]),
       fetchMergeRequirements(repoRoot, repoRef, parsedPr.baseRefName),
       fetchMergeChecks(repoRoot, repoRef, number),
     ]);
@@ -3772,8 +3786,13 @@ async function mergePullRequest(
     }
     if (!repoRef) return { merged: false, status: 404, error: 'GitHub repository not found.' };
     const out = await gh(repoRoot, [
-      'api', '--method', 'PUT', `repos/${repoRef.owner}/${repoRef.repo}/pulls/${number}/merge`,
+      'api', ...mergeHostArgs(repoRef), '--method', 'PUT', `repos/${repoRef.owner}/${repoRef.repo}/pulls/${number}/merge`,
       '-f', `merge_method=${input.method}`, '-f', `sha=${input.expectedHeadSha}`,
+      ...(input.method === 'squash' && current.title.trim()
+        && githubPrIdentity(current.url) === githubPrIdentity(`https://${repoRef.host ?? GITHUB_COM}/${repoRef.owner}/${repoRef.repo}/pull/${number}`)
+        && input.squashSubjectFromPrTitle?.(current.url)
+        ? ['-f', `commit_title=${current.title}`]
+        : []),
     ]);
     const result = ghMergeResultSchema.parse(JSON.parse(out));
     if (!result.merged) return { merged: false, status: 409, error: result.message ?? 'GitHub refused the merge.', code: 'github-blocked', current };
@@ -3820,7 +3839,7 @@ export function createGithubDriver(repoRoot: string, repoRef: GithubRepoRef | nu
     // closed or merged item.
     searchItems: (kind, query, opts) => searchGithubItems(repoRoot, kind, query, opts?.limit),
 
-    prDiff: (number, opts) => fetchGithubPrDiff(repoRoot, number, opts?.refresh),
+    prDiff: (number, opts) => fetchGithubPrDiff(repoRoot, number, opts?.refresh, opts?.mergeTarget ? repoRef ?? undefined : undefined),
 
     createPR: (input) => createDraftPr(input),
 

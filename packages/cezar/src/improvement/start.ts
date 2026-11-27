@@ -9,6 +9,7 @@ import { readRunIndexFromDisk } from '../runs/run-index.ts';
 import { runHarnessVersion } from '../self-update/run-version.ts';
 import type { ProjectContext } from '../server/project-context.ts';
 import { resolveForge } from '../server/forge/index.ts';
+import { samePrUrl } from '../server/forge/pr-url.ts';
 import { getRepoInfo } from '../server/git.ts';
 import { loadWorkspaceConfig } from '../workspace/config.ts';
 import { loadWorkflows } from '../workflows/load.ts';
@@ -51,11 +52,11 @@ async function refreshOpenPr(project: ImprovementProject, records: readonly Impr
   if (!open?.pr?.number || !open.pr.url) return;
   const forge = resolveForge(await getRepoInfo(project.root));
   const result = await forge?.prMergeState?.(open.pr.number, { refresh: true });
-  if (!result?.available || result.mergeState.url !== open.pr.url) return;
+  if (!result?.available || !samePrUrl(result.mergeState.url, open.pr.url)) return;
   const pr = result.mergeState;
-  if (pr.state === 'closed') settleImprovementPr(project.dataDir, pr.url, { at: new Date() });
+  if (pr.state === 'closed') settleImprovementPr(project.dataDir, pr.url, { at: new Date(), projectId: project.id });
   if (pr.state === 'merged' && pr.mergeCommitSha) {
-    settleImprovementPr(project.dataDir, pr.url, { at: new Date(pr.mergedAt ?? Date.now()), mergedCommit: pr.mergeCommitSha });
+    settleImprovementPr(project.dataDir, pr.url, { at: new Date(pr.mergedAt ?? Date.now()), mergedCommit: pr.mergeCommitSha, projectId: project.id });
   }
 }
 

@@ -2869,6 +2869,8 @@ describe('ManagerEngine', () => {
         const other = await autonomous(clean);
         expect(await clean.propose(other, { action: merge })).toMatchObject({ status: 'done' });
         expect(merged()).toBe(true);
+        // B30: the files checked are the merge target's, not gh's default repository's.
+        expect(requests.find((request) => request.path.includes('/changes'))?.path).toBe('/api/v1/p/alpha/github/prs/7/changes?refresh=1&target=merge');
       });
 
       it('enforces owner policy and verifies the exact product line count for improvement PRs', async () => {

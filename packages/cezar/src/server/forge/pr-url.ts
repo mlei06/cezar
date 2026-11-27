@@ -14,3 +14,6 @@ export function prNumberOfUrl(url: string | undefined | null): number | undefine
   const n = url ? PR_PATH.exec(url)?.[1] : undefined;
   return n ? Number(n) : undefined;
 }
+
+
+export { githubPrIdentity, samePrUrl } from '@open-mercato/cezar-contract';
