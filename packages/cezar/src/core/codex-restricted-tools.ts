@@ -8,8 +8,10 @@ import { codexBashArgv, codexGithubOperands, type CodexRestrictedPolicy } from '
 
 const path = z.string().min(1).max(4_096);
 const lines = z.number().int().min(1).max(2_000).optional();
+// A full or abbreviated object id only: no branch names, ranges, `@{}` or `:` paths reach git (B31).
+const ref = z.string().regex(/^[0-9a-f]{7,64}$/i, 'ref must be a commit id (7 to 64 hex characters)').optional();
 const requestSchema = z.discriminatedUnion('tool', [
-  z.object({ tool: z.literal('Read'), path, offset: z.number().int().min(1).max(1_000_000).optional(), limit: lines }).strict(),
+  z.object({ tool: z.literal('Read'), path, offset: z.number().int().min(1).max(1_000_000).optional(), limit: lines, ref }).strict(),
   z.object({ tool: z.literal('Grep'), pattern: z.string().max(4_096), path: path.optional(), glob: z.string().max(512).optional(), limit: lines }).strict(),
   z.object({ tool: z.literal('Glob'), pattern: z.string().max(512), path: path.optional(), limit: lines }).strict(),
   z.object({ tool: z.literal('Bash'), command: z.string().max(16_000) }).strict(),
@@ -25,10 +27,10 @@ function argumentIssue(err: z.ZodError): string {
 
 export const CODEX_READ_TOOL = {
   type: 'function', name: 'cezar_read',
-  description: 'Read-only tools enforced by cezar. Use Read for files (500 lines from `offset` unless `limit`; read ranges, not whole files), Grep for content, Glob for file names (`pattern`), Bash for a single approved git/GitHub read command. Grep and Glob take `limit` for the most result lines. At most four calls run at once. A refused call fails the same way when repeated: change it. Native shell and write tools are denied. No pipelines, shell syntax, writes, browser, pushes or GitHub mutations.',
+  description: 'Read-only tools enforced by cezar. Use Read for files (500 lines from 1-based `offset` unless `limit`; read ranges, not whole files; add `ref` with a commit id to read the repository file as it is at that commit instead of `git show`; a partial result ends with the lines shown and the next offset), Grep for content, Glob for file names (`pattern`), Bash for a single approved git/GitHub read command. Grep and Glob take `limit` for the most result lines. At most four calls run at once. A refused call fails the same way when repeated: change it. Native shell and write tools are denied. No pipelines, shell syntax, writes, browser, pushes or GitHub mutations.',
   inputSchema: z.toJSONSchema(z.object({
     tool: z.enum(['Read', 'Grep', 'Glob', 'Bash']), path: path.nullable(),
-    offset: z.number().int().nullable(), limit: z.number().int().nullable(),
+    offset: z.number().int().nullable(), limit: z.number().int().nullable(), ref: z.string().nullable(),
     pattern: z.string().nullable(), glob: z.string().nullable(), command: z.string().nullable(),
   }).strict()),
 };
@@ -319,11 +321,56 @@ export function runPipeline(pipeline: readonly string[][], stdin: string | undef
 }
 
 export type CodexReadResult = { success: boolean; contentItems: Array<{ type: 'inputText'; text: string }> };
-const RESULT_CAP = 64_000;
+/** The hard bound on one model-facing result, in UTF-16 code units, truncation notice included (B31). */
+export const RESULT_CAP = 64_000;
+/** A Read line longer than this is cut, so one minified line cannot fill a result. */
+export const READ_LINE_CAP = 2_000;
 const TRUNCATED = '\n[cezar: output truncated; narrow the pattern, path or range]';
+const RESULT_TRUNCATED = '\n[cezar: output truncated; narrow the pattern, path or range; for a file at a commit use Read with `ref`, `offset` and `limit`]';
+/** Never ends in half a surrogate pair. */
+const cut = (text: string, length: number): string => {
+  const head = text.slice(0, Math.max(0, length));
+  return /[\ud800-\udbff]$/.test(head) ? head.slice(0, -1) : head;
+};
+export const boundResult = (text: string): string => text.length > RESULT_CAP ? cut(text, RESULT_CAP - RESULT_TRUNCATED.length) + RESULT_TRUNCATED : text;
 const result = (success: boolean, text: string): CodexReadResult => ({
-  success, contentItems: [{ type: 'inputText', text: text.length > RESULT_CAP ? text.slice(0, RESULT_CAP) + TRUNCATED : text }],
+  success, contentItems: [{ type: 'inputText', text: boundResult(text) }],
 });
+
+/**
+ * Read's 1-based line window, sliced here so the model never receives the whole file. A window that
+ * stops before the end of the file says which lines it showed and the next offset; a full window of
+ * the whole file stays byte-identical to what Read always returned.
+ */
+export function readWindow(text: string, offset = 1, limit = 500): string {
+  const all = text.split('\n');
+  const total = text.endsWith('\n') ? all.length - 1 : all.length;
+  if (offset > Math.max(total, 1)) return `[cezar: offset ${offset} is past the end of the file (${total} lines)]`;
+  const window = all.slice(offset - 1, offset - 1 + limit);
+  let cutLines = 0;
+  const shown: string[] = [];
+  let used = 0;
+  let last = offset - 1;
+  // Leave room for the footer, which is at most ~160 characters.
+  const budget = RESULT_CAP - 200;
+  for (const [i, raw] of window.entries()) {
+    const number = offset + i;
+    const line = raw.length > READ_LINE_CAP ? `${cut(raw, READ_LINE_CAP)}… [cezar: line ${number} cut at ${READ_LINE_CAP} of ${raw.length} characters]` : raw;
+    if (used + line.length + 1 > budget) break;
+    if (line !== raw) cutLines++;
+    shown.push(line);
+    used += line.length + 1;
+    if (number <= total) last = number;
+  }
+  const reachedCap = shown.length < window.length;
+  const body = shown.join('\n');
+  if (!reachedCap && last >= total && !cutLines) return body;
+  const notes = [`lines ${offset}-${last} of ${total}`];
+  if (cutLines) notes.push(`${cutLines} long line${cutLines === 1 ? '' : 's'} cut`);
+  if (reachedCap) notes.push(`stopped at the ${RESULT_CAP}-character result cap`);
+  if (last < total) notes.push(`next offset ${last + 1}`);
+  return `${body}\n[cezar: ${notes.join('; ')}]`;
+}
 
 export class CodexReadBroker {
   private readonly allowedRoots: Promise<string[]>;
@@ -337,6 +384,8 @@ export class CodexReadBroker {
     private readonly githubReadsAllowed = true,
     /** Tests shorten both; the backstop only fires when the command's own timeout failed to. */
     private readonly limits: { shellTimeoutMs?: number; backstopMs?: number } = {},
+    /** The cockpit service's PATH, searched for `gh` only when the sealed tool PATH has none (B31). */
+    private readonly servicePath: string | undefined = process.env.PATH,
   ) {
     this.cwd = realpath(spec.cwd);
     void this.cwd.catch(() => {});
@@ -356,15 +405,24 @@ export class CodexReadBroker {
     return absolute;
   }
 
-  private async execute(argv: readonly string[], truncate = true, dir?: string): Promise<string> {
+  /**
+   * Absolute path of a program. Only an already-granted `gh` falls back to the service's PATH: it is
+   * often installed outside the sealed tool PATH, and it still runs with the isolated tool env.
+   */
+  private program(name: string): string | undefined {
+    return resolveProgram(name, this.env)
+      ?? (name === 'gh' && this.servicePath ? resolveProgram('gh', { PATH: this.servicePath }) : undefined);
+  }
+
+  private async execute(argv: readonly string[], truncate = true, dir?: string, maxBuffer = 256_000): Promise<string> {
     if (this.aborter.signal.aborted) throw new Error('session is closed');
     const cwd = dir ?? await this.cwd;
     const [name, ...args] = argv;
-    const bin = resolveProgram(name!, this.env);
+    const bin = this.program(name!);
     if (!bin) throw new Error(`\`${name}\` was not found on PATH`);
     return new Promise((done, fail) => {
       // stdin is closed; there is no shell, PTY or reusable interactive process.
-      const child = execFile(bin!, args, { cwd, env: this.env, timeout: 15_000, maxBuffer: 256_000, encoding: 'utf8', signal: this.aborter.signal }, (err, stdout, stderr) => {
+      const child = execFile(bin!, args, { cwd, env: this.env, timeout: 15_000, maxBuffer, encoding: 'utf8', signal: this.aborter.signal }, (err, stdout, stderr) => {
         // Over the buffer cap the child is killed; model-facing output keeps what arrived, validation reads fail.
         if (truncate && err && 'code' in err && err.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') done(stdout + TRUNCATED);
         else if (err && !((name === 'rg' || name === 'grep') && 'code' in err && err.code === 1)) fail(new Error(stderr.trim().slice(0, 2_000) || `read command failed (${err.message.slice(0, 200)})`));
@@ -372,6 +430,30 @@ export class CodexReadBroker {
       });
       child.stdin?.end();
     });
+  }
+
+  /**
+   * A repository file's content at a commit, through fixed git argv only. The hex id is looked up as
+   * an object id (never a ref name), must name exactly one object, and that object must itself be a
+   * commit (no tag peeling). Replacement objects are off for every call; the tool env's git config
+   * keeps fsmonitor, hooks and lazy fetches off. The path stays under the worktree; Read's 2 MB rule holds.
+   */
+  private async readAtCommit(ref: string, path: string): Promise<string> {
+    const cwd = await this.cwd;
+    const rel = relative(cwd, resolve(cwd, path));
+    if (!rel || isAbsolute(rel) || rel === '..' || rel.startsWith(`..${sep}`)) throw new Error('a Read at a commit needs a file path inside the worktree');
+    const git = (...args: string[]) => this.execute(['git', '--no-replace-objects', ...args], false);
+    // `--disambiguate` lists object ids with this prefix and ignores refs, so a branch named like an id cannot redirect it.
+    const ids = (await git('rev-parse', `--disambiguate=${ref.toLowerCase()}`)).split('\n').filter(Boolean);
+    if (ids.length > 1) throw new Error(`ref ${ref} is ambiguous in this repository; give more of the commit id`);
+    const commit = ids[0] ?? '';
+    if (!/^[0-9a-f]{40,64}$/.test(commit) || (await git('cat-file', '-t', commit)).trim() !== 'commit') throw new Error(`ref ${ref} is not a commit in this repository`);
+    const object = `${commit}:./${rel.split(sep).join('/')}`;
+    const type = (await git('cat-file', '-t', object)).trim();
+    if (type !== 'blob') throw new Error(`${path} is a ${type || 'missing object'} at ${ref}, not a file`);
+    const size = Number((await git('cat-file', '-s', object)).trim());
+    if (!Number.isFinite(size) || size > 2_000_000) throw new Error('Read requires a regular file of at most 2 MB');
+    return this.execute(['git', '--no-replace-objects', 'cat-file', 'blob', object], false, undefined, 2_100_000);
   }
 
   private pending = 0;
@@ -399,7 +481,7 @@ export class CodexReadBroker {
       if (this.aborter.signal.aborted) throw new Error('session is closed');
       if (params.tool !== CODEX_READ_TOOL.name || (params.namespace !== undefined && params.namespace !== null)) throw new Error('tool is not granted');
       const raw = params.arguments;
-      const nullable = new Set(['path', 'offset', 'limit', 'pattern', 'glob', 'command']);
+      const nullable = new Set(['path', 'offset', 'limit', 'ref', 'pattern', 'glob', 'command']);
       const args: unknown = raw && typeof raw === 'object' && !Array.isArray(raw)
         ? Object.fromEntries(Object.entries(raw).filter(([key, value]) => value !== null || !nullable.has(key))) : raw;
       // Glob's flat schema also shows `glob`; a model that puts the pattern there means `pattern`.
@@ -417,14 +499,14 @@ export class CodexReadBroker {
       if (!this.policy.tools.has(input.tool)) throw new Error(`${input.tool} is not granted`);
       switch (input.tool) {
         case 'Read': {
+          if (input.ref) return result(true, readWindow(await this.readAtCommit(input.ref, input.path), input.offset, input.limit));
           const file = await open(await this.allowedPath(input.path), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
           try {
             const stat = await file.stat();
             if (!stat.isFile() || stat.size > 2_000_000) throw new Error('Read requires a regular file of at most 2 MB');
             const buffer = Buffer.alloc(stat.size);
             const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
-            const text = buffer.subarray(0, bytesRead).toString('utf8');
-            return result(true, text.split('\n').slice((input.offset ?? 1) - 1, (input.offset ?? 1) - 1 + (input.limit ?? 500)).join('\n'));
+            return result(true, readWindow(buffer.subarray(0, bytesRead).toString('utf8'), input.offset, input.limit));
           } finally { await file.close(); }
         }
         // Without ripgrep, search through grep and git rather than leave the model only whole-file dumps.
