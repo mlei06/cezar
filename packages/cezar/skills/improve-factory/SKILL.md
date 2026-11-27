@@ -1,6 +1,6 @@
 ---
 name: improve-factory
-description: Improvement runs only (the improve-factory workflow). Turn a batch of scored failure causes into one pull request of redrafts to the files that own them, with a decisions file Cezar reads. Owner-protected — changes to this file need the owner.
+description: Improvement runs only (the improve-factory workflow). Turn a batch of scored failure causes into one pull request of redrafts to the files that own them, with a decisions file Cezar reads. Changes to this file merge after an independent review and are audited after merge.
 ---
 
 # Improve the factory

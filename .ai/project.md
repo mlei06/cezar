@@ -13,7 +13,7 @@ A local, zero-config cockpit where an owner can state an outcome once and a proj
 ## Non-goals
 
 - Moving task state out of the local cockpit or requiring new setup for ordinary runs.
-- Changing credentials, permissions, protected rubrics or the judge without the owner.
+- Changing credentials or widening permissions without the owner. Changes to rubrics, the judge settings, `improve-factory` and `harness-release` merge after an independent review and are audited after merge (spec D6, v5.39).
 
 ## Backlog
 
@@ -30,4 +30,5 @@ A local, zero-config cockpit where an owner can state an outcome once and a proj
 - Delivery: M0 shipped. M1 is released and live acceptance is pending.
 - Learning: scoring, calibration and improvement remain on the roadmap.
 - B30: improvement squash merges send the PR title as the subject, with one PR identity across merge reads, manager approval, cockpit merge, settlement and recovery (implemented and tested; not yet released or live-verified).
+- Merge policy (spec v5.39): the owner-protected merge gate is removed; changes to scorers, judge settings, `improve-factory` and `harness-release` merge after an independent review and are audited by the overseer after merge (implemented in this PR; release pending).
 - Releases: the bootstrap script ships merged harness commits. Benchmarking and release acceptance are tracked in M4.

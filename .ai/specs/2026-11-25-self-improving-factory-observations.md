@@ -9,6 +9,7 @@ After M3, this log is also the calibration set for the automated judge.
 
 ## D11 observations
 
+- Owner decision, spec v5.39: the owner-protected merge gate is removed. An autonomous manager merges reviewed PRs to scorers, the judge settings, `improve-factory` and `harness-release` without a changed-files lookup, a held unreadable file list or the 400-line limit. The overseer audits those changes after merge. Explicit `owner` policy, non-autonomous approval, widened secrets or permissions and the `credential-health` enable still wait for the owner.
 - A review raised an ambiguous secret policy for generated checks. The owner confirmed that they inherit the existing workflow check-step secrets.
 
 ## Baseline: the deployment project, 2026-11-25 (before the roadmap)
