@@ -1,4 +1,3 @@
-import { GIT_SHOW_AT_REF } from '../core/read-grants.ts';
 import { READ_ONLY_BASH_PREFIXES } from './capabilities.ts';
 import { graphIssues, graphToSteps, type GraphNode, type WorkflowGraph } from './graph.ts';
 import { hasImprovementSkill, IMPROVE_FACTORY, IMPROVEMENT_CHECK } from '../improvement/workflow.ts';
@@ -337,12 +336,7 @@ export const PLAN: WorkflowDef = {
   ...builtIn('plan', 'Investigate or design a change in read-only mode.', {
     nodes: [
       { id: 'start', type: 'start' },
-      {
-        id: 'work', type: 'agent',
-        // One shell read: a committed file at a git ref (factory observations A-5, C-2).
-        allowedTools: ['Read', 'Grep', 'Glob', 'Bash'], bashAllowlist: [GIT_SHOW_AT_REF],
-        prompt: '{{task}}\n\nTo read a file as committed at a git ref, run `git show <ref>:<path>` with no flags; it is the only shell command this task may run.\n\nReport the plan or findings in your response.',
-      },
+      { id: 'work', type: 'agent', allowedTools: ['Read', 'Grep', 'Glob'], prompt: '{{task}}\n\nReport the plan or findings in your response.' },
       { id: 'done', type: 'end', status: 'success' },
     ],
     edges: [{ from: 'start', to: 'work' }, { from: 'work.done', to: 'done' }],

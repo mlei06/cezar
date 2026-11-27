@@ -12,9 +12,9 @@ export const CODEX_READ_PREFIXES = [
   'git status', 'git ls-files', 'git rev-parse', 'git merge-base',
   // Reading an Azure Repos pull request, which `gh` cannot reach.
   'git fetch origin', 'git diff', 'git log', 'git show', 'az repos pr show', 'az repos pr list',
-  // Plan's one read (`read-grants.ts`): a grant name, checked against its exact argv below.
-  GIT_SHOW_AT_REF,
 ] as const;
+// Plan's one read (`read-grants.ts`): a grant name beside the prefixes, never one of them.
+const CODEX_READ_GRANTS: readonly string[] = [...CODEX_READ_PREFIXES, GIT_SHOW_AT_REF];
 
 export interface CodexRestrictedPolicy {
   readonly mutation: 'read-only';
@@ -46,7 +46,7 @@ export function compileCodexRestrictedPolicy(spec: Pick<AgentRunSpec,
   const legacy = tools === undefined || (tools.length === DEFAULT_ALLOWED_TOOLS.length && DEFAULT_ALLOWED_TOOLS.every(t => tools.includes(t)));
   if (legacy && !spec.enforceReadOnly && spec.bashAllowlist === undefined && spec.bashHookCommand === undefined) return undefined;
   if (spec.mcpServers?.length || spec.bashHookCommand !== undefined || !tools || tools.some(t => !READ_TOOLS.has(t))) throw new CodexToolPolicyError();
-  if ((tools.includes('Bash') && !spec.bashAllowlist) || spec.bashAllowlist?.some(p => !(CODEX_READ_PREFIXES as readonly string[]).includes(p))) throw new CodexToolPolicyError();
+  if ((tools.includes('Bash') && !spec.bashAllowlist) || spec.bashAllowlist?.some(p => !CODEX_READ_GRANTS.includes(p))) throw new CodexToolPolicyError();
   return { mutation: 'read-only', tools: new Set(tools), bashPrefixes: [...(spec.bashAllowlist ?? [])] };
 }
 

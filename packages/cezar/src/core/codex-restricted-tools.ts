@@ -5,7 +5,7 @@ import { isAbsolute, posix, relative, resolve, sep, win32 } from 'node:path';
 import { z } from 'zod';
 import type { AgentRunSpec } from './agent-runner.ts';
 import { codexBashArgv, codexGithubOperands, type CodexRestrictedPolicy } from './codex-restricted-policy.ts';
-import { isGitShowAtRefArgv } from './read-grants.ts';
+import { GIT_SHOW_AT_REF, isGitShowAtRefArgv } from './read-grants.ts';
 
 const path = z.string().min(1).max(4_096);
 const lines = z.number().int().min(1).max(2_000).optional();
@@ -42,7 +42,9 @@ export function codexReadTool(policy: CodexRestrictedPolicy): typeof CODEX_READ_
     ...CODEX_READ_TOOL,
     description: 'Use Read, Grep or Glob for the worktree, and Bash to edit files or run local checks in the isolated replay worktree. The sandbox has no network or Git administration. Native shell and write tools are disabled.',
   };
-  if (!policy.shell) return CODEX_READ_TOOL;
+  if (!policy.shell) return policy.bashPrefixes.includes(GIT_SHOW_AT_REF) && policy.bashPrefixes.length === 1
+    ? { ...CODEX_READ_TOOL, description: `${CODEX_READ_TOOL.description} Here Bash runs only \`git show <ref>:<path>\`, one tracked file at a git ref, with no flags.` }
+    : CODEX_READ_TOOL;
   return { ...CODEX_READ_TOOL, description: `Tools enforced by cezar. Use Read for files, Grep for content, Glob for file names, Bash for one command: ${policy.shell.describe} Native shell and write tools are denied; cezar refuses every other command and any other shell syntax.` };
 }
 
@@ -457,6 +459,22 @@ export class CodexReadBroker {
     return this.execute(['git', '--no-replace-objects', 'cat-file', 'blob', object], false, undefined, 2_100_000);
   }
 
+  /**
+   * Plan's `git show <ref>:<path>`, run as fixed `cat-file` argv: the operand must name exactly one
+   * blob (a tree or a missing path is refused), replacement objects stay off, and the tool env keeps
+   * config, helpers and lazy fetches out. Read's 2 MB rule holds; the result cap bounds the reply.
+   */
+  private async blobAtRef(object: string): Promise<string> {
+    const git = (...args: string[]) => this.execute(['git', '--no-replace-objects', ...args], false);
+    const id = (await git('rev-parse', '--verify', '--quiet', '--end-of-options', object).catch(() => '')).trim();
+    if (!/^[0-9a-f]{40,64}$/.test(id)) throw new Error(`${object} names no file in this repository`);
+    const type = (await git('cat-file', '-t', id)).trim();
+    if (type !== 'blob') throw new Error(`${object} is a ${type}, not a file`);
+    const size = Number((await git('cat-file', '-s', id)).trim());
+    if (!Number.isFinite(size) || size > 2_000_000) throw new Error('git show at a ref reads a file of at most 2 MB');
+    return this.execute(['git', '--no-replace-objects', 'cat-file', 'blob', id], false, undefined, 2_100_000);
+  }
+
   private pending = 0;
   async call(params: Record<string, unknown>): Promise<CodexReadResult> {
     if (this.pending >= 4) return result(false, 'cezar: at most four read operations may run at once');
@@ -582,8 +600,7 @@ export class CodexReadBroker {
               }
             }
           }
-          // The same read as `ref` on Read: replacement objects and text-conversion drivers stay off.
-          if (isGitShowAtRefArgv(argv)) return result(true, await this.execute(['git', '--no-replace-objects', 'show', '--no-textconv', argv[2]!]));
+          if (this.policy.bashPrefixes.includes(GIT_SHOW_AT_REF) && isGitShowAtRefArgv(argv)) return result(true, await this.blobAtRef(argv[2]!));
           return result(true, await this.execute(argv));
         }
       }
