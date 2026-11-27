@@ -4,8 +4,10 @@ import { dirname, join } from 'node:path';
 import { expect, it, vi } from 'vitest';
 import { smokeStagedHarness, withStagingCockpit } from './staging.ts';
 
-// `outcome` stands in for what the engine records: the check's own failure, or a different error.
-const fixtureWith = (outcome: { status: string; error?: string } | 'run-command') => [
+// `outcome` stands in for what the engine records: the step outcome, and the exit its
+// `check-output` event carries (-1 for a spawn failure or a signal; null for no event).
+type Outcome = { status: string; error?: string; exitCode?: number | null };
+const fixtureWith = (outcome: Outcome | 'run-command') => [
   "import { createServer } from 'node:http';",
   "const port = Number(process.argv[process.argv.indexOf('--port') + 1]);",
   "const run = { id: 'fixture', title: 'check', task: 'check', workflow: 'example',",
@@ -17,8 +19,10 @@ const fixtureWith = (outcome: { status: string; error?: string } | 'run-command'
   "  if (req.method === 'POST') { let body = ''; for await (const chunk of req) body += chunk;",
   "    command = JSON.parse(body).steps[0].command; }",
   "  const failed = command !== 'true';",
-  "  const result = outcome === 'run-command' ? (failed ? { status: 'failed', error: '`' + command + '` exited non-zero' } : { status: 'done' }) : outcome;",
+  "  const result = outcome === 'run-command' ? (failed ? { status: 'failed', error: '`' + command + '` exited non-zero', exitCode: 1 } : { status: 'done', exitCode: 0 }) : outcome;",
+  "  const exits = typeof result.exitCode === 'number' ? [{ seq: 1, ts: run.createdAt, type: 'check-output', stepId: 'check', command, text: '', exitCode: result.exitCode }] : [];",
   "  const payload = req.url === '/api/v1/health' ? { instanceId: process.env.CEZ_INSTANCE_ID }",
+  "    : req.url === '/api/v1/runs/fixture/history' ? { events: exits, itemCount: exits.length, liveCursor: 'live', asOfSeq: 1, hasOlder: false }",
   "    : req.url === '/api/v1/isolated' ? { workspace: process.env.CEZ_HOME, cwd: process.cwd(),",
   "         runnerOverride: process.env.CEZ_OPENCODE_BIN, dry: process.env.CEZ_DRY_RUN, managers: process.env.CEZ_MANAGERS,",
   "         automations: process.env.CEZ_AUTOMATIONS, scoring: process.env.CEZ_SCORING, codexHome: process.env.CODEX_HOME }",
@@ -71,7 +75,7 @@ it('fails the smoke task itself for the rollback drill', async () => {
     const entry = join(root, 'fixture.mjs');
     await writeFile(entry, fixture);
     expect(await smokeStagedHarness(entry, { simulateFailure: true })).toEqual({
-      simulatedFailure: { step: 'check', command: 'false', error: '`false` exited non-zero' },
+      simulatedFailure: { step: 'check', command: 'false', exitCode: 1, error: '`false` exited non-zero' },
     });
     await smokeStagedHarness(entry);
   } finally {
@@ -82,6 +86,12 @@ it('fails the smoke task itself for the rollback drill', async () => {
 it.each([
   ['a failure outside the check', { status: 'failed', error: 'The worktree could not be created.' }, 'failed outside its check'],
   ['a drill task that passed', { status: 'done' }, 'The drill smoke task did not fail.'],
+  ['a check that could not launch or was signalled', { status: 'failed', error: '`false` exited non-zero', exitCode: -1 },
+    'did not record `false` exiting 1 (exit -1)'],
+  ['a check that exited with another code', { status: 'failed', error: '`false` exited non-zero', exitCode: 2 },
+    'did not record `false` exiting 1 (exit 2)'],
+  ['a check without a recorded exit', { status: 'failed', error: '`false` exited non-zero', exitCode: null },
+    'did not record `false` exiting 1 (exit unrecorded)'],
 ] as const)('treats %s in the drill as an ordinary smoke failure', async (_name, outcome, message) => {
   const root = await mkdtemp(join(tmpdir(), 'cez-staging-test-'));
   try {

@@ -19,6 +19,9 @@ interface Probe { active: string; restarts: number; smoked: boolean; seen: numbe
 type Answer = { status: number; body: string; location?: string };
 type Health = 'ok' | 'not-found' | 'redirect' | 'error' | 'down' | ((probe: Probe) => Answer | undefined);
 const json = (body: unknown): Answer => ({ status: 200, body: JSON.stringify(body) });
+/** The health contract's runtime id is a UUID: one per active version and restart count. */
+const runtime = (active: string, restarts: number) =>
+  '0000000' + ({ previous: '1', candidate: '2' }[active] ?? '0') + '-0000-4000-8000-' + String(restarts).padStart(12, '0');
 
 async function fixture(opts: { health?: Health; smoke?: 'verified' | 'error' | 'ignores'; installed?: string; active?: string } = {}) {
   const health = opts.health ?? 'ok';
@@ -37,8 +40,8 @@ async function fixture(opts: { health?: Health; smoke?: 'verified' | 'error' | '
     if (probe.restarts !== lastRestarts) { lastRestarts = probe.restarts; seen = 0; }
     probe.seen = seen++;
     const answer = request.url !== '/api/v1/health' ? { status: 404, body: '{}' }
-      : typeof health === 'function' ? health(probe) ?? json({ runtimeId: probe.active + '#' + probe.restarts })
-        : health === 'ok' ? json({ runtimeId: probe.active + '#' + probe.restarts })
+      : typeof health === 'function' ? health(probe) ?? json({ runtimeId: runtime(probe.active, probe.restarts) })
+        : health === 'ok' ? json({ runtimeId: runtime(probe.active, probe.restarts) })
           : health === 'redirect' ? { status: 302, body: '', location: '/elsewhere' }
             : { status: health === 'error' ? 503 : 404, body: '{}' };
     if (answer.location) response.setHeader('location', answer.location);
@@ -95,7 +98,7 @@ async function fixture(opts: { health?: Health; smoke?: 'verified' | 'error' | '
         const mode = process.env.RELEASE_TEST_SMOKE;
         if (mode === 'error') throw new Error('The staging cockpit exited during startup.');
         if (mode === 'ignores') return undefined;
-        return opts.simulateFailure ? { simulatedFailure: { step: 'check', command: 'false', error: '\`false\` exited non-zero' } } : {};
+        return opts.simulateFailure ? { simulatedFailure: { step: 'check', command: 'false', exitCode: 1, error: '\`false\` exited non-zero' } } : {};
       };
     `),
     writeFile(join(dist, 'benchmarks', 'harness-smoke.js'), [
@@ -117,7 +120,7 @@ async function fixture(opts: { health?: Health; smoke?: 'verified' | 'error' | '
     state,
     releaseLog,
     healthUrl: (path = '/api/v1/health') => 'http://127.0.0.1:' + port + path,
-    execute: (...flags: string[]) => exec(process.execPath, [release, sha, '--force', ...flags], {
+    execute: (...flags: string[]) => exec(process.execPath, [release, sha, ...(flags.includes('--hold-new-tasks') ? [] : ['--force']), ...flags], {
       timeout: 25_000,
       env: {
         ...process.env, CEZ_HOME: workspace, PATH: commands + ':' + process.env.PATH,
@@ -204,14 +207,14 @@ it.skipIf(skip)(
       expect.objectContaining({ action: 'benchmark', result: 'started' }),
       expect.objectContaining({ action: 'benchmark', sha: release.sha, passRate: 100, baseline: 100, result: 'ok' }),
       expect.objectContaining({
-        action: 'post-switch-smoke', sha: release.sha, result: 'failed', simulated: true, runtimeId: 'candidate#1',
-        check: { step: 'check', command: 'false', error: '`false` exited non-zero' },
+        action: 'post-switch-smoke', sha: release.sha, result: 'failed', simulated: true, runtimeId: runtime('candidate', 1),
+        check: { step: 'check', command: 'false', exitCode: 1, error: '`false` exited non-zero' },
       }),
       expect.objectContaining({
-        action: 'switch', sha: release.sha, id: 'candidate', previous: 'previous', result: 'failed', runtimeId: 'candidate#1',
+        action: 'switch', sha: release.sha, id: 'candidate', previous: 'previous', result: 'failed', runtimeId: runtime('candidate', 1),
         reason: 'simulated post-switch smoke failure (--simulate-unhealthy): `false` exited non-zero',
       }),
-      expect.objectContaining({ action: 'rollback', id: 'previous', from: 'candidate', result: 'ok', automatic: true, runtimeId: 'previous#2' }),
+      expect.objectContaining({ action: 'rollback', id: 'previous', from: 'candidate', result: 'ok', automatic: true, runtimeId: runtime('previous', 2) }),
     ]);
     expect(await release.report()).toMatchObject({
       commit: release.sha, result: 'rolled-back', version: 'candidate', previous: 'previous',
@@ -222,8 +225,8 @@ it.skipIf(skip)(
     expect(await release.active()).toBe('candidate');
     expect((await release.smokes()).at(-1)).toBe('/candidate-entry {}');
     expect((await release.log()).slice(-2)).toEqual([
-      expect.objectContaining({ action: 'post-switch-smoke', result: 'ok', runtimeId: 'candidate#3' }),
-      expect.objectContaining({ action: 'switch', id: 'candidate', previous: 'previous', result: 'ok', runtimeId: 'candidate#3' }),
+      expect.objectContaining({ action: 'post-switch-smoke', result: 'ok', runtimeId: runtime('candidate', 3) }),
+      expect.objectContaining({ action: 'switch', id: 'candidate', previous: 'previous', result: 'ok', runtimeId: runtime('candidate', 3) }),
     ]);
     expect(await release.report()).toMatchObject({ commit: release.sha, result: 'switched' });
   },
@@ -241,17 +244,19 @@ it.skipIf(skip).each([
   const log = await release.log();
   expect(log.some((entry) => 'simulated' in entry)).toBe(false);
   expect(log.slice(-3)).toEqual([
-    expect.objectContaining({ action: 'post-switch-smoke', result: 'failed', reason, runtimeId: 'candidate#1' }),
+    expect.objectContaining({ action: 'post-switch-smoke', result: 'failed', reason, runtimeId: runtime('candidate', 1) }),
     expect.objectContaining({ action: 'switch', result: 'failed', reason: 'post-switch smoke failed: ' + reason }),
-    expect.objectContaining({ action: 'rollback', result: 'ok', automatic: true, runtimeId: 'previous#2' }),
+    expect.objectContaining({ action: 'rollback', result: 'ok', automatic: true, runtimeId: runtime('previous', 2) }),
   ]);
   expect(await release.report()).toMatchObject({ result: 'rolled-back' });
 }, 20_000);
 
 it.skipIf(skip).each([
   ['a health page without a runtime id', (probe: Probe) => probe.restarts > 0 ? { status: 200, body: '<html>fallback</html>' } : undefined,
-    'the health answer has no runtime id'],
-  ['a runtime id that never changes', () => json({ runtimeId: 'same-process' }), 'the new process has not answered'],
+    'the health answer has no valid runtime id'],
+  ['a malformed runtime id', (probe: Probe) => probe.restarts > 0 ? json({ runtimeId: 'not-a-uuid-' + probe.restarts }) : undefined,
+    'the health answer has no valid runtime id'],
+  ['a runtime id that never changes', () => json({ runtimeId: runtime('previous', 0) }), 'the new process has not answered'],
 ] as const)('fails the switch and the rollback within the bound on %s', async (_name, health, reason) => {
   const release = await fixture({ health });
   const started = Date.now();
@@ -263,14 +268,45 @@ it.skipIf(skip).each([
   ]);
 }, 20_000);
 
-it.skipIf(skip)('verifies the rollback against the observed candidate runtime when the fresh probe is lost', async () => {
+it.skipIf(skip).each([
+  ['the failed candidate', runtime('candidate', 1)],
+  ['the original version', runtime('previous', 0)],
+] as const)('verifies the rollback against %s when the probe before it is lost', async (_name, stale) => {
   // After the smoke fails, the probe before the rollback restart gets 503; the first answers after
-  // that restart still come from the candidate process.
+  // that restart still come from an old process.
   const release = await fixture({
     health: (probe) => probe.restarts === 1 && probe.smoked ? { status: 503, body: '{}' }
-      : probe.restarts === 2 && probe.seen < 2 ? json({ runtimeId: 'candidate#1' }) : undefined,
+      : probe.restarts === 2 && probe.seen < 2 ? json({ runtimeId: stale }) : undefined,
   });
   await expect(release.execute('--benchmark', '--simulate-unhealthy', '--health-url', release.healthUrl()))
     .rejects.toMatchObject({ code: 1 });
-  expect((await release.log()).at(-1)).toMatchObject({ action: 'rollback', result: 'ok', automatic: true, runtimeId: 'previous#2' });
+  expect((await release.log()).at(-1)).toMatchObject({ action: 'rollback', result: 'ok', automatic: true, runtimeId: runtime('previous', 2) });
 }, 30_000);
+
+it.skipIf(skip)('verifies the switch against the preflight runtime when the probe before the restart is lost', async () => {
+  // Preflight sees the original process; the probe right before the restart gets 503, and the
+  // first answers after it still come from the original process.
+  const release = await fixture({
+    health: (probe) => probe.restarts === 0 && probe.seen === 1 ? { status: 503, body: '{}' }
+      : probe.restarts === 1 && probe.seen < 2 ? json({ runtimeId: runtime('previous', 0) }) : undefined,
+  });
+  await release.execute('--health-url', release.healthUrl());
+  expect(await release.active()).toBe('candidate');
+  expect((await release.log()).at(-1)).toMatchObject({ action: 'switch', result: 'ok', runtimeId: runtime('candidate', 1) });
+}, 30_000);
+
+it.skipIf(skip).each(['0', 'bogus', 'Infinity', '61', '1.5'])('refuses --health-seconds %s before anything switches', async (seconds) => {
+  const release = await fixture();
+  await expect(release.execute('--health-seconds', seconds, '--health-url', release.healthUrl())).rejects.toMatchObject({ code: 1 });
+  expect(await release.active()).toBe('previous');
+  expect(await release.restarts()).toEqual([]);
+  expect((await release.log()).at(-1)?.reason).toBe('--health-seconds must be a whole number from 1 to 60 (D9: health within 60 s).');
+}, 20_000);
+
+it.skipIf(skip)('refuses a release hold too short to cover the checks and a rollback', async () => {
+  const release = await fixture();
+  await expect(release.execute('--benchmark', '--hold-new-tasks', '--wait-minutes', '4', '--health-url', release.healthUrl()))
+    .rejects.toMatchObject({ code: 1 });
+  expect(await release.restarts()).toEqual([]);
+  expect(String((await release.log()).at(-1)?.reason)).toContain('The release hold (240 s) cannot cover the switch');
+}, 20_000);

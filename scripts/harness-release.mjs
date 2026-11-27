@@ -9,7 +9,7 @@
 //   node scripts/harness-release.mjs --rollback   switch back to the previous release and open a draft revert PR
 //   flags: --force (skip the idle wait)  --wait-minutes N (default 15)  --no-restart
 //          --health-url URL (default http://127.0.0.1:4321/api/v1/health)  --keep N (default 5)
-//          --health-seconds N (default 60; how long a restart has to answer with a new runtime id)
+//          --health-seconds N (1-60, default 60; how long a restart has to answer with a new runtime id)
 //          --unit NAME (default cezar)  --skip-checks (build only; no typecheck/tests)
 //          --benchmark (stage and compare the harness smoke suite before switching)
 //          --require-real-replays (for the protected workflow, validate affected real runner paths)
@@ -45,7 +45,18 @@ let API;
 const UNIT = value('unit', 'cezar');
 const KEEP = Number(value('keep', '5'));
 const WAIT_MS = Number(value('wait-minutes', '15')) * 60_000;
-const HEALTH_MS = Number(value('health-seconds', '60')) * 1_000;
+const HEALTH_SECONDS = value('health-seconds', '60');
+const HEALTH_MS = Number(HEALTH_SECONDS) * 1_000;
+const RESTART_MS = 20_000;
+const PROBE_MS = 10_000;
+// The post-switch smoke: staging startup and task (30 s each), its history read and shutdown.
+const SMOKE_MS = 90_000;
+/** What a hold must still cover once traffic drains: two restarts, two probes and two health
+ * windows (switch and rollback), plus the post-switch smoke when it runs. */
+const RESERVE_MS = 2 * (RESTART_MS + PROBE_MS + HEALTH_MS) + (args.includes('--benchmark') ? SMOKE_MS : 0) + 15_000;
+const HOLD_SECONDS = Math.min(15 * 60, Math.ceil(WAIT_MS / 1000));
+/** Every valid runtime id seen before a restart; none of them can verify the next one. */
+const seenRuntimes = new Set();
 
 const say = (line) => console.log(`harness-release: ${line}`);
 const run = (cmd, argv, cwd = REPO) => execFileSync(cmd, argv, { cwd, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8' }).trim();
@@ -105,16 +116,14 @@ async function withReleaseHold(action) {
     return action();
   }
   const endpoint = API + '/workspace/factory/release-hold';
-  const seconds = Math.min(15 * 60, Math.ceil(WAIT_MS / 1000));
   const response = await fetch(endpoint, {
     method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ seconds }), signal: AbortSignal.timeout(10_000),
+    body: JSON.stringify({ seconds: HOLD_SECONDS }), signal: AbortSignal.timeout(10_000),
   });
   if (!response.ok) throw new Error('Could not hold traffic for a release (HTTP ' + response.status + ').');
   const lease = await response.json();
   const path = endpoint + '/' + encodeURIComponent(lease.id);
-  // Reserve time for restart, health, the post-switch check and rollback.
-  const deadline = Date.parse(lease.expiresAt) - (flag('benchmark') ? 150_000 : 60_000);
+  const deadline = Date.parse(lease.expiresAt) - RESERVE_MS;
   try {
     log({ action: 'hold', result: 'started', expiresAt: lease.expiresAt });
     let status = lease;
@@ -159,40 +168,54 @@ async function preflightHealth() {
   if (res.status >= 300 && res.status < 500) {
     throw new Error('The health URL ' + HEALTH + ' answered HTTP ' + res.status + '; refusing to switch.');
   }
-  if (res.status >= 500) say('the health URL answered HTTP ' + res.status + '; continuing as a recovery');
+  if (res.status >= 500) return say('the health URL answered HTTP ' + res.status + '; continuing as a recovery');
+  remember(runtimeIdOf(await res.json().catch(() => undefined)));
 }
 
-function checkDrillOptions() {
+/** Refuse what could not be checked or rolled back, before anything is built or switched. */
+function checkOptions() {
+  if (!/^\d+$/.test(HEALTH_SECONDS) || HEALTH_MS < 1_000 || HEALTH_MS > 60_000) {
+    throw new Error('--health-seconds must be a whole number from 1 to 60 (D9: health within 60 s).');
+  }
+  if (flag('hold-new-tasks') && !flag('force') && HOLD_SECONDS * 1_000 <= RESERVE_MS) {
+    throw new Error('The release hold (' + HOLD_SECONDS + ' s) cannot cover the switch, its checks and a rollback (' +
+      Math.ceil(RESERVE_MS / 1000) + ' s); raise --wait-minutes.');
+  }
   if (!flag('simulate-unhealthy')) return;
   for (const other of ['rollback', 'stage-only', 'no-restart']) {
     if (flag(other)) throw new Error('--simulate-unhealthy cannot be combined with --' + other + '.');
   }
 }
 
-/** The runtime id a health answer carries, when it is a usable one. */
+// The health contract's runtimeId is z.string().uuid() (RFC 9562 versions 1-8).
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const runtimeIdOf = (body) => {
   const id = body && typeof body === 'object' ? body.runtimeId : undefined;
-  return typeof id === 'string' && /^[A-Za-z0-9._:#-]{1,128}$/.test(id) ? id : undefined;
+  return typeof id === 'string' && UUID.test(id) ? id.toLowerCase() : undefined;
 };
+const remember = (id) => { if (id) seenRuntimes.add(id); };
 
-/** A restart is verified only by a health answer carrying a runtime id none of `known` had. */
-async function healthy(known = []) {
+/** A restart is verified only by a health answer carrying a runtime id never seen before it. */
+async function healthy() {
   const deadline = Date.now() + HEALTH_MS;
   let last = 'no answer';
   while (Date.now() < deadline) {
     try {
-      const res = await fetch(HEALTH, { redirect: 'error', signal: AbortSignal.timeout(5_000) });
+      const res = await fetch(HEALTH, { redirect: 'error', signal: AbortSignal.timeout(Math.min(5_000, Math.max(1, deadline - Date.now()))) });
       if (!res.ok) {
         last = 'HTTP ' + res.status;
       } else {
         const runtimeId = runtimeIdOf(await res.json().catch(() => undefined));
-        if (runtimeId && !known.includes(runtimeId)) return { ok: true, runtimeId };
-        last = runtimeId ? 'the new process has not answered' : 'the health answer has no runtime id';
+        if (runtimeId && !seenRuntimes.has(runtimeId)) {
+          remember(runtimeId);
+          return { ok: true, runtimeId };
+        }
+        last = runtimeId ? 'the new process has not answered' : 'the health answer has no valid runtime id';
       }
     } catch (error) {
       last = error.message;
     }
-    await sleep(2_000);
+    await sleep(Math.min(2_000, Math.max(0, deadline - Date.now())));
   }
   return { ok: false, reason: last };
 }
@@ -200,7 +223,7 @@ async function healthy(known = []) {
 function restart() {
   if (flag('no-restart')) return say('--no-restart: not restarting the service');
   execFileSync('systemctl', ['--user', 'restart', UNIT], {
-    cwd: REPO, stdio: ['ignore', 'pipe', 'pipe'], timeout: 20_000,
+    cwd: REPO, stdio: ['ignore', 'pipe', 'pipe'], timeout: RESTART_MS,
   });
 }
 
@@ -258,18 +281,21 @@ async function verifyRealReplays(packageRoot, sha, previous) {
   return passed;
 }
 
-/** `known` holds runtime ids already seen before this restart (the failed candidate's, on a
- * rollback), so a lost fresh probe cannot let the old process pass as the restarted one. */
-async function activateAndVerify(su, id, simulateFailure = false, verifyWorkload, known = []) {
+/** Every runtime seen so far (preflight, earlier probes, the failed candidate) stays in
+ * `seenRuntimes`, so a lost fresh probe cannot let an old process pass as the restarted one. */
+async function activateAndVerify(su, id, simulateFailure = false, verifyWorkload) {
   let health;
   try {
-    const prior = flag('no-restart') || simulateFailure ? undefined : runtimeIdOf(await getJson(HEALTH).catch(() => undefined));
+    if (!flag('no-restart')) {
+      remember(runtimeIdOf(await fetch(HEALTH, { redirect: 'error', signal: AbortSignal.timeout(PROBE_MS) })
+        .then((res) => res.ok ? res.json() : undefined).catch(() => undefined)));
+    }
     su.activate(id);
     su.writeLaunchers();
     restart();
     if (flag('no-restart')) return { ok: true };
     if (simulateFailure) return { ok: false, reason: 'simulated (--simulate-unhealthy)' };
-    health = await healthy([...known, ...(prior ? [prior] : [])]);
+    health = await healthy();
     if (health.ok && verifyWorkload) await verifyWorkload(su.versionEntry(id), health);
     return health;
   } catch (error) {
@@ -290,7 +316,7 @@ async function switchTo(su, id, previous, entry, verifyWorkload) {
   log({ ...entry, id, previous, result: 'failed', reason: health.reason, ...runtime });
   say(`switch failed (${health.reason})`);
   if (previous) {
-    const back = await activateAndVerify(su, previous, false, undefined, health.runtimeId ? [health.runtimeId] : []);
+    const back = await activateAndVerify(su, previous);
     log({
       action: 'rollback', id: previous, from: id, result: back.ok ? 'ok' : 'failed', reason: back.reason, automatic: true,
       ...(back.runtimeId ? { runtimeId: back.runtimeId } : {}),
@@ -536,7 +562,7 @@ async function rollback() {
 
 try {
   useHealthEndpoint(HEALTH_INPUT);
-  checkDrillOptions();
+  checkOptions();
   process.exitCode = flag('rollback') ? await rollback() : await release();
 } catch (error) {
   say(`failed: ${error.message}`);
