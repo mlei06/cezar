@@ -49,7 +49,7 @@ These instructions apply when the owner restarts the harness manager. It remains
 
   Also infra: `gh` lives in a user-local directory that isn't on the cockpit service's PATH.
 
-  PR #41 (the read-broker mechanism fix) passed the overseer's audit. It waits on the approval policy (`manager`, and the harness manager is inactive), so the implementer or owner merges it after its review task.
+  PR #41 (the read-broker mechanism fix) passed the overseer's audit and review. The overseer merged it under the owner's delegation, since the harness manager is inactive, and released it as `0.21.0+release-51781d3` (A-7). Its before/after numbers come after 10 scored runs on that release.
 
 - **Overseer audit of the first improvement run (A-1 to A-3):** the run's typecheck failure was in a file the draft didn't touch. The likely cause is the task worktree resolving the main checkout's dependencies, not the draft. B29 reuses the existing local After worktree creation hook to run `npm ci` from the worktree lock and typecheck the untouched factory base before task startup. The disposable installed fixture verified fresh dependencies in the worktree and blocked a failing baseline before any task step. The revision-checked local project settings now carry the hook. The named release completed that setup in a real harness worktree. Its installed dependency matched the worktree lockfile, and the unchanged factory baseline passed before the workflow ran.
 
