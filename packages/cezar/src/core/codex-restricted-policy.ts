@@ -1,6 +1,7 @@
 import { DEFAULT_ALLOWED_TOOLS, type AgentRunSpec, type BrokeredShell, type ReplayShell } from './agent-runner.ts';
 import { CodexToolPolicyError } from './codex-tool-policy.ts';
 import { tokenizePlainShell } from './plain-shell.ts';
+import { GIT_SHOW_AT_REF, isGitShowAtRefArgv } from './read-grants.ts';
 
 export const CODEX_DISABLED_FEATURES = ['shell_tool', 'view_image', 'hooks', 'multi_agent', 'multi_agent_v2', 'goals', 'unified_exec_tty', 'shell_snapshot', 'remote_plugin', 'remote_control', 'tool_suggest', 'image_generation', 'js_repl', 'code_mode', 'apps', 'plugins', 'browser_use', 'browser_use_external', 'browser_use_full_cdp_access', 'computer_use', 'in_app_browser', 'skill_mcp_dependency_install', 'workspace_dependencies'] as const;
 
@@ -11,6 +12,8 @@ export const CODEX_READ_PREFIXES = [
   'git status', 'git ls-files', 'git rev-parse', 'git merge-base',
   // Reading an Azure Repos pull request, which `gh` cannot reach.
   'git fetch origin', 'git diff', 'git log', 'git show', 'az repos pr show', 'az repos pr list',
+  // Plan's one read (`read-grants.ts`): a grant name, checked against its exact argv below.
+  GIT_SHOW_AT_REF,
 ] as const;
 
 export interface CodexRestrictedPolicy {
@@ -99,6 +102,7 @@ function permittedArgv(argv: readonly string[], policy: CodexRestrictedPolicy): 
         && refspec.length === 2 && refspec[0] === 'origin' && /^\+?refs\/pull\/\d+\/(merge|head)$/.test(refspec[1]!)
         && flags(argv.slice(2), GIT_FLAGS.fetch!);
     }
+    if (policy.bashPrefixes.includes(GIT_SHOW_AT_REF) && isGitShowAtRefArgv(argv)) return true;
     const prefix = program === 'gh' ? argv.slice(0, 3).join(' ') : argv.slice(0, 2).join(' ');
     if (!policy.bashPrefixes.includes(prefix)) return false;
     if (program === 'gh') return github(argv);

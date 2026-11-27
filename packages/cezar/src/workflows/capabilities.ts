@@ -1,5 +1,6 @@
 import type { WorkflowCapabilities } from '@open-mercato/cezar-contract';
 import type { AgentBackend } from '../core/agent-runner.ts';
+import { GIT_SHOW_AT_REF } from '../core/read-grants.ts';
 import type { GraphNode } from './graph.ts';
 import { DEFAULT_ALLOWED_TOOLS, stepKind, type WorkflowDef, type WorkflowStepDef } from './types.ts';
 
@@ -45,6 +46,7 @@ export const READ_ONLY_BASH_PREFIXES = [
 
 function isReadOnlyCommand(command: string): boolean {
   const c = command.trim().replace(/\s+/g, ' ');
+  if (c === GIT_SHOW_AT_REF) return true;
   return READ_ONLY_BASH_PREFIXES.some((p) => c === p || c.startsWith(`${p} `));
 }
 

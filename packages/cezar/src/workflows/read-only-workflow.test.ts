@@ -9,6 +9,7 @@ import { RunStore } from '../runs/store.ts';
 import { RunManager } from './run.ts';
 import { graphToSteps, type WorkflowGraph } from './graph.ts';
 import { PLAN, REVIEW_PR } from './templates.ts';
+import { GIT_SHOW_AT_REF } from '../core/read-grants.ts';
 
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
@@ -84,7 +85,7 @@ describe('a read-only workflow', { timeout: 30_000 }, () => {
     for (const { backend, spec } of captured.launches) {
       expect(backend).toBe('codex');
       expect(spec).toMatchObject({
-        enforceReadOnly: true, allowedTools: ['Read', 'Grep', 'Glob'], mcpServers: [],
+        enforceReadOnly: true, allowedTools: ['Read', 'Grep', 'Glob', 'Bash'], bashAllowlist: [GIT_SHOW_AT_REF], mcpServers: [],
         env: { GH_TOKEN: '', GITHUB_TOKEN: '', GIT_TERMINAL_PROMPT: '0' },
       });
       expect(spec.bypassPermissions).toBeUndefined();
@@ -109,6 +110,18 @@ describe('a read-only workflow', { timeout: 30_000 }, () => {
         JSON.stringify(event).includes('kimi cannot keep a read-only task'))).toBe(true);
     }, { timeout: 15_000 });
     expect(store.getRun(second)?.steps.at(-1)?.sessionId).toBeUndefined();
+  });
+
+  it('launches plan on Claude with only its git show grant, and keeps it on Continue', async () => {
+    const id = manager!.startRun(PLAN, { task: 'inspect the repo', runner: 'claude' }).id;
+    await terminal(id);
+    expect(manager!.continueRun(id, { text: 'investigate further', runner: 'claude' })).toEqual({ ok: true });
+    await vi.waitFor(() => expect(captured.launches).toHaveLength(2), { timeout: 15_000 });
+    for (const { backend, spec } of captured.launches) {
+      expect(backend).toBe('claude');
+      expect(spec).toMatchObject({ enforceReadOnly: true, allowedTools: ['Read', 'Grep', 'Glob', 'Bash'], bashAllowlist: [GIT_SHOW_AT_REF], mcpServers: [] });
+      expect(spec.bypassPermissions).toBeUndefined();
+    }
   });
 
   it('launches on Claude with a read-only shell and no private MCP', async () => {

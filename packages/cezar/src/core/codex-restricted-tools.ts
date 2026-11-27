@@ -5,6 +5,7 @@ import { isAbsolute, posix, relative, resolve, sep, win32 } from 'node:path';
 import { z } from 'zod';
 import type { AgentRunSpec } from './agent-runner.ts';
 import { codexBashArgv, codexGithubOperands, type CodexRestrictedPolicy } from './codex-restricted-policy.ts';
+import { isGitShowAtRefArgv } from './read-grants.ts';
 
 const path = z.string().min(1).max(4_096);
 const lines = z.number().int().min(1).max(2_000).optional();
@@ -581,6 +582,8 @@ export class CodexReadBroker {
               }
             }
           }
+          // The same read as `ref` on Read: replacement objects and text-conversion drivers stay off.
+          if (isGitShowAtRefArgv(argv)) return result(true, await this.execute(['git', '--no-replace-objects', 'show', '--no-textconv', argv[2]!]));
           return result(true, await this.execute(argv));
         }
       }

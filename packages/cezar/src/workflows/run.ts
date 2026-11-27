@@ -1,5 +1,6 @@
 import { replayRunInputSchema, type ReplayRunInput, type HarnessVersion, type StepToolPolicy, type SwitchRunAgentInput } from '@open-mercato/cezar-contract';
 import { readOnlyEnv } from '../core/read-only-env.ts';
+import { GIT_SHOW_AT_REF, isGitShowAtRefOnly } from '../core/read-grants.ts';
 import { AgentUsageHolds } from '../workspace/agent-usage-holds.ts';
 import { completionReason } from './completion-reason.ts';
 import { prepareReplayCheck, runReplayShell } from './replay-check.ts';
@@ -845,10 +846,17 @@ function resolveAgentStepTools(
   state: Pick<ActiveRun, 'readOnly' | 'enforceReadOnly'>,
   definition?: Pick<WorkflowStepDef, 'allowedTools' | 'bashAllowlist'>,
   saved?: StepToolPolicy,
+  planGrant = false,
 ): StepToolPolicy {
   const enforceReadOnly = state.enforceReadOnly || saved?.enforceReadOnly;
   const enforcement = enforceReadOnly ? { enforceReadOnly: true } : {};
-  if (state.readOnly) return { allowedTools: [...READ_ONLY_TOOLS], ...enforcement };
+  if (state.readOnly) {
+    // Plan's `git show <ref>:<path>` grant survives read-only mode; every other shell grant does not.
+    const gitShow = planGrant && definition?.allowedTools?.includes('Bash') && isGitShowAtRefOnly(definition.bashAllowlist);
+    return gitShow
+      ? { allowedTools: [...READ_ONLY_TOOLS, 'Bash'], bashAllowlist: [GIT_SHOW_AT_REF], ...enforcement }
+      : { allowedTools: [...READ_ONLY_TOOLS], ...enforcement };
+  }
   if (saved) return { ...saved, ...enforcement };
   return {
     allowedTools: [...(definition?.allowedTools ?? DEFAULT_ALLOWED_TOOLS)],
@@ -1305,7 +1313,8 @@ export function replayMode(workflow: WorkflowDef): 'checks' | 'agent' | undefine
   if (graph.nodes.every((node) => REPLAY_CHECK_NODE_TYPES.has(node.type))) return 'checks';
   return graph.nodes.every((node) => {
     if (node.type !== 'agent') return REPLAY_CHECK_NODE_TYPES.has(node.type);
-    if ((node.runner && node.runner !== 'codex') || node.bashAllowlist || node.session || node.model) return false;
+    // A replay drops Plan's `git show` grant with the rest of Bash (`replayBash`), as before it existed.
+    if ((node.runner && node.runner !== 'codex') || (node.bashAllowlist && !isGitShowAtRefOnly(node.bashAllowlist)) || node.session || node.model) return false;
     const tools = node.allowedTools ?? DEFAULT_ALLOWED_TOOLS;
     return tools.includes('Bash') || tools.every(tool => READ_ONLY_TOOLS.includes(tool));
   }) ? 'agent' : undefined;
@@ -7138,7 +7147,7 @@ export class RunManager {
       failBeforeSpawn('codex: cannot restore this legacy graph step’s tool policy safely; start a new restricted task');
       return;
     }
-    const continuationTools = resolveAgentStepTools(state, toolsStep, savedTools);
+    const continuationTools = resolveAgentStepTools(state, toolsStep, savedTools, isBuiltInPlan(record?.workflowDef));
     this.store.updateStep(runId, stepId, { toolPolicy: continuationTools });
     // The temp-directory preflight (#785) rides along with account resolution on resume.
     let continueProfile: Awaited<ReturnType<RunManager['agentEnvForStep']>>;
@@ -10016,7 +10025,7 @@ export class RunManager {
       const refusal = readOnlyWorkflowRefusal(stepDef, stepBackend);
       if (refusal) return refusal;
     }
-    const stepTools = resolveAgentStepTools(state, step, graphHooks?.savedTools);
+    const stepTools = resolveAgentStepTools(state, step, graphHooks?.savedTools, isBuiltInPlan(stepDef));
     const originalTools = step.allowedTools ?? DEFAULT_ALLOWED_TOOLS;
     const replayBash = replay && originalTools.includes('Bash') && !step.bashAllowlist;
     if (replay) {

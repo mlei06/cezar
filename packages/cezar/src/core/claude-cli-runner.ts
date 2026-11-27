@@ -30,6 +30,7 @@ import { claudeUsageStatus } from './claude-usage-status.ts';
 import { ClaudeSessionCost } from './claude-session-cost.ts';
 import { armInactivityDeadline, inactivityTimeoutMessage } from './inactivity-deadline.ts';
 import { claudeMcpAllowRules, toClaudeMcpConfig, type PrivateMcpServer } from './private-mcp.ts';
+import { GIT_SHOW_AT_REF, gitShowAtRefHookCommand, isGitShowAtRefOnly } from './read-grants.ts';
 import {
   claudeTurnStarted,
   createClaudeUiState,
@@ -487,7 +488,9 @@ export function buildClaudeArgs(
       args.push('--session-id', spec.sessionId);
     }
   }
-  const allowed = buildAllowedTools(spec.allowedTools ?? [], spec.bashAllowlist);
+  // Plan's `git show <ref>:<path>` grant: Claude's prefix rule is wider, so a hook holds the shape.
+  const gitShowHook = spec.allowedTools?.includes('Bash') && isGitShowAtRefOnly(spec.bashAllowlist) ? gitShowAtRefHookCommand() : undefined;
+  const allowed = buildAllowedTools(spec.allowedTools ?? [], spec.bashAllowlist, gitShowHook !== undefined);
   // Private MCP servers (spec 2026-10-07-private-project-mcp): `--mcp-config` ADDS to the repo's
   // own MCP config, and their tools are allowed — `dontAsk` would deny every one of them otherwise.
   if (spec.noTools) args.push('--tools', '');
@@ -502,8 +505,9 @@ export function buildClaudeArgs(
   }
   // A prefix rule cannot say "gh api GET only"; the hook can, and its deny outranks the allow rules.
   const bashAllowed = allowed.some((rule) => rule === 'Bash' || rule.startsWith('Bash('));
-  const hook = spec.bashHookCommand && bashAllowed
-    ? { hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: spec.bashHookCommand }] }] } }
+  const hookCommands = bashAllowed ? [spec.bashHookCommand, gitShowHook].filter((c): c is string => !!c) : [];
+  const hook = hookCommands.length
+    ? { hooks: { PreToolUse: [{ matcher: 'Bash', hooks: hookCommands.map((command) => ({ type: 'command', command })) }] } }
     : {};
   // For a command the user's Bash sandbox would cut off from the loopback cockpit. Claude honors
   // this key from `--settings` only for a plain command: every pipe stage must match, and a
@@ -516,7 +520,9 @@ export function buildClaudeArgs(
   }
   // Settings allow rules widen `--allowedTools`; only a deny rule outranks them.
   if (spec.enforceReadOnly) {
-    args.push('--disallowedTools', CLAUDE_WRITE_TOOLS.join(','));
+    // The grant's hook denies every other Bash call, the user's own allow rules included.
+    const denied = gitShowHook && bashAllowed ? CLAUDE_WRITE_TOOLS.filter((tool) => tool !== 'Bash') : CLAUDE_WRITE_TOOLS;
+    args.push('--disallowedTools', denied.join(','));
   }
   if (spec.model) {
     args.push('--model', spec.model);
@@ -611,13 +617,16 @@ export function writeClaudeMcpConfig(
  * `bashAllowlist` becomes one `Bash(<prefix>:*)` entry per allowed prefix;
  * `Bash` with no allowlist stays plain `Bash`.
  */
-export function buildAllowedTools(allowedTools: string[], bashAllowlist?: string[]): string[] {
+export function buildAllowedTools(allowedTools: string[], bashAllowlist?: string[], gitShowHooked = false): string[] {
   const out: string[] = [];
   for (const tool of allowedTools) {
     if (tool === 'Bash' && bashAllowlist && bashAllowlist.length > 0) {
       for (const prefix of bashAllowlist) {
         const p = prefix.trim();
-        if (p) out.push(`Bash(${p}:*)`);
+        // A grant name, not a prefix: only its hook makes `git show` safe to allow.
+        if (p === GIT_SHOW_AT_REF) {
+          if (gitShowHooked) out.push('Bash(git show:*)');
+        } else if (p) out.push(`Bash(${p}:*)`);
       }
     } else {
       out.push(tool);
