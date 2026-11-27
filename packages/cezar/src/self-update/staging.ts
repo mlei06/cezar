@@ -117,12 +117,13 @@ export async function withStagingCockpit<T>(
   }
 }
 
-/** A single admitted task makes health check the run engine, not only the listener. */
-export async function smokeStagedHarness(entry: string): Promise<void> {
+/** A single admitted task makes health check the run engine, not only the listener.
+ * `simulateFailure` runs a failing check step instead, for the release rollback drill (D9). */
+export async function smokeStagedHarness(entry: string, opts: { simulateFailure?: boolean } = {}): Promise<void> {
   await withStagingCockpit(entry, async (api) => {
     const run = runRecordSchema.parse(await stagingJson(api + '/runs', {
       task: 'Check staging task admission and execution.',
-      steps: [{ id: 'check', command: 'true' }],
+      steps: [{ id: 'check', command: opts.simulateFailure ? 'false' : 'true' }],
     }));
     const end = Date.now() + 30_000;
     while (Date.now() < end) {

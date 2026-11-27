@@ -14,7 +14,9 @@
 //          --require-real-replays (for the protected workflow, validate affected real runner paths)
 //          --hold-new-tasks (lease admission while waiting and switching; needs a compatible live cockpit)
 //          --stage-only (build and check an isolated cockpit; leave the live version active)
-//          --simulate-unhealthy (test the automatic rollback: the new version's health check fails)
+//          --simulate-unhealthy (rollback drill; with --benchmark the post-switch smoke task fails after
+//            the candidate answers health, without it the health check is skipped and fails)
+// The health URL must be <origin>/api/v1/health and must answer it before anything switches.
 import { execFileSync, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -36,8 +38,9 @@ const value = (name, fallback) => {
   return i >= 0 && args[i + 1] ? args[i + 1] : fallback;
 };
 const positional = args.filter((a, i) => !a.startsWith('--') && !['--wait-minutes', '--health-url', '--keep', '--unit'].includes(args[i - 1]));
-const HEALTH = value('health-url', 'http://127.0.0.1:4321/api/v1/health');
-const API = HEALTH.replace(/\/api\/v1\/health$/, '/api/v1');
+const HEALTH_INPUT = value('health-url', 'http://127.0.0.1:4321/api/v1/health');
+let HEALTH;
+let API;
 const UNIT = value('unit', 'cezar');
 const KEEP = Number(value('keep', '5'));
 const WAIT_MS = Number(value('wait-minutes', '15')) * 60_000;
@@ -128,17 +131,54 @@ async function withReleaseHold(action) {
   }
 }
 
+/** A wrong route made both the candidate and the rollback checks fail with 404 even though the
+ * restored build was healthy, so the endpoint is checked before anything switches. */
+function useHealthEndpoint(raw) {
+  let url;
+  try { url = new URL(raw); } catch { url = undefined; }
+  if (!url || !['http:', 'https:'].includes(url.protocol) || url.username || url.password ||
+    url.search || url.hash || url.pathname !== '/api/v1/health') {
+    throw new Error('--health-url must be <origin>/api/v1/health, without a query or credentials.');
+  }
+  HEALTH = url.origin + '/api/v1/health';
+  API = url.origin + '/api/v1';
+}
+
+/** Refuse a probe the cockpit answered as a redirect or a missing route. A down cockpit (no
+ * answer) or an unhealthy one (5xx) stays releasable, so a recovery or rollback can still run. */
+async function preflightHealth() {
+  let res;
+  try {
+    res = await fetch(HEALTH, { redirect: 'manual', signal: AbortSignal.timeout(5_000) });
+  } catch (error) {
+    say('cockpit not reachable for the health preflight (' + error.message + '); continuing as a recovery');
+    return;
+  }
+  if (res.status >= 300 && res.status < 500) {
+    throw new Error('The health URL ' + HEALTH + ' answered HTTP ' + res.status + '; refusing to switch.');
+  }
+  if (res.status >= 500) say('the health URL answered HTTP ' + res.status + '; continuing as a recovery');
+}
+
+function checkDrillOptions() {
+  if (!flag('simulate-unhealthy')) return;
+  for (const other of ['rollback', 'stage-only', 'no-restart']) {
+    if (flag(other)) throw new Error('--simulate-unhealthy cannot be combined with --' + other + '.');
+  }
+}
+
 async function healthy(priorRuntime) {
   const deadline = Date.now() + 60_000;
   let last = 'no answer';
   while (Date.now() < deadline) {
     try {
-      const res = await fetch(HEALTH, { signal: AbortSignal.timeout(5_000) });
+      const res = await fetch(HEALTH, { redirect: 'error', signal: AbortSignal.timeout(5_000) });
       if (!res.ok) {
         last = 'HTTP ' + res.status;
       } else {
-        const runtime = priorRuntime ? (await res.json()).runtimeId : undefined;
-        if (!priorRuntime || runtime && runtime !== priorRuntime) return { ok: true };
+        const runtime = (await res.json().catch(() => ({})))?.runtimeId;
+        const runtimeId = typeof runtime === 'string' ? runtime : undefined;
+        if (!priorRuntime || runtimeId && runtimeId !== priorRuntime) return { ok: true, ...(runtimeId ? { runtimeId } : {}) };
         last = 'the new process has not answered';
       }
     } catch (error) {
@@ -220,7 +260,7 @@ async function activateAndVerify(su, id, simulateFailure = false, verifyWorkload
     if (flag('no-restart')) return { ok: true };
     if (simulateFailure) return { ok: false, reason: 'simulated (--simulate-unhealthy)' };
     const health = await healthy(priorRuntime);
-    if (health.ok && verifyWorkload) await verifyWorkload(su.versionEntry(id));
+    if (health.ok && verifyWorkload) await verifyWorkload(su.versionEntry(id), health);
     return health;
   } catch (error) {
     return { ok: false, reason: error.message };
@@ -228,9 +268,12 @@ async function activateAndVerify(su, id, simulateFailure = false, verifyWorkload
 }
 
 async function switchTo(su, id, previous, entry, verifyWorkload) {
-  const health = await activateAndVerify(su, id, flag('simulate-unhealthy') && entry.action === 'switch', verifyWorkload);
+  // With --benchmark the drill fails inside the post-switch smoke instead (see release()).
+  const skipHealth = flag('simulate-unhealthy') && !flag('benchmark') && entry.action === 'switch';
+  const health = await activateAndVerify(su, id, skipHealth, verifyWorkload);
+  const runtime = health.runtimeId ? { runtimeId: health.runtimeId } : {};
   if (health.ok) {
-    log({ ...entry, id, previous, result: 'ok' });
+    log({ ...entry, id, previous, result: 'ok', ...runtime });
     say(`now running ${id}`);
     return true;
   }
@@ -238,7 +281,10 @@ async function switchTo(su, id, previous, entry, verifyWorkload) {
   say(`switch failed (${health.reason})`);
   if (previous) {
     const back = await activateAndVerify(su, previous);
-    log({ action: 'rollback', id: previous, from: id, result: back.ok ? 'ok' : 'failed', reason: back.reason, automatic: true });
+    log({
+      action: 'rollback', id: previous, from: id, result: back.ok ? 'ok' : 'failed', reason: back.reason, automatic: true,
+      ...(back.runtimeId ? { runtimeId: back.runtimeId } : {}),
+    });
     say(back.ok ? `rolled back to ${previous}` : `rollback to ${previous} failed: ${back.reason}`);
   }
   return false;
@@ -261,10 +307,10 @@ function pruneBuilds(su, keepIds) {
   }
 }
 
-async function candidateSmoke(packageRoot, entry) {
+async function candidateSmoke(packageRoot, entry, opts) {
   const stagingModule = join(packageRoot, 'dist', 'self-update', 'staging.js');
   const { smokeStagedHarness } = await import(pathToFileURL(stagingModule).href);
-  await smokeStagedHarness(entry);
+  await smokeStagedHarness(entry, opts);
 }
 
 let reportCandidate;
@@ -307,6 +353,7 @@ async function reportRelease() {
 
 async function release() {
   const stageOnly = flag('stage-only');
+  if (!stageOnly) await preflightHealth();
   const spec = positional[0] ?? FACTORY_REF;
   if (!stageOnly || !positional[0]) {
     const fetched = spawnSync('git', ['fetch', '--quiet', '--no-tags', 'origin', '+refs/heads/factory:' + FACTORY_REF], {
@@ -376,11 +423,28 @@ async function release() {
   say(`linked ${linked.id}${previous ? ` (current: ${previous})` : ''}`);
   if (linked.id === previous) {
     say('already the active release');
+    if (flag('simulate-unhealthy')) {
+      say('the rollback drill needs a candidate that differs from the active release');
+      return 1;
+    }
     return 0;
   }
-  const verifyWorkload = flag('benchmark') ? async (entry) => {
-    await candidateSmoke(packageRoot, entry);
-    log({ action: 'post-switch-smoke', sha, result: 'ok' });
+  const drill = flag('simulate-unhealthy') && flag('benchmark');
+  const verifyWorkload = flag('benchmark') ? async (entry, health) => {
+    // The smoke runs only once the restarted candidate answered health; its runtime id says which.
+    const evidence = { ...(health.runtimeId ? { runtimeId: health.runtimeId } : {}), ...(drill ? { simulated: true } : {}) };
+    try {
+      await candidateSmoke(packageRoot, entry, drill ? { simulateFailure: true } : {});
+    } catch (error) {
+      log({ action: 'post-switch-smoke', sha, result: 'failed', reason: error.message, ...evidence });
+      throw new Error((drill ? 'simulated post-switch smoke failure (--simulate-unhealthy): ' : 'post-switch smoke failed: ') + error.message);
+    }
+    // A candidate built before the drill existed ignores the option; never let it switch.
+    if (drill) {
+      log({ action: 'post-switch-smoke', sha, result: 'failed', reason: 'the drill smoke task did not fail', ...evidence });
+      throw new Error('the candidate ignored the simulated post-switch smoke failure');
+    }
+    log({ action: 'post-switch-smoke', sha, result: 'ok', ...evidence });
   } : undefined;
   const ok = await withReleaseHold(() => switchTo(su, linked.id, previous, { action: 'switch', sha }, verifyWorkload));
   pruneBuilds(su, [linked.id, previous].filter(Boolean));
@@ -428,6 +492,7 @@ async function rollback() {
   const release = lastSwitch(current);
   const target = release?.previous;
   if (!target || target === current) throw new Error('no previous release recorded to roll back to');
+  await preflightHealth();
   say(`rolling back ${current} → ${target}`);
   const ok = await withReleaseHold(() => switchTo(su, target, current, { action: 'rollback', from: current }));
   if (!ok) return 1;
@@ -446,6 +511,8 @@ async function rollback() {
 }
 
 try {
+  useHealthEndpoint(HEALTH_INPUT);
+  checkDrillOptions();
   process.exitCode = flag('rollback') ? await rollback() : await release();
 } catch (error) {
   say(`failed: ${error.message}`);
@@ -453,4 +520,4 @@ try {
   process.exitCode = error.code === 'busy' ? 3 : 1;
 }
 
-await reportRelease().catch(() => say('could not deliver the harness release report'));
+if (API) await reportRelease().catch(() => say('could not deliver the harness release report'));

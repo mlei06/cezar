@@ -9,12 +9,15 @@ const fixture = [
   "const port = Number(process.argv[process.argv.indexOf('--port') + 1]);",
   "const run = { id: 'fixture', title: 'check', task: 'check', workflow: 'example',",
   "  createdAt: '2026-01-01T00:00:00.000Z', tokensUsed: 0, archived: false, steps: [] };",
-  "createServer((req, res) => {",
+  "let failing = false;",
+  "createServer(async (req, res) => {",
+  "  if (req.method === 'POST') { let body = ''; for await (const chunk of req) body += chunk;",
+  "    failing = JSON.parse(body).steps[0].command !== 'true'; }",
   "  const payload = req.url === '/api/v1/health' ? { instanceId: process.env.CEZ_INSTANCE_ID }",
   "    : req.url === '/api/v1/isolated' ? { workspace: process.env.CEZ_HOME, cwd: process.cwd(),",
   "         runnerOverride: process.env.CEZ_OPENCODE_BIN, dry: process.env.CEZ_DRY_RUN, managers: process.env.CEZ_MANAGERS,",
   "         automations: process.env.CEZ_AUTOMATIONS, scoring: process.env.CEZ_SCORING, codexHome: process.env.CODEX_HOME }",
-  "    : { ...run, status: req.method === 'POST' ? 'queued' : 'done' };",
+  "    : { ...run, status: req.method === 'POST' ? 'queued' : failing ? 'failed' : 'done' };",
   "  res.setHeader('content-type', 'application/json');",
   "  res.end(JSON.stringify(payload));",
   "}).listen(port, '127.0.0.1');",
@@ -51,6 +54,19 @@ it('starts an independent cockpit and removes its workspace after a failed check
     await expect(fetch(api + '/health')).rejects.toThrow();
   } finally {
     vi.unstubAllEnvs();
+    await rm(root, { recursive: true, force: true });
+  }
+}, 10_000);
+
+it('fails the smoke task itself for the rollback drill', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'cez-staging-test-'));
+  try {
+    const entry = join(root, 'fixture.mjs');
+    await writeFile(entry, fixture);
+    await expect(smokeStagedHarness(entry, { simulateFailure: true }))
+      .rejects.toThrow('The staged smoke task did not complete successfully.');
+    await smokeStagedHarness(entry);
+  } finally {
     await rm(root, { recursive: true, force: true });
   }
 }, 10_000);
