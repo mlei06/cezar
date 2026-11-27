@@ -14,3 +14,9 @@ export function prNumberOfUrl(url: string | undefined | null): number | undefine
   const n = url ? PR_PATH.exec(url)?.[1] : undefined;
   return n ? Number(n) : undefined;
 }
+
+/** `host/owner/repo#n`, lower-cased, for a GitHub PR web URL; undefined for anything else. */
+export function githubPrIdentity(url: string | undefined | null): string | undefined {
+  const m = url ? /^https:\/\/([^/\s]+)\/([^/\s]+)\/([^/\s]+)\/pull\/(\d+)\/?(?:[?#].*)?$/i.exec(url.trim()) : null;
+  return m ? `${m[1]}/${m[2]}/${m[3]}#${Number(m[4])}`.toLowerCase() : undefined;
+}

@@ -475,7 +475,7 @@ import { parseRemote, resolveForge, type ForgeAvailability } from './forge/index
 import { isGithubHost } from '../github-hosts.ts';
 import { createGithubDriver } from './forge/github.ts';
 import { onPrClosed, reportPrClosed } from './forge/pr-closed.ts';
-import { hasOpenImprovementPr, settleImprovementPr, watchImprovementRuns } from '../improvement/lifecycle.ts';
+import { hasOpenImprovementPr, hasOpenImprovementPrAt, settleImprovementPr, watchImprovementRuns } from '../improvement/lifecycle.ts';
 import { ensureFactoryAutomation, FACTORY_AUTOMATION, runFactoryAutomation } from '../automations/factory-source.ts';
 import { ensureDataGitignore } from '../data-gitignore.ts';
 import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, fetchGithubRefStatus, forgetRefStatus, readCachedPrEnds, readCachedRefStatuses, refNumberFromUrl, searchGithubItems, GithubPrNotFoundError, GH_CHECKS_MAX, GH_SEARCH_MAX, GH_REF_STATUS_MAX, forgetGithubListCache } from './github.ts';
@@ -8349,14 +8349,14 @@ export function createApp(deps: ServerDeps) {
         const forge = await mergeForge(repoRoot);
         if (!forge?.mergePR) return c.json({ error: 'GitHub merge is unavailable' }, 409);
         // B30: a tracked improvement squashes under its PR title, not the branch's autosave subject.
-        let tracked = false;
-        if (forge.kind === 'github' && body.data.method === 'squash') {
-          try {
-            const projectId = project === bootContext ? await resolveBootProject() : project.id;
-            tracked = hasOpenImprovementPr(dataDir, projectId, parsedNumber.data.number);
-          } catch { /* unreadable records: merge as an ordinary PR */ }
-        }
-        const result = await forge.mergePR(parsedNumber.data.number, { ...body.data, ...(tracked ? { squashSubjectFromPrTitle: true } : {}) });
+        // Matched against the fresh PR the driver is about to merge, by full identity, never the number alone.
+        const projectId = forge.kind === 'github' && body.data.method === 'squash'
+          ? (project === bootContext ? await resolveBootProject() : project.id) : undefined;
+        const squashSubjectFromPrTitle = projectId === undefined ? undefined : (url: string) => {
+          try { return hasOpenImprovementPrAt(dataDir, projectId, url); }
+          catch { return false; } // unreadable records: merge as an ordinary PR
+        };
+        const result = await forge.mergePR(parsedNumber.data.number, { ...body.data, ...(squashSubjectFromPrTitle ? { squashSubjectFromPrTitle } : {}) });
         if (result.merged) {
           // We just changed this pull request, so what the ref-status cache holds about it is now
           // known-stale — and its TTL would keep every chip showing the PRE-merge status for up to

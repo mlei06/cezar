@@ -3,6 +3,7 @@ import type { ImprovementDecisions, ImprovementRecord } from '@open-mercato/ceza
 import { harnessCauseQueuePath, projectCauseQueuePath } from '../factory/causes.ts';
 import { checkFactory } from '../factory/check.ts';
 import { loadConfig } from '../config.ts';
+import { githubPrIdentity } from '../server/forge/pr-url.ts';
 import { artifactsDir, type RunRecord, type RunStore } from '../runs/store.ts';
 import { loadWorkspaceConfig } from '../workspace/config.ts';
 import {
@@ -135,6 +136,13 @@ export function watchImprovementRuns(dataDir: string, store: RunStore, projectId
 export function hasOpenImprovementPr(dataDir: string, projectId: string, number: number): boolean {
   return [false, true].some((harness) => readImprovementRecords(improvementPaths(dataDir, harness).records).some((entry) =>
     entry.projectId === projectId && entry.state === 'pr-open' && entry.pr?.number === number));
+}
+
+/** An open improvement for exactly this GitHub PR (host, repository and number), not merely its number. */
+export function hasOpenImprovementPrAt(dataDir: string, projectId: string, url: string): boolean {
+  const identity = githubPrIdentity(url);
+  return identity !== undefined && [false, true].some((harness) => readImprovementRecords(improvementPaths(dataDir, harness).records)
+    .some((entry) => entry.projectId === projectId && entry.state === 'pr-open' && githubPrIdentity(entry.pr?.url) === identity));
 }
 
 export function settleImprovementPr(dataDir: string, url: string, update: { at: Date; mergedCommit?: string }): void {

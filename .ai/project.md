@@ -22,7 +22,7 @@ A local, zero-config cockpit where an owner can state an outcome once and a proj
 - P1 Deliver M2 run identity, budgets and metrics.
 - P1 Deliver M3 scoring and calibration and M4 replay and benchmarked releases.
 - P1 Deliver M5 improvement after calibration and rollback, then M6 benchmark reporting and proactive checks.
-- P1 B30: verify the next improvement PR squash-merges onto `factory` under its PR title, not the autosave subject.
+- P1 B30: verify the next improvement PR squash-merges onto `factory` under its PR title, not the autosave subject. Deferred test coverage: a merge in a second registered (non-boot) project.
 - P2 Review the [factory roadmap backlog](specs/2026-11-25-self-improving-factory-roadmap.md#backlog) as milestones ship.
 
 ## Progress
