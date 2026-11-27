@@ -48,6 +48,31 @@ export function codexReadTool(policy: CodexRestrictedPolicy): typeof CODEX_READ_
   return { ...CODEX_READ_TOOL, description: `Tools enforced by cezar. Use Read for files, Grep for content, Glob for file names, Bash for one command: ${policy.shell.describe} Native shell and write tools are denied; cezar refuses every other command and any other shell syntax.` };
 }
 
+/** On every broker git call, beside the tool env's `GIT_NO_LAZY_FETCH=1` (which git before 2.45 ignores). */
+export const GIT_NETWORK_OFF = ['-c', 'protocol.allow=never', ...['file', 'git', 'ssh', 'http', 'https', 'ext'].flatMap(p => ['-c', `protocol.${p}.allow=never`])];
+
+const FALSE = new Set(['false', 'no', 'off', '0']);
+const TRUE = new Set(['true', 'yes', 'on', '1', '']);
+
+/**
+ * Why an object read must not run here, from `git config --list -z`: a partial clone can fetch a
+ * missing object on lookup. A `promisor` value git might read as true counts as one.
+ */
+export function partialCloneRefusal(list: string): string | undefined {
+  for (const entry of list.split('\0')) {
+    if (!entry) continue;
+    const at = entry.indexOf('\n');
+    const key = (at < 0 ? entry : entry.slice(0, at)).toLowerCase();
+    const value = at < 0 ? '' : entry.slice(at + 1).trim().toLowerCase();
+    if (key === 'extensions.partialclone') return 'this repository is a partial clone; reads at a commit need every object present locally';
+    if (/^remote\..+\.promisor$/.test(key) && !FALSE.has(value)) {
+      return TRUE.has(value) ? 'this repository has a promisor remote; reads at a commit need every object present locally'
+        : `this repository's ${key} setting is unclear; reads at a commit are refused`;
+    }
+  }
+  return undefined;
+}
+
 const SHELL_TIMEOUT_MS = 120_000;
 // The read path's guard (`codexBashArgv`); a newline stays legal for a heredoc body.
 const CONTROL = /[\x00-\x08\x0b\x0c\x0e-\x1f]/;
@@ -420,7 +445,9 @@ export class CodexReadBroker {
   private async execute(argv: readonly string[], truncate = true, dir?: string, maxBuffer = 256_000): Promise<string> {
     if (this.aborter.signal.aborted) throw new Error('session is closed');
     const cwd = dir ?? await this.cwd;
-    const [name, ...args] = argv;
+    const [name, ...rest] = argv;
+    // Command-line `-c` beats repository config, so a repo's `protocol.<name>.allow=always` cannot reopen a fetch.
+    const args = name === 'git' ? [...GIT_NETWORK_OFF, ...rest] : rest;
     const bin = this.program(name!);
     if (!bin) throw new Error(`\`${name}\` was not found on PATH`);
     return new Promise((done, fail) => {
@@ -446,6 +473,7 @@ export class CodexReadBroker {
     const rel = relative(cwd, resolve(cwd, path));
     if (!rel || isAbsolute(rel) || rel === '..' || rel.startsWith(`..${sep}`)) throw new Error('a Read at a commit needs a file path inside the worktree');
     const git = (...args: string[]) => this.execute(['git', '--no-replace-objects', ...args], false);
+    await this.refusePartialClone();
     // `--disambiguate` lists object ids with this prefix and ignores refs, so a branch named like an id cannot redirect it.
     const ids = (await git('rev-parse', `--disambiguate=${ref.toLowerCase()}`)).split('\n').filter(Boolean);
     if (ids.length > 1) throw new Error(`ref ${ref} is ambiguous in this repository; give more of the commit id`);
@@ -466,6 +494,7 @@ export class CodexReadBroker {
    */
   private async blobAtRef(object: string): Promise<string> {
     const git = (...args: string[]) => this.execute(['git', '--no-replace-objects', ...args], false);
+    await this.refusePartialClone();
     const id = (await git('rev-parse', '--verify', '--quiet', '--end-of-options', object).catch(() => '')).trim();
     if (!/^[0-9a-f]{40,64}$/.test(id)) throw new Error(`${object} names no file in this repository`);
     const type = (await git('cat-file', '-t', id)).trim();
@@ -473,6 +502,18 @@ export class CodexReadBroker {
     const size = Number((await git('cat-file', '-s', id)).trim());
     if (!Number.isFinite(size) || size > 2_000_000) throw new Error('git show at a ref reads a file of at most 2 MB');
     return this.execute(['git', '--no-replace-objects', 'cat-file', 'blob', id], false, undefined, 2_100_000);
+  }
+
+  /** Before any object lookup; config git cannot read refuses the read too. */
+  private async refusePartialClone(): Promise<void> {
+    const list = await this.execute(['git', 'config', '--list', '-z'], false)
+      .catch((err: unknown) => {
+        // A missing git or a closed session keeps its own message; anything else is config git cannot read.
+        if (err instanceof Error && /was not found on PATH|^session is closed$/.test(err.message)) throw err;
+        throw new Error('cannot read this repository\'s git config; reads at a commit are refused');
+      });
+    const refusal = partialCloneRefusal(list);
+    if (refusal) throw new Error(refusal);
   }
 
   private pending = 0;

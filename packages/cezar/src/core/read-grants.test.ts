@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { READ_ONLY_BASH_PREFIXES } from '../workflows/capabilities.ts';
 import { prepareRestrictedCodexHome } from './codex-restricted-home.ts';
 import { codexBashArgv, compileCodexRestrictedPolicy } from './codex-restricted-policy.ts';
-import { CodexReadBroker, codexReadTool } from './codex-restricted-tools.ts';
+import { CodexReadBroker, codexReadTool, partialCloneRefusal } from './codex-restricted-tools.ts';
 import { GIT_SHOW_AT_REF } from './read-grants.ts';
 
 // What `resolveAgentStepTools` hands Codex for a live built-in Plan step.
@@ -131,5 +131,133 @@ describe.skipIf(process.platform === 'win32')('Plan\'s git show grant at the Cod
     expect(readFileSync(join(f.cwd, 'src/a.ts'), 'utf8')).toBe('export const edited = 2;\n');
     expect(f.git('status', '--porcelain')).toBe(status);
     expect(f.git('rev-parse', 'HEAD')).toBe(head);
+  });
+});
+
+describe('partial-clone classification', () => {
+  it('refuses a partial clone, a promisor remote and an unclear promisor value, and passes a local repository', () => {
+    expect(partialCloneRefusal('core.bare\nfalse\0remote.origin.url\n/x\0')).toBeUndefined();
+    expect(partialCloneRefusal('remote.origin.promisor\nfalse\0')).toBeUndefined();
+    expect(partialCloneRefusal('extensions.partialclone\norigin\0')).toContain('partial clone');
+    for (const value of ['remote.origin.promisor\ntrue\0', 'remote.Up.Stream.promisor\nYes\0', 'remote.origin.promisor\0']) expect(partialCloneRefusal(value)).toContain('promisor remote');
+    expect(partialCloneRefusal('remote.origin.promisor\nmaybe\0')).toContain('unclear');
+  });
+});
+
+describe.skipIf(process.platform === 'win32')('broker git stays offline in a partial clone that allows file fetches', () => {
+  const dirs: string[] = [];
+  const brokers: CodexReadBroker[] = [];
+  afterEach(() => { for (const b of brokers.splice(0)) b.close(); for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
+  const run = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', timeout: 20_000 });
+
+  function partialClone() {
+    const root = mkdtempSync(join(tmpdir(), 'cez-partial-clone-')); dirs.push(root);
+    const origin = join(root, 'origin'); mkdirSync(join(origin, 'src'), { recursive: true });
+    run(origin, 'init', '-q'); run(origin, 'config', 'user.email', 't@example.invalid'); run(origin, 'config', 'user.name', 't');
+    writeFileSync(join(origin, 'src/a.ts'), 'export const remote = 1;\n');
+    run(origin, 'add', '.'); run(origin, 'commit', '-qm', 'base');
+    run(origin, 'config', 'uploadpack.allowFilter', 'true'); run(origin, 'config', 'uploadpack.allowAnySHA1InWant', 'true');
+    run(root, '-c', 'protocol.file.allow=always', 'clone', '-q', '--no-checkout', '--filter=blob:none', `file://${origin}`, 'clone');
+    const cwd = join(root, 'clone');
+    // The repository itself reopens file fetches, and a wrapped upload-pack records any fetch.
+    run(cwd, 'config', 'protocol.file.allow', 'always');
+    const marker = join(root, 'fetched');
+    const uploadPack = join(root, 'upload-pack');
+    writeFileSync(uploadPack, `#!/bin/sh\ntouch '${marker}'\nexec git-upload-pack "$@"\n`); chmodSync(uploadPack, 0o755);
+    run(cwd, 'config', 'remote.origin.uploadpack', uploadPack);
+    const sha = run(cwd, 'rev-parse', 'HEAD').trim();
+    const objects = () => run(cwd, 'count-objects', '-v');
+    const native = join(root, 'native'); mkdirSync(native);
+    const home = prepareRestrictedCodexHome({ cwd }, { HOME: root, CEZ_HOME: join(root, 'cezar'), CODEX_HOME: native });
+    const broker = (spec: typeof PLAN_SPEC | typeof REVIEW_SPEC, dir = cwd, env = home.toolEnv) => {
+      const b = new CodexReadBroker(compileCodexRestrictedPolicy(spec)!, { cwd: dir }, env);
+      brokers.push(b);
+      return async (args: Record<string, unknown>) => {
+        const r = await b.call({ tool: 'cezar_read', arguments: args });
+        return { ok: r.success, text: r.contentItems[0]?.text ?? '' };
+      };
+    };
+    return { root, cwd, sha, marker, objects, broker, toolEnv: home.toolEnv };
+  }
+
+  it('refuses Plan\'s git show and a pinned Read before any lookup, and Review\'s git show fetches nothing', async () => {
+    const f = partialClone();
+    const before = f.objects();
+    const plan = f.broker(PLAN_SPEC);
+    expect(await plan({ tool: 'Bash', command: 'git show HEAD:src/a.ts' })).toMatchObject({ ok: false, text: expect.stringContaining('every object present locally') });
+    expect(await plan({ tool: 'Read', path: 'src/a.ts', ref: f.sha })).toMatchObject({ ok: false, text: expect.stringContaining('every object present locally') });
+    // Review's Bash git has no lookup check: the command-line protocol overrides alone keep it offline.
+    expect((await f.broker(REVIEW_SPEC)({ tool: 'Bash', command: 'git show HEAD:src/a.ts' })).ok).toBe(false);
+    expect(existsSync(f.marker)).toBe(false);
+    expect(f.objects()).toBe(before);
+    // The fixture is live: plain git here does fetch the missing blob.
+    expect(run(f.cwd, 'show', 'HEAD:src/a.ts')).toBe('export const remote = 1;\n');
+    expect(existsSync(f.marker)).toBe(true);
+  });
+
+  it('keeps Review\'s git show offline on a git that ignores GIT_NO_LAZY_FETCH', async () => {
+    const f = partialClone();
+    const before = f.objects();
+    const { GIT_NO_LAZY_FETCH: _ignored, ...olderGit } = f.toolEnv;
+    expect((await f.broker(REVIEW_SPEC, f.cwd, olderGit)({ tool: 'Bash', command: 'git show HEAD:src/a.ts' })).ok).toBe(false);
+    expect(existsSync(f.marker)).toBe(false);
+    expect(f.objects()).toBe(before);
+  });
+
+  it('finds the partial clone from a task worktree of it', async () => {
+    const f = partialClone();
+    const wt = join(f.root, 'wt');
+    run(f.cwd, 'worktree', 'add', '-q', '--no-checkout', '--detach', wt, f.sha);
+    const before = f.objects();
+    const plan = f.broker(PLAN_SPEC, wt);
+    expect(await plan({ tool: 'Read', path: 'src/a.ts', ref: f.sha })).toMatchObject({ ok: false, text: expect.stringContaining('every object present locally') });
+    expect(await plan({ tool: 'Bash', command: 'git show HEAD:src/a.ts' })).toMatchObject({ ok: false, text: expect.stringContaining('every object present locally') });
+    expect(existsSync(f.marker)).toBe(false);
+    expect(f.objects()).toBe(before);
+  });
+});
+
+describe.skipIf(process.platform === 'win32')('fully local reads at a commit', () => {
+  const dirs: string[] = [];
+  const brokers: CodexReadBroker[] = [];
+  afterEach(() => { for (const b of brokers.splice(0)) b.close(); for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
+
+  function local() {
+    const root = mkdtempSync(join(tmpdir(), 'cez-local-ref-')); dirs.push(root);
+    const repo = join(root, 'repo'); mkdirSync(repo);
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', timeout: 10_000 });
+    git('init', '-q'); git('config', 'user.email', 't@example.invalid'); git('config', 'user.name', 't');
+    writeFileSync(join(repo, 'a.txt'), 'committed\n'); git('add', '.'); git('commit', '-qm', 'base');
+    const sha = git('rev-parse', 'HEAD').trim();
+    const native = join(root, 'native'); mkdirSync(native);
+    const broker = (cwd: string) => {
+      const home = prepareRestrictedCodexHome({ cwd }, { HOME: root, CEZ_HOME: join(root, 'cezar'), CODEX_HOME: native });
+      const b = new CodexReadBroker(compileCodexRestrictedPolicy(PLAN_SPEC)!, { cwd }, home.toolEnv);
+      brokers.push(b);
+      return async (args: Record<string, unknown>) => {
+        const r = await b.call({ tool: 'cezar_read', arguments: args });
+        return { ok: r.success, text: r.contentItems[0]?.text ?? '' };
+      };
+    };
+    return { root, repo, git, sha, broker };
+  }
+
+  it('still reads in a task worktree of a local repository', async () => {
+    const f = local();
+    const wt = join(f.root, 'wt');
+    f.git('worktree', 'add', '-q', '--detach', wt, f.sha);
+    const plan = f.broker(wt);
+    expect(await plan({ tool: 'Read', path: 'a.txt', ref: f.sha })).toEqual({ ok: true, text: 'committed\n' });
+    expect(await plan({ tool: 'Bash', command: 'git show HEAD:a.txt' })).toEqual({ ok: true, text: 'committed\n' });
+  });
+
+  it('refuses the read when the promisor setting is unclear or the config cannot be read', async () => {
+    const f = local();
+    f.git('config', 'remote.origin.promisor', 'maybe');
+    const plan = f.broker(f.repo);
+    expect(await plan({ tool: 'Read', path: 'a.txt', ref: f.sha })).toMatchObject({ ok: false, text: expect.stringContaining('unclear') });
+    f.git('config', '--unset', 'remote.origin.promisor');
+    writeFileSync(join(f.repo, '.git/config'), `${readFileSync(join(f.repo, '.git/config'), 'utf8')}[broken\n`);
+    expect(await plan({ tool: 'Bash', command: 'git show HEAD:a.txt' })).toMatchObject({ ok: false, text: expect.stringContaining('cannot read') });
   });
 });
