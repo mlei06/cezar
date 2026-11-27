@@ -481,13 +481,14 @@ export async function runManagerCommand(
     const before = await call<{ messages: Array<{ id: string; at: string }> }>('/messages?pending=1&limit=500');
     const proposed = await call<{ actionId: string; status?: string; result?: string; replaced?: string[]; alsoWaitingIn?: string[] }>('/actions', { method: 'POST', body });
     const waiting = before.messages.find((message) => message.id === proposed.actionId);
-    // An autonomous manager's action ran at once.
-    if (!waiting && proposed.status && proposed.status !== 'pending') {
+    // An autonomous manager's action ran at once, a reused card included: the settled status wins over the snapshot.
+    if (proposed.status && proposed.status !== 'pending') {
       io.log(proposed.status === 'done'
         ? `done ${proposed.actionId}: ${what} — ${proposed.result ?? 'ok'}`
         : `${proposed.status} ${proposed.actionId}: ${what} did not happen — ${proposed.result ?? 'no reason given'}`);
       return;
     }
+    if (proposed.result) io.log(proposed.result);
     io.log(waiting
       ? `already pending ${proposed.actionId} (proposed ${waiting.at}): ${what} still waits for the user's approval on that card, earlier in the chat. No new card was added; point the user to it instead of asking again.`
       : `proposed ${proposed.actionId}: ${what} waits for the user's approval in the chat`);

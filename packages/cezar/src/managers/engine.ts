@@ -165,6 +165,9 @@ import { automationRunResponseSchema, FACTORY_IMPROVEMENT_AUTOMATION_ID, type Au
  * manager at a time, each a single resumed agent session, so a manager costs nothing while idle.
  */
 
+/** An automatic merge needs the head the caller reviewed; a forge-stamped head is not review evidence. */
+const NO_REVIEWED_HEAD = 'no reviewed head SHA was passed';
+
 export type ManagerRefusal = { error: string; status: 400 | 403 | 404 | 409 | 502 };
 
 type LoopbackRequest = (path: string, init?: RequestInit) => Response | Promise<Response>;
@@ -3610,7 +3613,8 @@ ${guidance}` : ''}`,
     if (action.type === 'connector-call') return { ...action, connectorName: connectorDisplayName(action.connector, this.deps.store.state(id).connectors).slice(0, 200) };
     const prefix = `/p/${encodeURIComponent(action.projectId)}`;
     if (action.type === 'merge-pr') {
-      const response = await this.forward(`${prefix}/github/prs/${action.number}/merge-state`);
+      // A reviewed head is compared with the live forge, never a cached read (factory D6, v5.39).
+      const response = await this.forward(`${prefix}/github/prs/${action.number}/merge-state${action.headSha !== undefined ? '?refresh=1' : ''}`);
       if (!response.ok) return ManagerEngine.refusalOf(response);
       const body = (await response.json()) as { available: boolean; reason?: string; mergeState?: { title: string; state: string; headSha: string } };
       if (!body.available || !body.mergeState) return { error: body.reason ?? 'GitHub merge is unavailable', status: 409 };
@@ -3647,14 +3651,17 @@ ${guidance}` : ''}`,
     }
     const action = await this.stampAction(id, input.action);
     if ('error' in action) return action;
+    // Only a caller-supplied head is review evidence; stampAction has checked it against the live forge.
+    const reviewedHead = input.action.type === 'merge-pr' ? input.action.headSha : undefined;
+    const stillAutonomous = () => this.deps.store.get(id)?.autonomous === true;
     // From here to `publish` nothing awaits, so two racing proposals see each other's card.
     const same = (other: ManagerActionRequest) => actionKey(other) === actionKey(action) && sameMethod(other, action);
     const pending = this.deps.store.messages(id).find((message) => message.kind === 'action' && message.status === 'pending' && same(message.action));
     if (pending?.kind === 'action') {
       // A retry re-checks a card held by an older policy (the v5.31 path and size holds) against today's.
-      if (scope.manager.autonomous === true && pending.action.type === 'merge-pr' && !(await this.autonomousHold(pending.action, scope.source))) {
+      if (scope.manager.autonomous === true && pending.action.type === 'merge-pr' && !(await this.autonomousHold(pending.action, scope.source, reviewedHead))) {
         const current = this.deps.store.message(id, pending.id);
-        if (current?.kind === 'action' && current.status === 'pending') return this.runAutonomous(id, current.id, []);
+        if (stillAutonomous() && current?.kind === 'action' && current.status === 'pending') return this.runAutonomous(id, current.id, []);
       }
       return { actionId: pending.id, status: 'pending' };
     }
@@ -3681,21 +3688,25 @@ ${guidance}` : ''}`,
     this.deps.telemetry?.track('manager_action_proposed', managerActionLabel(action));
     this.emitChange(id);
     // Explicit owner approval policy and credential checks (factory D6): these wait even for an autonomous manager.
-    const ownerOnly = scope.manager.autonomous === true ? await this.autonomousHold(action, scope.source) : undefined;
-    if (ownerOnly) {
+    const ownerOnly = scope.manager.autonomous === true ? await this.autonomousHold(action, scope.source, reviewedHead) : undefined;
+    // Autonomy is re-read after the policy check: switched off meanwhile, the card waits like any approval.
+    if (ownerOnly && stillAutonomous()) {
       this.alert(id, message, `Needs your approval: ${describeAction(action)} (${ownerOnly})`, 'approval');
-      return { actionId: message.id, status: 'pending', result: `Waiting for the owner: ${ownerOnly}.`, ...(replaced.length ? { replaced } : {}) };
+      const result = ownerOnly === NO_REVIEWED_HEAD
+        ? `Not merged automatically: ${NO_REVIEWED_HEAD}. Retry with --head <full sha> of the head that was reviewed, or the user approves the card.`
+        : `Waiting for the owner: ${ownerOnly}.`;
+      return { actionId: message.id, status: 'pending', result, ...(replaced.length ? { replaced } : {}) };
     }
     // Autonomous: the card is the record, not a question — it runs now, as an approval would.
-    if (scope.manager.autonomous === true) return this.runAutonomous(id, message.id, replaced);
+    if (scope.manager.autonomous === true && stillAutonomous()) return this.runAutonomous(id, message.id, replaced);
     // An approval always waits on the user, so it never needs the agent's judgement.
     this.alert(id, message, `Needs your approval: ${describeAction(action)}`, 'approval');
     return { actionId: message.id, status: 'pending', ...(replaced.length ? { replaced } : {}), ...(alsoWaitingIn.length ? { alsoWaitingIn } : {}) };
   }
 
   /** Why an autonomous manager's card still waits for the user, if it does. */
-  private async autonomousHold(action: ManagerActionRequest, source?: ManagerProjectSource): Promise<string | undefined> {
-    if (action.type === 'merge-pr') return this.improvementApprovalHold(action, source);
+  private async autonomousHold(action: ManagerActionRequest, source?: ManagerProjectSource, reviewedHead?: string): Promise<string | undefined> {
+    if (action.type === 'merge-pr') return reviewedHead === undefined ? NO_REVIEWED_HEAD : this.improvementApprovalHold(action, source);
     if (action.type === 'enable-automation' && action.automationId === CREDENTIAL_HEALTH) return 'credential checks use project secrets';
   }
 
