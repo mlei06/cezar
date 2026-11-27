@@ -2,7 +2,7 @@
 
 The overseer's resume point for the self-improving factory build. Updated and pushed at every milestone step and every overseer decision, so the work survives a crashed machine or a new session. Read this first, then the roadmap's Progress table and the observation log.
 
-Last updated: 2026-11-26 23:55 UTC.
+Last updated: 2026-11-27 00:06 UTC.
 
 ## Where the build stands
 
@@ -41,7 +41,7 @@ These instructions apply when the owner restarts the harness manager. It remains
 
 ## Open overseer items
 
-- **Overseer audit of the first improvement run (A-1 to A-3):** the run's typecheck failure was in a file the draft didn't touch. The likely cause is the task worktree resolving the main checkout's dependencies, not the draft. B29 reuses the existing local After worktree creation hook to run `npm ci` from the worktree lock and typecheck the untouched factory base before task startup. The disposable installed fixture verified fresh dependencies in the worktree and blocked a failing baseline before any task step. Apply the hook to the harness project when releasing the public guard, then verify the real checkout before restoring its automation.
+- **Overseer audit of the first improvement run (A-1 to A-3):** the run's typecheck failure was in a file the draft didn't touch. The likely cause is the task worktree resolving the main checkout's dependencies, not the draft. B29 reuses the existing local After worktree creation hook to run `npm ci` from the worktree lock and typecheck the untouched factory base before task startup. The disposable installed fixture verified fresh dependencies in the worktree and blocked a failing baseline before any task step. The revision-checked local project settings now carry the hook. Verify its pinned dependency and baseline on the real release worktree before restoring the hourly source.
 
 - **Owner decision (2026-11-26 20:50 UTC): the implementer finishes the roadmap on its own.** It may merge and release everything itself, including the owner-protected parts:
   - #29 and the first live `harness-release` run;
