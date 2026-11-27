@@ -25,6 +25,7 @@ import { Virtualizer } from 'virtua'
 import { Link, Navigate } from '@/lib/project-router'
 
 import { getGithub, getGithubComments, getGithubPrChanges, getGithubPrMergeState, mergeGithubPr, putUiState } from '@/api/client'
+import { samePrUrl } from '@open-mercato/cezar-api-client'
 import { queryKeys, useGithubInfinite, useGithubChecks, useGithubComments, useGithubPrChanges, useGithubSearch, useHealth, useSkills, useUiState, useWorkflows } from '@/api/queries'
 import type {
   GithubComment,
@@ -1118,7 +1119,7 @@ function GithubDetail({
 
       {item.kind === 'pr' ? <PrImpactControl number={item.number} /> : null}
 
-      {item.kind === 'pr' ? <GithubMergeBox number={item.number} /> : null}
+      {item.kind === 'pr' ? <GithubMergeBox number={item.number} url={item.url} /> : null}
 
       {children}
       </>}
@@ -1159,7 +1160,7 @@ function PrImpactControl({ number }: { number: number }) {
   )
 }
 
-function GithubMergeBox({ number }: { number: number }) {
+function GithubMergeBox({ number, url }: { number: number; url: string }) {
   const queryClient = useQueryClient()
   const mergeState = useQuery({
     queryKey: queryKeys.githubMergeState(number),
@@ -1167,6 +1168,8 @@ function GithubMergeBox({ number }: { number: number }) {
     retry: false,
   })
   const state = mergeState.data?.available ? mergeState.data.mergeState : null
+  // The merge targets the forge's configured repository; refuse when that is not the PR opened here (B30).
+  const otherPr = state !== null && !samePrUrl(state.url, url)
   const [method, setMethod] = useState<GithubMergeMethod | null>(null)
   const [confirming, setConfirming] = useState(false)
   const [overrideRules, setOverrideRules] = useState(false)
@@ -1181,6 +1184,7 @@ function GithubMergeBox({ number }: { number: number }) {
   const merge = useMutation({
     mutationFn: () => {
       if (!state || !selectedMethod) throw new Error('No merge method is available.')
+      if (otherPr) throw new Error('The merge target is not the pull request opened here.')
       return mergeGithubPr(number, {
         method: selectedMethod,
         expectedHeadSha: state.headSha,
@@ -1230,7 +1234,7 @@ function GithubMergeBox({ number }: { number: number }) {
     state.mergeable === 'mergeable' ? 'passing'
       : state.mergeable === 'conflicting' ? 'failing'
         : 'unknown'
-  const mergeEnabled = Boolean(selectedMethod && (state.canMerge || (state.canOverride && overrideRules)))
+  const mergeEnabled = !otherPr && Boolean(selectedMethod && (state.canMerge || (state.canOverride && overrideRules)))
 
   return (
     <section data-slot="gh-merge-box" aria-live="polite" className="mt-6 rounded-lg border border-border bg-card p-4">
@@ -1291,6 +1295,11 @@ function GithubMergeBox({ number }: { number: number }) {
               </li>
             ) : null}
             {/* The row above already said `checks-unknown`, with the reason — don't say it twice. */}
+            {otherPr ? (
+              <li data-slot="gh-merge-other-pr" className="text-soft-foreground">
+                Merging here would act on {state.url}, not the pull request opened here.
+              </li>
+            ) : null}
             {state.blockers
               .filter((blocker) => !(blocker.code === 'checks-unknown' && state.checksTier === 'none'))
               .map((blocker) => <li key={blocker.code} className="text-soft-foreground">{blocker.message}</li>)}

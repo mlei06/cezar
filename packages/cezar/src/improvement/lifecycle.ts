@@ -3,7 +3,7 @@ import type { ImprovementDecisions, ImprovementRecord } from '@open-mercato/ceza
 import { harnessCauseQueuePath, projectCauseQueuePath } from '../factory/causes.ts';
 import { checkFactory } from '../factory/check.ts';
 import { loadConfig } from '../config.ts';
-import { githubPrIdentity } from '../server/forge/pr-url.ts';
+import { githubPrIdentity, samePrUrl } from '../server/forge/pr-url.ts';
 import { artifactsDir, type RunRecord, type RunStore } from '../runs/store.ts';
 import { loadWorkspaceConfig } from '../workspace/config.ts';
 import {
@@ -145,10 +145,12 @@ export function hasOpenImprovementPrAt(dataDir: string, projectId: string, url: 
     .some((entry) => entry.projectId === projectId && entry.state === 'pr-open' && githubPrIdentity(entry.pr?.url) === identity));
 }
 
-export function settleImprovementPr(dataDir: string, url: string, update: { at: Date; mergedCommit?: string }): void {
+/** `projectId`, when given, must own the record; a GitHub URL matches by identity, any other verbatim. */
+export function settleImprovementPr(dataDir: string, url: string, update: { at: Date; mergedCommit?: string; projectId?: string }): void {
   for (const harness of [false, true]) {
     const paths = improvementPaths(dataDir, harness);
-    const record = readImprovementRecords(paths.records).find((entry) => entry.pr?.url === url && entry.state === 'pr-open');
+    const record = readImprovementRecords(paths.records).find((entry) => entry.state === 'pr-open'
+      && (update.projectId === undefined || entry.projectId === update.projectId) && samePrUrl(entry.pr?.url, url));
     if (!record) continue;
     if (update.mergedCommit) mergeImprovement(paths, record.id, { at: update.at, commit: update.mergedCommit });
     else closeImprovement(paths, record.id, update.at);

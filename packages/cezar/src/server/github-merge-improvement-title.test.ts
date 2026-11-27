@@ -94,6 +94,9 @@ describe('B30: a tracked improvement squash-merges under its PR title', () => {
       if (api[1] === 'repos/acme/demo/branches/main/protection/required_status_checks') throw notFound('Required status checks not enabled');
       if (api[1] === 'repos/acme/demo/branches/main/protection/required_pull_request_reviews') throw notFound('Required pull request reviews not enabled');
       if (api[1] === 'repos/acme/demo/rules/branches/main?per_page=100') return [];
+      const file = (filename: string) => [{ filename, status: 'modified', additions: 2, deletions: 1 }];
+      if (api[1] === 'repos/acme/demo/pulls/41/files?per_page=100&page=1') return file('src/merge-target.ts');
+      if (api[1] === 'repos/{owner}/{repo}/pulls/41/files?per_page=100&page=1') return file('src/default-repo.ts');
       if (api[1] === '--method' && api[2] === 'PUT' && api[3] === 'repos/acme/demo/pulls/41/merge') {
         return { merged: true, sha: MERGED, message: 'Pull Request successfully merged' };
       }
@@ -120,11 +123,11 @@ describe('B30: a tracked improvement squash-merges under its PR title', () => {
     expect(gh.unhandled).toEqual([]);
   });
 
-  const track = (url = URL) => {
+  const track = (url = URL, owner = projectId) => {
     const path = projectImprovementRecordsPath(join(repoRoot, '.ai/cezar'));
     mkdirSync(join(path, '..'), { recursive: true });
     writeFileSync(path, JSON.stringify([{
-      id: 'i1', queue: 'project', projectId, startedBy: 'manager', startedAt: '2026-11-01T00:00:00.000Z',
+      id: 'i1', queue: 'project', projectId: owner, startedBy: 'manager', startedAt: '2026-11-01T00:00:00.000Z',
       causeIds: [], state: 'pr-open', pr: { number: 41, url },
     }]));
     return path;
@@ -182,6 +185,37 @@ describe('B30: a tracked improvement squash-merges under its PR title', () => {
     expect((await merge('squash')).status).toBe(200);
     expect(put()).toEqual(putFor('squash'));
     expect(readImprovementRecords(records)).toMatchObject([{ state: 'pr-open' }]);
+  });
+
+  it('settles a tracked improvement recorded under a canonical variant of the fresh URL', async () => {
+    const records = track('https://GitHub.com/Acme/Demo/pull/41/');
+    expect((await merge('squash')).status).toBe(200);
+    expect(put()).toEqual(putFor('squash', 'Improve factory reliability (#41)'));
+    expect(readImprovementRecords(records)).toMatchObject([{ state: 'merged', mergeCommit: MERGED }]);
+  });
+
+  it('ignores the same PR identity recorded by a different project', async () => {
+    const records = track(URL, 'another-project');
+    expect((await merge('squash')).status).toBe(200);
+    expect(put()).toEqual(putFor('squash'));
+    expect(readImprovementRecords(records)).toMatchObject([{ state: 'pr-open' }]);
+  });
+
+  it('reads changed files and head from the merge target for the manager, and gh\'s default otherwise', async () => {
+    const pinned = await apiRequest(app, `/api/v1/p/${projectId}/github/prs/41/changes?refresh=1&target=merge`);
+    expect(await pinned.json()).toMatchObject({ available: true, headSha: HEAD, files: [{ path: 'src/merge-target.ts' }] });
+    const pinnedCalls = gh.calls.map(({ argv }) => argv);
+    expect(pinnedCalls).toEqual([
+      ['pr', 'view', '41', '--repo', 'github.com/acme/demo', '--json', 'headRefOid'],
+      ['api', '--hostname', 'github.com', 'repos/acme/demo/pulls/41/files?per_page=100&page=1'],
+    ]);
+    gh.calls.length = 0;
+    const listed = await apiRequest(app, '/api/v1/github/prs/41/changes?refresh=1');
+    expect(await listed.json()).toMatchObject({ available: true, files: [{ path: 'src/default-repo.ts' }] });
+    expect(gh.calls.map(({ argv }) => argv)).toEqual([
+      ['pr', 'view', '41', '--json', 'headRefOid'],
+      ['api', 'repos/{owner}/{repo}/pulls/41/files?per_page=100&page=1'],
+    ]);
   });
 
   it('leaves an ordinary PR squash to GitHub\'s own subject', async () => {

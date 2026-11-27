@@ -310,7 +310,8 @@ export interface ForgeDriver {
   prMergeState?(number: number, opts?: { refresh?: boolean }): Promise<ForgePrMergeStateResult>;
   mergePR?(number: number, input: ForgeMergeInput): Promise<ForgeMergeResult>;
   /** Bounded, read-only file changes for a pull request. */
-  prDiff?(number: number, opts?: { refresh?: boolean }): Promise<ForgePrDiffResult>;
+  /** `mergeTarget`: read from the repository a merge targets, not gh's default (B30). */
+  prDiff?(number: number, opts?: { refresh?: boolean; mergeTarget?: boolean }): Promise<ForgePrDiffResult>;
   /** Web URL for a ref on the forge, or null when the remote isn't parseable. */
   viewUrl(kind: ForgeRefKind, ref: string | number): string | null;
 }

@@ -1052,6 +1052,28 @@ describe('the GitHub detail pane', () => {
     }))
   })
 
+  it('refuses to merge when the merge target is another repository\'s PR of the same number (B30)', async () => {
+    const otherUrl = PR_137.url.replace(/\/[^/]+\/pull\/137$/, '/elsewhere/pull/137')
+    const sent = stubFetch({
+      'GET /api/v1/github/prs/137/merge-state': () => jsonResponse({
+        available: true,
+        mergeState: {
+          number: 137, title: 'Same number, other repository', url: otherUrl, state: 'open', isDraft: false,
+          headRef: 'feat/sse', baseRef: 'main', headSha: '0123456789abcdef0123456789abcdef01234567',
+          mergeable: 'mergeable', reviewDecision: 'approved', checks: [], checksTier: 'detailed',
+          methods: ['squash'], defaultMethod: 'squash', eligibility: 'ready', blockers: [], canMerge: true, canOverride: false,
+        },
+      }),
+    })
+    renderAt('/github/prs/137')
+
+    await waitFor(() => expect(document.querySelector('[data-slot="gh-merge-other-pr"]')?.textContent).toContain(otherUrl))
+    const button = screen.getByRole('button', { name: 'Squash and merge' }) as HTMLButtonElement
+    expect(button.disabled).toBe(true)
+    fireEvent.click(button)
+    expect(sent.some((request) => request.method === 'POST')).toBe(false)
+  })
+
   it('allows an explicit rules override while warning that GitHub still authorizes it', async () => {
     const sent = stubFetch({
       'GET /api/v1/github/prs/137/merge-state': () => jsonResponse({

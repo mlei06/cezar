@@ -29,5 +29,5 @@ A local, zero-config cockpit where an owner can state an outcome once and a proj
 
 - Delivery: M0 shipped. M1 is released and live acceptance is pending.
 - Learning: scoring, calibration and improvement remain on the roadmap.
-- B30: improvement squash merges send the PR title as the subject (implemented and tested; not yet released or live-verified).
+- B30: improvement squash merges send the PR title as the subject, with one PR identity across merge reads, manager approval, cockpit merge, settlement and recovery (implemented and tested; not yet released or live-verified).
 - Releases: the bootstrap script ships merged harness commits. Benchmarking and release acceptance are tracked in M4.

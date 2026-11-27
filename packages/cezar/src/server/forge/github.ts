@@ -79,18 +79,21 @@ export async function fetchGithubPrDiff(
   repoRoot: string,
   number: number,
   refresh = false,
+  /** Pins head and files to this repository and host (the merge target) instead of gh's default. */
+  pinned?: GithubRepoRef,
 ): Promise<ForgePrDiffResult> {
   if (process.env.CEZ_DRY_RUN === '1') return mockGithubPrDiff(number);
   try {
     const head = ghPrHeadSchema.parse(
-      JSON.parse(await gh(repoRoot, ['pr', 'view', String(number), '--json', 'headRefOid'])),
+      JSON.parse(await gh(repoRoot, ['pr', 'view', String(number), ...(pinned ? mergeRepoArgs(pinned) : []), '--json', 'headRefOid'])),
     ).headRefOid;
-    const key = `${repoRoot}\0${number}\0${head}`;
+    const filesPath = pinned ? `repos/${pinned.owner}/${pinned.repo}` : 'repos/{owner}/{repo}';
+    const key = `${repoRoot}\0${pinned ? mergeRepoArgs(pinned)[1] : ''}\0${number}\0${head}`;
     const hit = prDiffCache.get(key);
     if (!refresh && hit && Date.now() - hit.at < CACHE_MS) return hit.data;
     const rows = z.array(ghPrFileSchema).parse(
       await fetchPrFilePages((page) =>
-        gh(repoRoot, ['api', `repos/{owner}/{repo}/pulls/${number}/files?per_page=100&page=${page}`], 30_000),
+        gh(repoRoot, ['api', ...(pinned ? mergeHostArgs(pinned) : []), `${filesPath}/pulls/${number}/files?per_page=100&page=${page}`], 30_000),
       ),
     );
     const limited = rows.slice(0, GH_PR_DIFF_FILE_CAP);
@@ -3836,7 +3839,7 @@ export function createGithubDriver(repoRoot: string, repoRef: GithubRepoRef | nu
     // closed or merged item.
     searchItems: (kind, query, opts) => searchGithubItems(repoRoot, kind, query, opts?.limit),
 
-    prDiff: (number, opts) => fetchGithubPrDiff(repoRoot, number, opts?.refresh),
+    prDiff: (number, opts) => fetchGithubPrDiff(repoRoot, number, opts?.refresh, opts?.mergeTarget ? repoRef ?? undefined : undefined),
 
     createPR: (input) => createDraftPr(input),
 

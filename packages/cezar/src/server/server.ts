@@ -7854,7 +7854,11 @@ export function createApp(deps: ServerDeps) {
   const mergeForge = async (root: string) => resolveForge(await getRepoInfo(root))
     ?? (process.env.CEZ_DRY_RUN === '1' ? createGithubDriver(root, { host: 'github.com', owner: 'mock', repo: 'repo' }) : null);
   const prChangesParams = z.object({ number: z.coerce.number().int().positive().safe() });
-  const prChangesQuery = z.object({ refresh: queryValue.refine((v) => v === undefined || v === '1') });
+  // `target=merge` (B30): read from the repository and host a merge would target, not gh's default.
+  const prChangesQuery = z.object({
+    refresh: queryValue.refine((v) => v === undefined || v === '1'),
+    target: queryValue.refine((v) => v === undefined || v === 'merge'),
+  });
   // Serialize validation and persistence per project: a slow Connect cannot resurrect a
   // connection after a subsequent Disconnect. Reads remain independent and demand-driven.
   const trackerMutations = new Map<string, Promise<unknown>>();
@@ -8350,9 +8354,8 @@ export function createApp(deps: ServerDeps) {
         if (!forge?.mergePR) return c.json({ error: 'GitHub merge is unavailable' }, 409);
         // B30: a tracked improvement squashes under its PR title, not the branch's autosave subject.
         // Matched against the fresh PR the driver is about to merge, by full identity, never the number alone.
-        const projectId = forge.kind === 'github' && body.data.method === 'squash'
-          ? (project === bootContext ? await resolveBootProject() : project.id) : undefined;
-        const squashSubjectFromPrTitle = projectId === undefined ? undefined : (url: string) => {
+        const projectId = project === bootContext ? await resolveBootProject() : project.id;
+        const squashSubjectFromPrTitle = forge.kind !== 'github' || body.data.method !== 'squash' ? undefined : (url: string) => {
           try { return hasOpenImprovementPrAt(dataDir, projectId, url); }
           catch { return false; } // unreadable records: merge as an ordinary PR
         };
@@ -8364,7 +8367,7 @@ export function createApp(deps: ServerDeps) {
           // the forge, gets `merged`, and then stops polling it at all.
           forgetRefStatus(repoRoot, parsedNumber.data.number);
           if (result.mergeCommitSha) {
-            try { settleImprovementPr(dataDir, result.url, { at: new Date(), mergedCommit: result.mergeCommitSha }); }
+            try { settleImprovementPr(dataDir, result.url, { at: new Date(), mergedCommit: result.mergeCommitSha, projectId }); }
             catch { console.warn('[cezar] improvement merge recording deferred'); }
           }
           return c.json(result);
@@ -8392,9 +8395,15 @@ export function createApp(deps: ServerDeps) {
         const { root: repoRoot } = c.get('project');
         const parsed = { data: c.req.valid('param') };
         if (await azureDriverFor(repoRoot)) return c.json(azurePrChanges());
+        const query = c.req.valid('query');
         try {
+          if (query.target === 'merge') {
+            const forge = await mergeForge(repoRoot);
+            if (!forge?.prDiff) return c.json({ available: false as const, reason: 'GitHub merge target is unavailable' });
+            return c.json(await forge.prDiff(parsed.data.number, { refresh: query.refresh === '1', mergeTarget: true }));
+          }
           return c.json(
-            await fetchGithubPrDiff(repoRoot, parsed.data.number, c.req.valid('query').refresh === '1'),
+            await fetchGithubPrDiff(repoRoot, parsed.data.number, query.refresh === '1'),
           );
         } catch (err) {
           if (err instanceof GithubPrNotFoundError) return c.json({ error: err.message }, 404);
@@ -9954,10 +9963,10 @@ export function createApp(deps: ServerDeps) {
           const result = await forge?.prMergeState?.(number);
           if (stoppedImprovement || !result?.available) return;
           const pr = result.mergeState;
-          if (pr.state === 'closed') settleImprovementPr(project.dataDir, pr.url, { at: new Date() });
+          if (pr.state === 'closed') settleImprovementPr(project.dataDir, pr.url, { at: new Date(), projectId: id });
           if (pr.state === 'merged' && pr.mergeCommitSha) {
             const at = new Date(pr.mergedAt ?? Date.now());
-            settleImprovementPr(project.dataDir, pr.url, { at, mergedCommit: pr.mergeCommitSha });
+            settleImprovementPr(project.dataDir, pr.url, { at, mergedCommit: pr.mergeCommitSha, projectId: id });
           }
         })().catch(() => console.warn('[cezar] improvement PR reconciliation deferred'))
           .finally(() => pendingPrReads.delete(number));

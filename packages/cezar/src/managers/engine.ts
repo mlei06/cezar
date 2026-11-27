@@ -3951,7 +3951,7 @@ ${guidance}` : ''}`,
       if (settings.approval === 'owner') return 'the project requires owner approval for improvement PRs';
     }
 
-    const response = await this.forward(`/p/${encodeURIComponent(action.projectId)}/github/prs/${action.number}/changes?refresh=1`).catch(() => undefined);
+    const response = await this.forward(`/p/${encodeURIComponent(action.projectId)}/github/prs/${action.number}/changes?refresh=1&target=merge`).catch(() => undefined);
     type ChangedFile = { path: string; previousPath?: string; additions?: number; deletions?: number };
     const body = response?.ok ? (await response.json().catch(() => ({}))) as {
       available?: boolean; files?: ChangedFile[]; headSha?: string; truncated?: boolean;

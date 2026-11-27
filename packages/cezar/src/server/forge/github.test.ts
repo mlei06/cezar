@@ -3405,10 +3405,12 @@ describe('fetchPrMergeState and an unreadable statusCheckRollup (#969)', () => {
 
   it('keeps mergeable, mergeStateStatus and reviewDecision when the rollup detail is unreadable', async () => {
     // The fine-grained-PAT shape: detail exits 1 with empty stdout, the aggregate state is readable.
-    routeGh({ aggregate: () => aggregate('SUCCESS') });
+    const calls = routeGh({ aggregate: () => aggregate('SUCCESS') });
 
     const out = await fetchPrMergeState('/repo/fine-grained', repoRef, 353);
 
+    // The aggregate fallback is pinned to the merge's host like every other merge-path call (B30).
+    expect(calls.some((c) => /^api --hostname github\.com graphql /.test(c))).toBe(true);
     expect(out.available).toBe(true);
     if (!out.available) throw new Error('expected the merge state to survive');
     expect(out.mergeState.mergeable).toBe('mergeable');
@@ -3500,7 +3502,7 @@ describe('fetchPrMergeState and an unreadable statusCheckRollup (#969)', () => {
 
     await fetchPrMergeState('/repo/no-wasted-call', repoRef, 353);
 
-    expect(calls.some((c) => c.startsWith('api graphql'))).toBe(false);
+    expect(calls.some((c) => /^api --hostname github\.com graphql /.test(c))).toBe(false);
   });
 
   describe('reading the base branch rules', () => {

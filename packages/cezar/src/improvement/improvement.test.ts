@@ -165,6 +165,27 @@ describe('improvement bookkeeping', () => {
     }
   });
 
+  it('settles a GitHub PR by owning project and canonical identity, and any other URL verbatim (B30)', () => {
+    const { records } = improvementPaths(root, false);
+    const record = (id: string, url: string) => ({
+      id, queue: 'project' as const, projectId: 'fixture', startedBy: 'owner' as const, startedAt: now.toISOString(),
+      causeIds: [], state: 'pr-open' as const, pr: { url },
+    });
+    const azure = 'https://dev.azure.com/example/project/_git/repo/pullrequest/5';
+    atomicWriteJsonSync(records, [record('gh', 'https://GitHub.com/Example/Project/pull/17/'), record('az', azure)]);
+    const state = (id: string) => readImprovementRecords(records).find((entry) => entry.id === id)?.state;
+
+    settleImprovementPr(root, 'https://github.com/example/project/pull/17', { at: now, mergedCommit: 'c1', projectId: 'other' });
+    expect(state('gh')).toBe('pr-open');
+    settleImprovementPr(root, 'https://github.com/example/project/pull/17', { at: now, mergedCommit: 'c1', projectId: 'fixture' });
+    expect(state('gh')).toBe('merged');
+
+    settleImprovementPr(root, `${azure}/`, { at: now, mergedCommit: 'c2', projectId: 'fixture' });
+    expect(state('az')).toBe('pr-open');
+    settleImprovementPr(root, azure, { at: now, mergedCommit: 'c2', projectId: 'fixture' });
+    expect(state('az')).toBe('merged');
+  });
+
   it('records the merge commit, and treats the harness queue escalation as a return', () => {
     start();
     finishImprovement(paths, 'imp1', { now, pr: { number: 9 }, decisions: { clusters: [] } });

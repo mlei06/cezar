@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { githubPrIdentity } from './pr-url.ts';
+import { githubPrIdentity, samePrUrl } from './pr-url.ts';
 
 describe('githubPrIdentity', () => {
   it('names host, repository and number, case-insensitively', () => {
@@ -17,5 +17,14 @@ describe('githubPrIdentity', () => {
     for (const url of [undefined, null, '', 'https://github.com/acme/demo/issues/41', 'https://dev.azure.com/o/p/_git/r/pullrequest/41']) {
       expect(githubPrIdentity(url)).toBeUndefined();
     }
+  });
+
+  it('compares GitHub PRs by identity and any other URL verbatim', () => {
+    expect(samePrUrl('https://GitHub.com/Acme/Demo/pull/41/', 'https://github.com/acme/demo/pull/41')).toBe(true);
+    expect(samePrUrl('https://github.com/acme/demo/pull/41', 'https://github.com/acme/other/pull/41')).toBe(false);
+    const azure = 'https://dev.azure.com/o/p/_git/r/pullrequest/41';
+    expect(samePrUrl(azure, azure)).toBe(true);
+    expect(samePrUrl(azure, `${azure}/`)).toBe(false);
+    expect(samePrUrl(undefined, undefined)).toBe(false);
   });
 });
