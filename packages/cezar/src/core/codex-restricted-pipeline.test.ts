@@ -514,7 +514,7 @@ describe('resolveProgram', () => {
     const broker = new CodexReadBroker(compileCodexRestrictedPolicy({ allowedTools: ['Grep'] })!, { cwd: tempDir() }, { PATH: '' });
     try {
       const reply = await broker.call({ tool: 'cezar_read', arguments: { tool: 'Grep', pattern: 'x' } });
-      expect(reply.contentItems[0]!.text).toContain('`rg` was not found on PATH');
+      expect(reply.contentItems[0]!.text).toContain('was not found on PATH');
     } finally {
       broker.close();
     }

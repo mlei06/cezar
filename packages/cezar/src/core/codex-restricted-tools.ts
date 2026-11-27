@@ -7,16 +7,25 @@ import type { AgentRunSpec } from './agent-runner.ts';
 import { codexBashArgv, codexGithubOperands, type CodexRestrictedPolicy } from './codex-restricted-policy.ts';
 
 const path = z.string().min(1).max(4_096);
+const lines = z.number().int().min(1).max(2_000).optional();
 const requestSchema = z.discriminatedUnion('tool', [
-  z.object({ tool: z.literal('Read'), path, offset: z.number().int().min(1).max(1_000_000).optional(), limit: z.number().int().min(1).max(2_000).optional() }).strict(),
-  z.object({ tool: z.literal('Grep'), pattern: z.string().max(4_096), path: path.optional(), glob: z.string().max(512).optional() }).strict(),
-  z.object({ tool: z.literal('Glob'), pattern: z.string().max(512), path: path.optional() }).strict(),
+  z.object({ tool: z.literal('Read'), path, offset: z.number().int().min(1).max(1_000_000).optional(), limit: lines }).strict(),
+  z.object({ tool: z.literal('Grep'), pattern: z.string().max(4_096), path: path.optional(), glob: z.string().max(512).optional(), limit: lines }).strict(),
+  z.object({ tool: z.literal('Glob'), pattern: z.string().max(512), path: path.optional(), limit: lines }).strict(),
   z.object({ tool: z.literal('Bash'), command: z.string().max(16_000) }).strict(),
 ]);
 
+/** Which argument was wrong, so the model can fix the call instead of repeating it. */
+function argumentIssue(err: z.ZodError): string {
+  const issue = err.issues[0];
+  if (!issue) return 'invalid tool arguments';
+  const keys = issue.code === 'unrecognized_keys' ? ` (${issue.keys.join(', ')})` : '';
+  return `invalid tool arguments: ${issue.path.join('.') || 'arguments'}: ${issue.message}${keys}`;
+}
+
 export const CODEX_READ_TOOL = {
   type: 'function', name: 'cezar_read',
-  description: 'Read-only tools enforced by cezar. Use Read for files, Grep for content, Glob for file names, Bash for a single approved git/GitHub read command. Native shell and write tools are denied. No pipelines, shell syntax, writes, browser, pushes or GitHub mutations.',
+  description: 'Read-only tools enforced by cezar. Use Read for files (500 lines from `offset` unless `limit`; read ranges, not whole files), Grep for content, Glob for file names (`pattern`), Bash for a single approved git/GitHub read command. Grep and Glob take `limit` for the most result lines. At most four calls run at once. A refused call fails the same way when repeated: change it. Native shell and write tools are denied. No pipelines, shell syntax, writes, browser, pushes or GitHub mutations.',
   inputSchema: z.toJSONSchema(z.object({
     tool: z.enum(['Read', 'Grep', 'Glob', 'Bash']), path: path.nullable(),
     offset: z.number().int().nullable(), limit: z.number().int().nullable(),
@@ -347,9 +356,9 @@ export class CodexReadBroker {
     return absolute;
   }
 
-  private async execute(argv: readonly string[], truncate = true): Promise<string> {
+  private async execute(argv: readonly string[], truncate = true, dir?: string): Promise<string> {
     if (this.aborter.signal.aborted) throw new Error('session is closed');
-    const cwd = await this.cwd;
+    const cwd = dir ?? await this.cwd;
     const [name, ...args] = argv;
     const bin = resolveProgram(name!, this.env);
     if (!bin) throw new Error(`\`${name}\` was not found on PATH`);
@@ -358,7 +367,7 @@ export class CodexReadBroker {
       const child = execFile(bin!, args, { cwd, env: this.env, timeout: 15_000, maxBuffer: 256_000, encoding: 'utf8', signal: this.aborter.signal }, (err, stdout, stderr) => {
         // Over the buffer cap the child is killed; model-facing output keeps what arrived, validation reads fail.
         if (truncate && err && 'code' in err && err.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') done(stdout + TRUNCATED);
-        else if (err && !(name === 'rg' && 'code' in err && err.code === 1)) fail(new Error(stderr.trim().slice(0, 2_000) || `read command failed (${err.message.slice(0, 200)})`));
+        else if (err && !((name === 'rg' || name === 'grep') && 'code' in err && err.code === 1)) fail(new Error(stderr.trim().slice(0, 2_000) || `read command failed (${err.message.slice(0, 200)})`));
         else done(stdout);
       });
       child.stdin?.end();
@@ -381,14 +390,29 @@ export class CodexReadBroker {
     } finally { if (timer) clearTimeout(timer); this.pending--; }
   }
 
+  // A refusal repeats identically; the second try gets that said outright instead of the same error.
+  private readonly refused = new Map<string, string>();
+
   private async perform(params: Record<string, unknown>): Promise<CodexReadResult> {
+    let key: string | undefined;
     try {
       if (this.aborter.signal.aborted) throw new Error('session is closed');
       if (params.tool !== CODEX_READ_TOOL.name || (params.namespace !== undefined && params.namespace !== null)) throw new Error('tool is not granted');
       const raw = params.arguments;
       const nullable = new Set(['path', 'offset', 'limit', 'pattern', 'glob', 'command']);
-      const args = raw && typeof raw === 'object' && !Array.isArray(raw)
+      const args: unknown = raw && typeof raw === 'object' && !Array.isArray(raw)
         ? Object.fromEntries(Object.entries(raw).filter(([key, value]) => value !== null || !nullable.has(key))) : raw;
+      // Glob's flat schema also shows `glob`; a model that puts the pattern there means `pattern`.
+      if (args && typeof args === 'object' && 'tool' in args && args.tool === 'Glob' && !('pattern' in args) && 'glob' in args) {
+        const { glob, ...rest } = args as Record<string, unknown>;
+        Object.assign(rest, { pattern: glob });
+        return this.perform({ ...params, arguments: rest });
+      }
+      if (!this.policy.replayShell) {
+        key = JSON.stringify(args);
+        const before = this.refused.get(key);
+        if (before) return result(false, `cezar refused this exact call before (${before}); repeating it fails the same way: change the tool, command or arguments`);
+      }
       const input = requestSchema.parse(args);
       if (!this.policy.tools.has(input.tool)) throw new Error(`${input.tool} is not granted`);
       switch (input.tool) {
@@ -403,14 +427,22 @@ export class CodexReadBroker {
             return result(true, text.split('\n').slice((input.offset ?? 1) - 1, (input.offset ?? 1) - 1 + (input.limit ?? 500)).join('\n'));
           } finally { await file.close(); }
         }
+        // Without ripgrep, search through grep and git rather than leave the model only whole-file dumps.
         case 'Grep': {
           const target = await this.allowedPath(input.path ?? '.');
-          const argv = ['rg', '--no-config', '--line-number', '--max-count', '200', ...(input.glob ? ['--glob', input.glob] : []), '--', input.pattern, target];
-          return result(true, await this.execute(argv));
+          const argv = resolveProgram('rg', this.env)
+            ? ['rg', '--no-config', '--line-number', '--max-count', '200', ...(input.glob ? ['--glob', input.glob] : []), '--', input.pattern, target]
+            : ['grep', '-rnIE', '--max-count=200', '--exclude-dir=.git', '--exclude-dir=node_modules', ...(input.glob ? [`--include=${input.glob}`] : []), '--', input.pattern, target];
+          return result(true, firstLines(await this.execute(argv), input.limit));
         }
         case 'Glob': {
           const target = await this.allowedPath(input.path ?? '.');
-          return result(true, await this.execute(['rg', '--no-config', '--files', '--glob', input.pattern, '--', target]));
+          // A git pathspec is relative to the target, so `..` could list past this step's read roots.
+          if (!resolveProgram('rg', this.env) && input.pattern.split(/[\\/]/).includes('..')) throw new Error('a Glob pattern cannot climb out of its path');
+          const files = resolveProgram('rg', this.env)
+            ? await this.execute(['rg', '--no-config', '--files', '--glob', input.pattern, '--', target])
+            : await this.execute(['git', 'ls-files', '--cached', '--others', '--exclude-standard', '--', `:(glob)${input.pattern}`], true, target);
+          return result(true, firstLines(files, input.limit));
         }
         case 'Bash': {
           if (this.policy.replayShell) {
@@ -471,7 +503,15 @@ export class CodexReadBroker {
         }
       }
     } catch (err) {
-      return result(false, `cezar denied or could not complete this read: ${err instanceof z.ZodError ? 'invalid tool arguments' : err instanceof Error ? err.message : String(err)}`);
+      const reason = err instanceof z.ZodError ? argumentIssue(err) : err instanceof Error ? err.message : String(err);
+      if (key !== undefined && reason !== 'session is closed') this.refused.set(key, reason);
+      return result(false, `cezar denied or could not complete this read: ${reason}`);
     }
   }
+}
+
+function firstLines(text: string, limit: number | undefined): string {
+  if (!limit) return text;
+  const all = text.replace(/\n$/, '').split('\n');
+  return all.length <= limit ? text : `${all.slice(0, limit).join('\n')}\n[cezar: first ${limit} of ${all.length} lines]`;
 }

@@ -123,4 +123,31 @@ describe.skipIf(process.platform === 'win32')('cezar executes restricted reads',
     expect(existsSync(marker)).toBe(false);
     f.broker.close(); expect((await f.call({ tool: 'Read', path: 'a.txt' })).success).toBe(false);
   });
+  it('searches through grep and git when ripgrep is not on PATH', async () => {
+    const f = setup();
+    execFileSync('git', ['init', '-q'], { cwd: f.cwd, timeout: 10_000 });
+    writeFileSync(join(f.cwd, 'b.ts'), 'one\none\none\n');
+    const bin = join(f.root, 'no-rg'); mkdirSync(bin);
+    for (const tool of ['grep', 'git']) symlinkSync(execFileSync('which', [tool], { encoding: 'utf8' }).trim(), join(bin, tool));
+    const broker = new CodexReadBroker(compileCodexRestrictedPolicy({ allowedTools: ['Read', 'Grep', 'Glob'] })!, { cwd: f.cwd }, { ...f.home.toolEnv, PATH: bin });
+    brokers.push(broker);
+    const call = (args: unknown) => broker.call({ tool: 'cezar_read', arguments: args });
+    const grep = await call({ tool: 'Grep', pattern: 'one|two', glob: '*.ts', path: null, limit: 2 });
+    expect(grep.success).toBe(true);
+    expect(grep.contentItems[0]?.text).toMatch(/b\.ts:1:one\n.*b\.ts:2:one\n\[cezar: first 2 of 3 lines\]$/);
+    // The flat schema shows `glob` to Glob too; a pattern put there still lists files.
+    const glob = await call({ tool: 'Glob', glob: '*.txt', pattern: null });
+    expect(glob).toMatchObject({ success: true, contentItems: [{ text: 'a.txt\n' }] });
+    expect((await call({ tool: 'Glob', pattern: '../**' })).success).toBe(false);
+  });
+  it('names the wrong argument and says so outright when a refused call is repeated', async () => {
+    const f = setup();
+    const first = await f.call({ tool: 'Read', path: 'a.txt', output_mode: 'content' });
+    expect(first.contentItems[0]?.text).toContain('output_mode');
+    const denied = { tool: 'Bash', command: 'git grep one HEAD' };
+    expect((await f.call(denied)).contentItems[0]?.text).toContain('approved read-only Bash grant');
+    const again = await f.call(denied);
+    expect(again.success).toBe(false);
+    expect(again.contentItems[0]?.text).toContain('refused this exact call before');
+  });
 });
