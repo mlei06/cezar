@@ -117,18 +117,37 @@ export async function withStagingCockpit<T>(
   }
 }
 
+export interface SimulatedSmokeFailure {
+  step: string;
+  command: string;
+  error: string;
+}
+
 /** A single admitted task makes health check the run engine, not only the listener.
- * `simulateFailure` runs a failing check step instead, for the release rollback drill (D9). */
-export async function smokeStagedHarness(entry: string, opts: { simulateFailure?: boolean } = {}): Promise<void> {
-  await withStagingCockpit(entry, async (api) => {
+ * `simulateFailure` (the release rollback drill, D9) runs `false` instead and RESOLVES with the
+ * verified check outcome; any other failure, the drill's included, still throws. */
+export async function smokeStagedHarness(entry: string, opts: { simulateFailure?: boolean } = {}): Promise<{ simulatedFailure?: SimulatedSmokeFailure }> {
+  const command = opts.simulateFailure ? 'false' : 'true';
+  return withStagingCockpit(entry, async (api) => {
     const run = runRecordSchema.parse(await stagingJson(api + '/runs', {
       task: 'Check staging task admission and execution.',
-      steps: [{ id: 'check', command: opts.simulateFailure ? 'false' : 'true' }],
+      steps: [{ id: 'check', command }],
     }));
     const end = Date.now() + 30_000;
     while (Date.now() < end) {
       const current = runRecordSchema.parse(await stagingJson(api + '/runs/' + encodeURIComponent(run.id)));
-      if (current.status === 'done' || current.status === 'review') return;
+      if (current.status === 'done' || current.status === 'review') {
+        if (opts.simulateFailure) throw new Error('The drill smoke task did not fail.');
+        return {};
+      }
+      if (current.status === 'failed' && opts.simulateFailure) {
+        const [step, ...others] = current.steps;
+        const expected = '`' + command + '` exited non-zero';
+        if (others.length === 0 && step?.id === 'check' && step.kind === 'check' && step.status === 'failed' && step.error === expected) {
+          return { simulatedFailure: { step: step.id, command, error: step.error } };
+        }
+        throw new Error('The drill smoke task failed outside its check: ' + (step?.error ?? current.error ?? 'no step outcome') + '.');
+      }
       if (current.status === 'failed' || current.status === 'cancelled') break;
       await wait(250);
     }

@@ -9,6 +9,7 @@
 //   node scripts/harness-release.mjs --rollback   switch back to the previous release and open a draft revert PR
 //   flags: --force (skip the idle wait)  --wait-minutes N (default 15)  --no-restart
 //          --health-url URL (default http://127.0.0.1:4321/api/v1/health)  --keep N (default 5)
+//          --health-seconds N (default 60; how long a restart has to answer with a new runtime id)
 //          --unit NAME (default cezar)  --skip-checks (build only; no typecheck/tests)
 //          --benchmark (stage and compare the harness smoke suite before switching)
 //          --require-real-replays (for the protected workflow, validate affected real runner paths)
@@ -37,13 +38,14 @@ const value = (name, fallback) => {
   const i = args.indexOf(`--${name}`);
   return i >= 0 && args[i + 1] ? args[i + 1] : fallback;
 };
-const positional = args.filter((a, i) => !a.startsWith('--') && !['--wait-minutes', '--health-url', '--keep', '--unit'].includes(args[i - 1]));
+const positional = args.filter((a, i) => !a.startsWith('--') && !['--wait-minutes', '--health-url', '--health-seconds', '--keep', '--unit'].includes(args[i - 1]));
 const HEALTH_INPUT = value('health-url', 'http://127.0.0.1:4321/api/v1/health');
 let HEALTH;
 let API;
 const UNIT = value('unit', 'cezar');
 const KEEP = Number(value('keep', '5'));
 const WAIT_MS = Number(value('wait-minutes', '15')) * 60_000;
+const HEALTH_MS = Number(value('health-seconds', '60')) * 1_000;
 
 const say = (line) => console.log(`harness-release: ${line}`);
 const run = (cmd, argv, cwd = REPO) => execFileSync(cmd, argv, { cwd, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8' }).trim();
@@ -167,8 +169,15 @@ function checkDrillOptions() {
   }
 }
 
-async function healthy(priorRuntime) {
-  const deadline = Date.now() + 60_000;
+/** The runtime id a health answer carries, when it is a usable one. */
+const runtimeIdOf = (body) => {
+  const id = body && typeof body === 'object' ? body.runtimeId : undefined;
+  return typeof id === 'string' && /^[A-Za-z0-9._:#-]{1,128}$/.test(id) ? id : undefined;
+};
+
+/** A restart is verified only by a health answer carrying a runtime id none of `known` had. */
+async function healthy(known = []) {
+  const deadline = Date.now() + HEALTH_MS;
   let last = 'no answer';
   while (Date.now() < deadline) {
     try {
@@ -176,10 +185,9 @@ async function healthy(priorRuntime) {
       if (!res.ok) {
         last = 'HTTP ' + res.status;
       } else {
-        const runtime = (await res.json().catch(() => ({})))?.runtimeId;
-        const runtimeId = typeof runtime === 'string' ? runtime : undefined;
-        if (!priorRuntime || runtimeId && runtimeId !== priorRuntime) return { ok: true, ...(runtimeId ? { runtimeId } : {}) };
-        last = 'the new process has not answered';
+        const runtimeId = runtimeIdOf(await res.json().catch(() => undefined));
+        if (runtimeId && !known.includes(runtimeId)) return { ok: true, runtimeId };
+        last = runtimeId ? 'the new process has not answered' : 'the health answer has no runtime id';
       }
     } catch (error) {
       last = error.message;
@@ -250,20 +258,22 @@ async function verifyRealReplays(packageRoot, sha, previous) {
   return passed;
 }
 
-async function activateAndVerify(su, id, simulateFailure = false, verifyWorkload) {
+/** `known` holds runtime ids already seen before this restart (the failed candidate's, on a
+ * rollback), so a lost fresh probe cannot let the old process pass as the restarted one. */
+async function activateAndVerify(su, id, simulateFailure = false, verifyWorkload, known = []) {
+  let health;
   try {
-    const priorRuntime = flag('no-restart') || simulateFailure ? undefined
-      : (await getJson(HEALTH).catch(() => undefined))?.runtimeId;
+    const prior = flag('no-restart') || simulateFailure ? undefined : runtimeIdOf(await getJson(HEALTH).catch(() => undefined));
     su.activate(id);
     su.writeLaunchers();
     restart();
     if (flag('no-restart')) return { ok: true };
     if (simulateFailure) return { ok: false, reason: 'simulated (--simulate-unhealthy)' };
-    const health = await healthy(priorRuntime);
+    health = await healthy([...known, ...(prior ? [prior] : [])]);
     if (health.ok && verifyWorkload) await verifyWorkload(su.versionEntry(id), health);
     return health;
   } catch (error) {
-    return { ok: false, reason: error.message };
+    return { ok: false, reason: error.message, ...(health?.runtimeId ? { runtimeId: health.runtimeId } : {}) };
   }
 }
 
@@ -277,10 +287,10 @@ async function switchTo(su, id, previous, entry, verifyWorkload) {
     say(`now running ${id}`);
     return true;
   }
-  log({ ...entry, id, previous, result: 'failed', reason: health.reason });
+  log({ ...entry, id, previous, result: 'failed', reason: health.reason, ...runtime });
   say(`switch failed (${health.reason})`);
   if (previous) {
-    const back = await activateAndVerify(su, previous);
+    const back = await activateAndVerify(su, previous, false, undefined, health.runtimeId ? [health.runtimeId] : []);
     log({
       action: 'rollback', id: previous, from: id, result: back.ok ? 'ok' : 'failed', reason: back.reason, automatic: true,
       ...(back.runtimeId ? { runtimeId: back.runtimeId } : {}),
@@ -310,7 +320,7 @@ function pruneBuilds(su, keepIds) {
 async function candidateSmoke(packageRoot, entry, opts) {
   const stagingModule = join(packageRoot, 'dist', 'self-update', 'staging.js');
   const { smokeStagedHarness } = await import(pathToFileURL(stagingModule).href);
-  await smokeStagedHarness(entry, opts);
+  return smokeStagedHarness(entry, opts);
 }
 
 let reportCandidate;
@@ -414,6 +424,12 @@ async function release() {
   const su = await selfUpdate(packageRoot);
   const previous = su.activeId();
   reportCandidate.previous = previous;
+  if (flag('simulate-unhealthy') && !su.listInstalled().some((entry) => entry.id === previous)) {
+    const reason = 'the rollback drill needs an installed active version to roll back to';
+    log({ action: 'switch', sha, result: 'failed', reason });
+    say(reason + '; nothing was switched');
+    return 1;
+  }
   if (flag('benchmark')) {
     const version = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')).version;
     if (!await benchmark(packageRoot, su, sha, su.linkId(version, branch), previous)) return 1;
@@ -424,7 +440,9 @@ async function release() {
   if (linked.id === previous) {
     say('already the active release');
     if (flag('simulate-unhealthy')) {
-      say('the rollback drill needs a candidate that differs from the active release');
+      const reason = 'the rollback drill needs a candidate that differs from the active release';
+      log({ action: 'switch', sha, result: 'failed', reason });
+      say(reason);
       return 1;
     }
     return 0;
@@ -432,19 +450,25 @@ async function release() {
   const drill = flag('simulate-unhealthy') && flag('benchmark');
   const verifyWorkload = flag('benchmark') ? async (entry, health) => {
     // The smoke runs only once the restarted candidate answered health; its runtime id says which.
-    const evidence = { ...(health.runtimeId ? { runtimeId: health.runtimeId } : {}), ...(drill ? { simulated: true } : {}) };
+    const runtime = { runtimeId: health.runtimeId };
+    let outcome;
     try {
-      await candidateSmoke(packageRoot, entry, drill ? { simulateFailure: true } : {});
+      outcome = await candidateSmoke(packageRoot, entry, drill ? { simulateFailure: true } : {});
     } catch (error) {
-      log({ action: 'post-switch-smoke', sha, result: 'failed', reason: error.message, ...evidence });
-      throw new Error((drill ? 'simulated post-switch smoke failure (--simulate-unhealthy): ' : 'post-switch smoke failed: ') + error.message);
+      log({ action: 'post-switch-smoke', sha, result: 'failed', reason: error.message, ...runtime });
+      throw new Error('post-switch smoke failed: ' + error.message);
     }
-    // A candidate built before the drill existed ignores the option; never let it switch.
-    if (drill) {
-      log({ action: 'post-switch-smoke', sha, result: 'failed', reason: 'the drill smoke task did not fail', ...evidence });
-      throw new Error('the candidate ignored the simulated post-switch smoke failure');
+    if (!drill) return log({ action: 'post-switch-smoke', sha, result: 'ok', ...runtime });
+    // Only the check outcome the staging run verified counts as simulated; an older candidate
+    // that ignores the option passes its smoke, and still must not switch.
+    const check = outcome?.simulatedFailure;
+    if (check) {
+      log({ action: 'post-switch-smoke', sha, result: 'failed', simulated: true, check, reason: check.error, ...runtime });
+      throw new Error('simulated post-switch smoke failure (--simulate-unhealthy): ' + check.error);
     }
-    log({ action: 'post-switch-smoke', sha, result: 'ok', ...evidence });
+    const reason = 'the candidate did not run the drill check';
+    log({ action: 'post-switch-smoke', sha, result: 'failed', reason, ...runtime });
+    throw new Error('post-switch smoke failed: ' + reason);
   } : undefined;
   const ok = await withReleaseHold(() => switchTo(su, linked.id, previous, { action: 'switch', sha }, verifyWorkload));
   pruneBuilds(su, [linked.id, previous].filter(Boolean));
