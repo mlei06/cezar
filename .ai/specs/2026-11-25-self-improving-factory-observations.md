@@ -10,6 +10,7 @@ After M3, this log is also the calibration set for the automated judge.
 ## D11 observations
 
 - Owner decision, spec v5.39: the owner-protected merge gate is removed. An autonomous manager merges reviewed PRs to scorers, the judge settings, `improve-factory` and `harness-release` without a changed-files lookup, a held unreadable file list or the 400-line limit. The overseer audits those changes after merge. Explicit `owner` policy, non-autonomous approval, widened secrets or permissions and the `credential-health` enable still wait for the owner.
+- Review of the v5.39 change found three gaps, all repaired in the same PR. A merge restamped the head at proposal, so a review of an older head could merge a newer one: managers now pass the reviewed full SHA, and a moved head is refused. A pending card held by the old path or size rules could never re-run: a same-head retry now re-checks it against today's policy. "Merge after an independent review" conflicted with D11.2: the interpretation kept is D11.2's split, with an independent review for every self-improvement PR, and the overseer's after-merge audit of the named paths.
 - A review raised an ambiguous secret policy for generated checks. The owner confirmed that they inherit the existing workflow check-step secrets.
 
 ## Baseline: the deployment project, 2026-11-25 (before the roadmap)

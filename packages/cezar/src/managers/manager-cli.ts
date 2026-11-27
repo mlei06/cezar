@@ -58,7 +58,7 @@ const USAGE = `cez manager — the tools of a cezar manager's agent (CEZ_MANAGER
         --file <path> | --stdin      append the text of a file, or of stdin
         --allow-placeholder          send text holding a marker such as [transcript here] or PASTE anyway
   cez manager workflows|secrets|skills|models|agents [--project <id>] [--json]
-  cez manager merge --project <id> <number> [--method merge|squash|rebase] [--title t] [--reason "…"]
+  cez manager merge --project <id> <number> [--head <sha>] [--method merge|squash|rebase] [--title t] [--reason "…"]
                                                  proposes a merge; the user approves it in the chat
   cez manager automation --project <id> <cez automation args>
                                                  always paused, editing one pauses it; enable proposes;
@@ -191,6 +191,7 @@ For review-only work pick a read-only one (review-pr when it exists).
 
 Proposes merging a pull request; the user approves it in the chat.
   --project <id>     the project
+  --head <sha>       the full head SHA you reviewed; refused if the PR moved
   --method <m>       merge | squash | rebase
   --title <t>        the merge commit title
   --reason "…"       why, shown on the card`,
@@ -820,7 +821,7 @@ export async function runManagerCommand(
       }
 
       case 'merge': {
-        const { values, positionals } = parse('merge', rest, { project: { type: 'string' }, method: { type: 'string' }, title: { type: 'string' }, reason: { type: 'string' } }, true);
+        const { values, positionals } = parse('merge', rest, { project: { type: 'string' }, head: { type: 'string' }, method: { type: 'string' }, title: { type: 'string' }, reason: { type: 'string' } }, true);
         const number = Number(positionals[0]);
         if (!Number.isInteger(number) || number <= 0) fail('usage: cez manager merge --project <id> <number>');
         const project = await projectOf(values.project);
@@ -831,6 +832,7 @@ export async function runManagerCommand(
             number,
             ...(values.title ? { title: values.title } : {}),
             ...(values.method ? { method: values.method } : {}),
+            ...(values.head ? { headSha: values.head } : {}),
           },
           ...(values.reason ? { reason: values.reason } : {}),
         }, `merging #${number}`);

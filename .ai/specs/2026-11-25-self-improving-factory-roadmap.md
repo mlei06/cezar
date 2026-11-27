@@ -210,10 +210,10 @@ The weekly report's project section is part of D10 and ships with M5.
 **Deliverables:**
 1. **Settings:** the `factory.improvement.*` settings (global and per project), Settings UI, `CEZ_SELF_IMPROVEMENT`.
 2. **Triggers:** the `factory` automation event source (hourly queue check with both guards, skips logged with reasons) and a built-in automation per project that launches `improve-factory` and reports to the manager; `cez improve`, `cez-manager improve`, "Improve now" as that automation's run-now.
-3. **The `improve-factory` workflow and skill:** batch brief, clustering, evidence reading, redrafts, decisions file, check loop, PR with regressions addressed. The overseer reviews the skill text personally; it's owner-protected.
+3. **The `improve-factory` workflow and skill:** batch brief, clustering, evidence reading, redrafts, decisions file, check loop, PR with regressions addressed. The overseer reviews the skill text personally and audits later changes to it after merge (spec v5.39).
 4. **Bookkeeping:** processed, dismissed, escalated and deferred causes; failed or closed runs return their causes; the improvement records; cooldown; three-failure pause.
 5. **Harness inputs:** escalations, the cross-project digest, post-release checks.
-6. **Protection:** owner-only paths enforced on merge.
+6. **Protection:** owner-only paths enforced on merge (shipped in v5.31; removed in spec v5.39, which audits those paths after merge instead).
 7. **The weekly report job.**
 
 **The prompt:**
@@ -224,10 +224,10 @@ The weekly report's project section is part of D10 and ships with M5.
 - D6/D7 tests pass;
 - live: a project queue reaching 5 starts exactly one run;
 - its PR lists regressions addressed, passes the check step, and is merged by the manager after review;
-- a PR touching a scorer is refused for the manager and asks the owner;
+- a self-improvement PR touching a scorer merges after its independent review task, with no owner hold, and the overseer audits it after merge (spec v5.39);
 - within two weeks, one project improvement PR and one harness improvement PR have merged, with before/after numbers.
 
-**The overseer's role changes:** from being the improvement engine to auditing it. The overseer compares the improvement runs' clusters with their own log, notes what they miss or get wrong, and feeds that into the `improve-factory` skill through owner-approved revisions.
+**The overseer's role changes:** from being the improvement engine to auditing it. The overseer compares the improvement runs' clusters with their own log, notes what they miss or get wrong, and feeds that into the `improve-factory` skill through reviewed revisions it audits after merge (spec v5.39).
 
 ## M6. Benchmarks and proactive triggers (spec D8, the rest of D10)
 

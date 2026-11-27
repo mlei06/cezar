@@ -367,7 +367,7 @@ export const managerActionRequestSchema = z.discriminatedUnion('type', [
     number: z.number().int().positive(),
     title: z.string().max(1000).optional(),
     method: z.enum(['merge', 'squash', 'rebase']).optional(),
-    /** Stamped by the server at proposal: a push after it makes the approval refuse, not merge. */
+    /** The reviewed head when supplied (refused if the PR moved), else stamped at proposal: a later push refuses, not merges. */
     headSha: z.string().max(200).optional(),
   }),
   z.object({

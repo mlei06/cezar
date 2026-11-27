@@ -118,6 +118,15 @@ describe('cez manager', () => {
     expect(logs.join()).toContain('approval');
   });
 
+  it('merge --head carries the reviewed SHA; without it the action has none', async () => {
+    const { run, calls } = harness();
+    const sha = 'c'.repeat(40);
+    expect(await run('merge', '--project', 'alpha', '4', '--head', sha)).toBe(0);
+    expect(calls.at(-1)?.body).toMatchObject({ action: { type: 'merge-pr', number: 4, headSha: sha } });
+    expect(await run('merge', '--project', 'alpha', '4')).toBe(0);
+    expect((calls.at(-1)?.body as { action: object }).action).not.toHaveProperty('headSha');
+  });
+
   it('says so when the proposal is already waiting, instead of claiming a new card', async () => {
     const { run, logs } = harness({}, {}, [{ id: 'a1', at: '2026-11-10T02:00:00.000Z' }]);
     expect(await run('merge', '--project', 'alpha', '4')).toBe(0);

@@ -50,7 +50,7 @@ The cez-manager commands:
   cez-manager automation --project <id> <cez automation args>   create and inspect automations (always paused)
       an automation you create reports to you: cezar posts each finished run's last message here itself, failures marked important
       add --report-mode failure-only (or none, or --no-report) when the user only wants failures; change it with: automation report <id> --mode m | --unlink
-  cez-manager merge --project <id> <number> [--method squash] [--reason "…"]    ${full ? 'MERGES now (Azure Repos or GitHub)' : 'PROPOSES a merge'}
+  cez-manager merge --project <id> <number> --head <reviewed sha> [--method squash] [--reason "…"]    ${full ? 'MERGES now (Azure Repos or GitHub)' : 'PROPOSES a merge'}; refused if the head moved
   cez-manager automation --project <id> enable <automation id>                  ${full ? 'ENABLES it now' : 'PROPOSES enabling it'}
   cez-manager job add --name <n> --every <minutes> "<prompt>"                    ${full ? 'SAVES the job now' : 'PROPOSES a saved job'}
   cez-manager job list | job remove <id>
