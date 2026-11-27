@@ -41,6 +41,8 @@ These instructions apply when the owner restarts the harness manager. It remains
 
 ## Open overseer items
 
+- **Owner decision (2026-11-27 05:10 UTC): remove the owner-protected merge gate.** The manager merges every PR under the D11 rules, including scorers, the judge settings, `improve-factory` and `harness-release`. The spec's "always the owner" list and the "nobody grades their own grader" principle are revised to match (v5.36). The overseer's post-merge audit of any change to those paths stays as the check against the loop loosening its own grading.
+
 - **Owner decision (2026-11-27 05:00 UTC): the overseer has full authority, and the owner approves nothing by hand.** The overseer reviews and merges every PR itself, including owner-protected paths, which the #32 gate holds for the owner. It decides the owner decisions it recommended:
   - approved: read-only `git show` in `plan`, `az repos pr show` for Azure reviews, post-release verification in `harness-release`, and the procedure-rubric clarification;
   - declined: checks inside read-only reviews.
