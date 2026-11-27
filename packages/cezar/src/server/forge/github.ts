@@ -3774,6 +3774,9 @@ async function mergePullRequest(
     const out = await gh(repoRoot, [
       'api', '--method', 'PUT', `repos/${repoRef.owner}/${repoRef.repo}/pulls/${number}/merge`,
       '-f', `merge_method=${input.method}`, '-f', `sha=${input.expectedHeadSha}`,
+      ...(input.squashSubjectFromPrTitle && input.method === 'squash' && current.title.trim()
+        ? ['-f', `commit_title=${current.title}`]
+        : []),
     ]);
     const result = ghMergeResultSchema.parse(JSON.parse(out));
     if (!result.merged) return { merged: false, status: 409, error: result.message ?? 'GitHub refused the merge.', code: 'github-blocked', current };

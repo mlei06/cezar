@@ -206,6 +206,9 @@ export interface ForgeMergeInput {
   method: ForgeMergeMethod;
   expectedHeadSha: string;
   overrideRules?: boolean;
+  /** Server-set, never from a request body: a squash takes its subject from the fresh PR title
+   *  (B30 — GitHub otherwise reuses a one-commit branch's autosave message). */
+  squashSubjectFromPrTitle?: boolean;
 }
 
 export type ForgeMergeResult =

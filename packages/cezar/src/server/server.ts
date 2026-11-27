@@ -8342,12 +8342,21 @@ export function createApp(deps: ServerDeps) {
       paramZodValidator(mergeNumberParams, { message: 'invalid pull request number' }),
       jsonZodValidator(() => mergeBodySchema, { message: 'invalid merge request' }),
       async (c) => {
-        const { root: repoRoot, dataDir } = c.get('project');
+        const project = c.get('project');
+        const { root: repoRoot, dataDir } = project;
         const parsedNumber = { data: c.req.valid('param') };
         const body = { data: c.req.valid('json') };
         const forge = await mergeForge(repoRoot);
         if (!forge?.mergePR) return c.json({ error: 'GitHub merge is unavailable' }, 409);
-        const result = await forge.mergePR(parsedNumber.data.number, body.data);
+        // B30: a tracked improvement squashes under its PR title, not the branch's autosave subject.
+        let tracked = false;
+        if (forge.kind === 'github' && body.data.method === 'squash') {
+          try {
+            const projectId = project === bootContext ? await resolveBootProject() : project.id;
+            tracked = hasOpenImprovementPr(dataDir, projectId, parsedNumber.data.number);
+          } catch { /* unreadable records: merge as an ordinary PR */ }
+        }
+        const result = await forge.mergePR(parsedNumber.data.number, { ...body.data, ...(tracked ? { squashSubjectFromPrTitle: true } : {}) });
         if (result.merged) {
           // We just changed this pull request, so what the ref-status cache holds about it is now
           // known-stale — and its TTL would keep every chip showing the PRE-merge status for up to
