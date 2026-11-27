@@ -41,6 +41,8 @@ These instructions apply when the owner restarts the harness manager. It remains
 
 ## Open overseer items
 
+- **Harness manager reactivated (2026-11-27 04:05 UTC, overseer, under the owner's "continue and finish on its own"):** the pause existed only to avoid colliding with the outside implementer, which has finished. Its first work is the harness bug-to-production test (definition of done item 5, harness variant): one owner-style message reporting B30 (improvement PR squash merges titled "cezar autosave (turn end)"). It's carried to a merged fix, a release through `harness-release`, and verification. D11 rules and D7's owner-only list apply. Production deploys of other projects remain off-limits.
+
 - **Where the program stands (2026-11-27 03:50 UTC):** M0, M1, M1.5, M2, M3, M4 and M6 are done; M5 is released and waiting on real use. Definition of done:
   1. Every milestone's acceptance holds: yes, except M5's real-use items.
   2. The deployment project's one-message bug-to-production run: not run. Production deploys of other projects aren't delegated.
