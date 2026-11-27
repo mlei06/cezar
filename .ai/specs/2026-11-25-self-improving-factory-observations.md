@@ -203,3 +203,5 @@ The live hourly harness check admitted a single run at 23:22 UTC and durably cla
 | A-3 | A repair agent chasing a failure outside its diff spent 4M+ input tokens before the cancellation. | budget note: 5.1M input against the 4M ceiling | harness | B29 |
 
 The overseer stopped the first candidate before publication. It had committed short private run references to source. All 17 causes returned to the queue, and the forge showed neither a branch nor a PR for the draft. Pause the harness automation until the workflow checks the exact outgoing commit range for known private run references.
+
+The harness project now uses the existing local worktree setup hook. It installs from the worktree lockfile and checks the untouched factory baseline before task startup. The failing baseline fixture stopped before any task step, and the named release confirmed the real worktree installed the pinned dependency before passing setup. The release carries the checked-commit publication guard and the Factory scoring-status display.
