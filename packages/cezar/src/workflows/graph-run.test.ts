@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -200,6 +200,63 @@ describe('graph workflows run through RunManager', () => {
       } else {
         expect(settled.pullRequestUrl).toMatch(/\/777$/);
         expect(readImprovementRecords(paths.records)).toMatchObject([{ state: 'pr-open', clusters: [{ id: 'fix' }] }]);
+        expect(readCauseQueue(paths.queue)[0]?.state).toBe('processed');
+      }
+    } finally {
+      stop();
+      launch.mockRestore();
+    }
+  }, 30_000);
+
+  it.each(['clean', 'file', 'message'])('checks harness publication with %s history', async (history) => {
+    vi.stubEnv('CEZ_HOME', join(repoRoot, 'fixture-home'));
+    await builtin('improve-factory');
+    const dataDir = join(repoRoot, '.ai/cezar');
+    const project = { id: 'fixture-harness', root: repoRoot, dataDir, store, manager };
+    const at = new Date().toISOString();
+    await mergeWriteWorkspaceConfig((config) => {
+      config.projects = [{ id: project.id, name: 'Fixture harness', root: repoRoot, source: 'local', addedAt: at, lastOpenedAt: at }];
+      config.factory = { harnessProject: project.id };
+    });
+    const paths = improvementPaths(dataDir, true);
+    const sourceRunId = '123abcd0-0000-4000-8000-000000000000';
+    atomicWriteJsonSync(paths.queue, [{
+      id: 'cause', projectId: 'fixture-project', runId: sourceRunId, scorer: 'efficiency', label: 'wasteful',
+      at, state: 'open', reasoning: 'Synthetic fixture.',
+      cause: { category: 'task-setup', target: 'harness', evidence: 'Synthetic cause.', fix: 'Test publication.' },
+    }]);
+    const start = CodexAppServerRunner.prototype.startSession;
+    const launch = vi.spyOn(CodexAppServerRunner.prototype, 'startSession').mockImplementationOnce(function (this: CodexAppServerRunner, ...args) {
+      const { cwd, env } = args[0];
+      const path = join(cwd, 'fix.ts');
+      const commit = (message: string) => {
+        execFileSync('git', ['add', 'fix.ts'], { cwd });
+        execFileSync('git', [...GIT_ID, 'commit', '-qm', message], { cwd });
+      };
+      if (history !== 'clean') {
+        writeFileSync(path, history === 'file' ? '// Known run ' + sourceRunId.slice(0, 8) + '\n' : '// Initial fixture\n');
+        commit(history === 'message' ? 'Initial fixture change ' + sourceRunId : 'Initial fixture change');
+      }
+      writeFileSync(path, '// Checked change\n');
+      commit('Final fixture change');
+      atomicWriteJsonSync(join(env!.CEZ_ARTIFACTS_DIR!, IMPROVEMENT_DECISIONS), {
+        clusters: [{ id: 'fix', causes: ['cause'], decision: 'fixed', reason: 'Implemented fixture change.' }],
+      });
+      return start.apply(this, args);
+    });
+    const stop = watchImprovementRuns(dataDir, store, project.id);
+    try {
+      const admitted = await startFactoryImprovement(project, 'owner');
+      if (!('run' in admitted)) throw new Error(admitted.reason);
+      const settled = await settle(admitted.run.id);
+      if (history !== 'clean') {
+        expect(settled.pullRequestUrl).toBeUndefined();
+        expect(store.readEvents(settled.id)).toContainEqual(expect.objectContaining({
+          type: 'note', message: expect.stringContaining('Private run references'),
+        }));
+        expect(readCauseQueue(paths.queue)[0]?.state).toBe('open');
+      } else {
+        expect(settled.pullRequestUrl).toMatch(/\/777$/);
         expect(readCauseQueue(paths.queue)[0]?.state).toBe('processed');
       }
     } finally {

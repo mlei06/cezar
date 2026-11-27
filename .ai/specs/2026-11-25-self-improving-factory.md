@@ -1,6 +1,6 @@
 # The self-improving factory
 
-Status: draft v5.37, 2026-11-26. Fork: `mlei06/cezar`, trunk `factory`. Spec owner: the overseer (see the roadmap). Implementation plan: `2026-11-25-self-improving-factory-roadmap.md`. Findings during the build: `2026-11-25-self-improving-factory-observations.md`.
+Status: draft v5.38, 2026-11-26. Fork: `mlei06/cezar`, trunk `factory`. Spec owner: the overseer (see the roadmap). Implementation plan: `2026-11-25-self-improving-factory-roadmap.md`. Findings during the build: `2026-11-25-self-improving-factory-observations.md`.
 
 ## TLDR
 
@@ -377,7 +377,7 @@ The project's **manager** (`cez-manager improve --project <id>`), or the **owner
    - write redrafts to the files that own each cause;
    - mark each cluster `fixed`, `dismissed` (with a reason), `escalated` or `deferred`, in a decisions file Cezar reads.
 2. **Check step:** `cez factory check`, plus the project's validation command if it touched code. On failure it loops back to the agent, at most twice.
-3. **PR step:** one draft PR, marked ready once the checks pass, using the agent-authored description from the decisions file for a project. A public harness PR uses its generated summary; full evidence and decisions stay in the cockpit. That description lists each change, the regressions it addresses (runs, scorers, evidence), its expected effect, and the dismissed and escalated clusters with reasons.
+3. **PR step:** one draft PR, marked ready once the checks pass, using the agent-authored description from the decisions file for a project. A public harness PR uses its generated summary. The workflow checks the exact outgoing commit range for known private run identifiers in commit messages and added lines, including earlier commits whose changes were removed. A match or an unreadable range stops publication. Full evidence and decisions stay in the cockpit. That description lists each change, the regressions it addresses (runs, scorers, evidence), its expected effect, and the dismissed and escalated clusters with reasons.
 
 **Bookkeeping, by Cezar:**
 - marks the batch's causes as processed;
@@ -854,6 +854,7 @@ Every route has its zod schema in `packages/contract` first, per AGENTS.md.
 
 ## Changelog
 
+- **v5.38:** D6 scans the checked public harness improvement commit range for known private run references before the forge push. This covers commit messages and added lines in every outgoing commit. A hit or an unreadable range returns the batch for a clean candidate.
 - **v5.37:** D8 releases an improvement's queue slot while it waits for its own benchmark. Failed, interrupted and timed-out gates cancel their remaining queued or active replay variants. An automatic matrix includes a configuration that inherits the exact candidate workflow's agent selection.
 - **v5.36:** D5 prioritizes ready Outcome and Efficiency during a run's first minute. A single worker processes each ready priority group newest first.
 - **v5.35:** D8 allows the configured OpenCode route for explicitly tool-free text benchmarks. Use the existing stateless generation mechanism and empty scratch directory. Workflows with tool grants still require the Codex replay broker.
