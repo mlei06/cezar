@@ -41,6 +41,16 @@ These instructions apply when the owner restarts the harness manager. It remains
 
 ## Open overseer items
 
+- **Owner decisions escalated by the second harness improvement run (A-5):**
+  1. allow read-only `git show <ref>:<path>` in the built-in `plan` workflow;
+  2. let read-only review steps run typecheck and tests, or reach `gh` by absolute path;
+  3. add `az repos pr show` to the Azure review grant;
+  4. add a post-release verification step to the protected `harness-release` workflow.
+
+  Also infra: `gh` lives in a user-local directory that isn't on the cockpit service's PATH.
+
+  PR #41 (the read-broker mechanism fix) passed the overseer's audit. It waits on the approval policy (`manager`, and the harness manager is inactive), so the implementer or owner merges it after its review task.
+
 - **Overseer audit of the first improvement run (A-1 to A-3):** the run's typecheck failure was in a file the draft didn't touch. The likely cause is the task worktree resolving the main checkout's dependencies, not the draft. B29 reuses the existing local After worktree creation hook to run `npm ci` from the worktree lock and typecheck the untouched factory base before task startup. The disposable installed fixture verified fresh dependencies in the worktree and blocked a failing baseline before any task step. The revision-checked local project settings now carry the hook. The named release completed that setup in a real harness worktree. Its installed dependency matched the worktree lockfile, and the unchanged factory baseline passed before the workflow ran.
 
 - **Owner decision (2026-11-26 20:50 UTC): the implementer finishes the roadmap on its own.** It may merge and release everything itself, including the owner-protected parts:
