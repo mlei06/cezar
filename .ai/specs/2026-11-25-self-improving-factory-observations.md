@@ -205,3 +205,7 @@ The live hourly harness check admitted a single run at 23:22 UTC and durably cla
 The overseer stopped the first candidate before publication. It had committed short private run references to source. All 17 causes returned to the queue, and the forge showed neither a branch nor a PR for the draft. Pause the harness automation until the workflow checks the exact outgoing commit range for known private run references.
 
 The harness project now uses the existing local worktree setup hook. It installs from the worktree lockfile and checks the untouched factory baseline before task startup. The failing baseline fixture stopped before any task step, and the named release confirmed the real worktree installed the pinned dependency before passing setup. The release carries the checked-commit publication guard and the Factory scoring-status display.
+
+### Public improvement follow-up release
+
+The live cockpit switched to `c945db2`. The real release worktree installed its own locked dependencies and passed baseline typecheck before scheduling. The installed browser showed pending scores and scoring errors. The installed factory source rejected an intermediate commit with a synthetic private reference, restored all five causes and accepted a clean synthetic candidate with one simulated PR. The harness automation was restored after those checks. A genuine harness and a genuine project improvement still need autonomous merges and matched post-release scores.
