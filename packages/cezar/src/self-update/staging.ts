@@ -5,7 +5,7 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as wait } from 'node:timers/promises';
-import { runRecordSchema } from '@open-mercato/cezar-contract';
+import { runHistoryPageSchema, runRecordSchema } from '@open-mercato/cezar-contract';
 
 // In particular, a host runner override can take precedence over CEZ_DRY_RUN.
 const stagingEnvironment = () => Object.fromEntries(
@@ -117,17 +117,57 @@ export async function withStagingCockpit<T>(
   }
 }
 
-/** A single admitted task makes health check the run engine, not only the listener. */
-export async function smokeStagedHarness(entry: string): Promise<void> {
-  await withStagingCockpit(entry, async (api) => {
+export interface SimulatedSmokeFailure {
+  step: string;
+  command: string;
+  exitCode: number;
+  error: string;
+}
+
+/** The check's own recorded exit: one `check-output` event for the step. A spawn failure or a
+ * signal records -1, so only this proves the command itself ran and exited. */
+async function checkExit(api: string, runId: string, stepId: string): Promise<Record<string, unknown> | undefined> {
+  let path = api + '/runs/' + encodeURIComponent(runId) + '/history';
+  const outputs = [];
+  for (let page = 0; page < 5; page++) {
+    const history = runHistoryPageSchema.parse(await stagingJson(path));
+    outputs.push(...history.events.filter((event) => event.type === 'check-output' && event.stepId === stepId));
+    if (!history.hasOlder || !history.olderCursor) return outputs.length === 1 ? outputs[0] : undefined;
+    path = api + '/runs/' + encodeURIComponent(runId) + '/history?cursor=' + encodeURIComponent(history.olderCursor);
+  }
+  return undefined;
+}
+
+/** A single admitted task makes health check the run engine, not only the listener.
+ * `simulateFailure` (the release rollback drill, D9) runs `false` instead and RESOLVES with the
+ * verified check outcome; any other failure, the drill's included, still throws. */
+export async function smokeStagedHarness(entry: string, opts: { simulateFailure?: boolean } = {}): Promise<{ simulatedFailure?: SimulatedSmokeFailure }> {
+  const command = opts.simulateFailure ? 'false' : 'true';
+  return withStagingCockpit(entry, async (api) => {
     const run = runRecordSchema.parse(await stagingJson(api + '/runs', {
       task: 'Check staging task admission and execution.',
-      steps: [{ id: 'check', command: 'true' }],
+      steps: [{ id: 'check', command }],
     }));
     const end = Date.now() + 30_000;
     while (Date.now() < end) {
       const current = runRecordSchema.parse(await stagingJson(api + '/runs/' + encodeURIComponent(run.id)));
-      if (current.status === 'done' || current.status === 'review') return;
+      if (current.status === 'done' || current.status === 'review') {
+        if (opts.simulateFailure) throw new Error('The drill smoke task did not fail.');
+        return {};
+      }
+      if (current.status === 'failed' && opts.simulateFailure) {
+        const [step, ...others] = current.steps;
+        const expected = '`' + command + '` exited non-zero';
+        if (others.length === 0 && step?.id === 'check' && step.kind === 'check' && step.status === 'failed' && step.error === expected) {
+          const exit = await checkExit(api, run.id, step.id);
+          if (exit?.command === command && exit.exitCode === 1) {
+            return { simulatedFailure: { step: step.id, command, exitCode: 1, error: step.error } };
+          }
+          throw new Error('The drill check did not record `' + command + '` exiting 1 (exit ' +
+            (typeof exit?.exitCode === 'number' ? exit.exitCode : 'unrecorded') + ').');
+        }
+        throw new Error('The drill smoke task failed outside its check: ' + (step?.error ?? current.error ?? 'no step outcome') + '.');
+      }
       if (current.status === 'failed' || current.status === 'cancelled') break;
       await wait(250);
     }

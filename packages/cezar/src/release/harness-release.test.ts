@@ -1,4 +1,5 @@
 import { execFile, execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
@@ -17,7 +18,13 @@ it.skipIf(process.platform === 'win32').each(['restart', 'health', 'manual', 'be
     const shimDir = join(root, 'commands');
     const scriptDir = join(root, 'scripts');
     const stateFile = join(workspace, 'active.txt');
-    const server = createServer((_request, response) => response.end('{}'));
+    // A restart is verified by a new runtime id; the active version stands in for one.
+    const runtimes: Record<string, string> = { previous: '1', candidate: '2', stable: '3' };
+    // Every restart starts a new process: the id carries the active version and the restart count.
+    const restarts = () => { try { return readFileSync(stateFile + '.restarts', 'utf8').length; } catch { return 0; } };
+    const server = createServer((_request, response) => response.end(JSON.stringify({
+      runtimeId: '0000000' + (runtimes[readFileSync(stateFile, 'utf8')] ?? '0') + '-0000-4000-8000-' + String(restarts()).padStart(12, '0'),
+    })));
     try {
       server.listen(0, '127.0.0.1');
       await once(server, 'listening');
@@ -68,10 +75,12 @@ it.skipIf(process.platform === 'win32').each(['restart', 'health', 'manual', 'be
           export const activate = id => writeFileSync(process.env.RELEASE_TEST_STATE, id);
           export const linkCheckout = () => ({ id: 'candidate' });
           export const listLinks = () => [];
+          export const listInstalled = () => [{ id: 'previous' }, { id: 'stable' }];
           export const versionEntry = id => '/' + id + '-entry';
           export const linkId = () => 'candidate';
         `),
-        writeFile(service, failure === 'restart' ? '#!/bin/sh\ntest "$(cat "$RELEASE_TEST_STATE")" = previous\n' : '#!/bin/sh\nexit 0\n'),
+        writeFile(service, '#!/bin/sh\nprintf x >> "$RELEASE_TEST_STATE.restarts"\n' +
+          (failure === 'restart' ? 'test "$(cat "$RELEASE_TEST_STATE")" = previous\n' : 'exit 0\n')),
         writeFile(npm, [
           '#!/bin/sh',
           'printf "%s\\n" "$*" >> "$RELEASE_TEST_CHECKS"',
