@@ -29,16 +29,18 @@ The factory is built by the factory. After a one-time bootstrap (M0), which the 
 
 ## Goal and definition of done
 
-### Definition-of-done status (2026-11-27)
+### Definition-of-done status (2026-11-28)
 
 | # | Status |
 |---|---|
-| 1 | All milestones done and live; M5 real-use acceptance follows item 3. |
-| 2 | Ready: the deployment project's guarded deploy (shared-library baseline guard under the deploy lock, proven live with a zero-change negative control) and verified backups are in place; the production rollout waits on the owner's charter approval. |
+| 1 | All milestones done and live; M5 real-use acceptance completes with item 3's project side (acceptance in use). |
+| 2 | Met 2026-11-28: the deployment project's guarded "update production" ran end to end with no owner round trip beyond the charter approval: held CI #34, guarded CD #33 (baseline from CD #32 checked under the deploy lock), v0.13.4 live at `99dd6a1f`, independent host check matched. The first attempt stopped safely on a transient registry TLS error before any CD. |
 | 3 | Harness side met: #41 merged on its own, and its cluster's failure rate fell from 13/13 to 9/13 runs (search rejections 13/13 to 3/13; efficiency 0.00 to 0.60), observation A-17; identical-refusal recurrence stays open as a new cause. Project side waits on project-targeted causes (one open, trigger minimum 2). |
 | 4 | Met: releases ship through `harness-release`; automatic rollback demonstrated live 2026-11-28T00:19Z (#46, observation A-15). |
-| 5 | Harness side met (B30, release `f114b60`); deployment-project side follows item 2. |
+| 5 | Harness side met (B30, release `f114b60`). Deployment-project side: the guarded deploy path is proven (item 2); the one-message bug run completes on the owner's first real bug report there (acceptance in use). |
 | 6 | Met (observations C-1 to C-5). |
+
+**Ready for use (2026-11-28).** Items 2, 4 and 6 are met, and item 3's harness side is met with measured results. What remains needs real work, not more building: a project-targeted improvement PR (the trigger needs two project causes; one is open), the deployment project's one-message bug run, and M5's real-use acceptance. They complete as the owner uses the factory; the overseer audits each when it happens. Thresholds are not lowered to force them.
 
 
 The program is done when all of these hold:
