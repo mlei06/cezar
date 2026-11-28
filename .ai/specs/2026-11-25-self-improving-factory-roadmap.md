@@ -29,6 +29,18 @@ The factory is built by the factory. After a one-time bootstrap (M0), which the 
 
 ## Goal and definition of done
 
+### Definition-of-done status (2026-11-27)
+
+| # | Status |
+|---|---|
+| 1 | All milestones done and live; M5 real-use acceptance follows item 3. |
+| 2 | Ready: the deployment project's guarded deploy (shared-library baseline guard under the deploy lock, proven live with a zero-change negative control) and verified backups are in place; the production rollout waits on the owner's charter approval. |
+| 3 | Harness side met (#41 merged on its own); its before/after needs 10 scored runs. Project side waits on project-targeted causes (one open, trigger minimum 2). |
+| 4 | Met: releases ship through `harness-release`; automatic rollback demonstrated live 2026-11-28T00:19Z (#46, observation A-15). |
+| 5 | Harness side met (B30, release `f114b60`); deployment-project side follows item 2. |
+| 6 | Met (observations C-1 to C-5). |
+
+
 The program is done when all of these hold:
 1. Every milestone's acceptance holds on the live cockpit.
 2. The deployment project's "update production" runs end to end with no round trip to the owner for access, within budget, and shows scores on every task.
